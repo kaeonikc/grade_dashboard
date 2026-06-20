@@ -1,0 +1,28 @@
+course: "Cosmology"
+term: "2026_S1"
+
+weights:
+  homework: 0.10
+  quizzes: 0.10
+  reports: 0.10
+  midterm: 0.30
+  final: 0.40
+
+data_mapping:
+  homework: ["hw1", "hw2", "hw3", "hw4"]
+  quizzes: ["quiz1", "quiz2"]
+  reports: ["report1"]
+  midterm: ["midterm_score"]
+  final: ["final_exam"]
+
+rules:
+  drop_lowest_homework: true
+
+grade_boundaries:
+  A: 80
+  B+: 75
+  B: 70
+  C+: 65
+  C: 60
+  D+: 55
+  D: 50
