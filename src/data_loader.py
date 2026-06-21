@@ -34,6 +34,10 @@ def load_course_data(course_path: str) -> tuple[pd.DataFrame, dict]:
                 
             df.columns = df.columns.astype(str).str.strip() # Strip whitespace from headers
             
+            if 'Student ID' in df.columns:
+                df = df.dropna(subset=['Student ID'])
+                df = df[df['Student ID'].astype(str).str.strip() != '']
+            
             # Extract max scores directly from column names, e.g., "final_exam (30pts)"
             import re
             new_columns = {}
