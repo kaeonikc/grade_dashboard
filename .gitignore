@@ -7,3 +7,10 @@ src/__pycache__/
 ARCHITECTURE.md
 CLAUDE.md
 SPEC.md
+
+# files
+course_info_prep/*.xls
+course_info_prep/*.xlsx
+course_info_prep/*.csv
+course_info_prep/*.yaml
+course_info_prep/*.yml

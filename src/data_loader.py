@@ -4,10 +4,16 @@ import pandas as pd
 from pathlib import Path
 
 def load_config(course_path: str) -> dict:
-    """Reads the config.yaml for a given course."""
-    config_file = Path(course_path) / "config.yaml"
-    if not config_file.exists():
-        raise FileNotFoundError(f"Config file not found: {config_file}")
+    """Reads the <term>_<course_id>_config.yaml under course_info/ for a given course."""
+    info_dir = Path(course_path) / "course_info"
+    if not info_dir.is_dir():
+        raise FileNotFoundError(f"course_info directory not found under {course_path}")
+        
+    config_files = [f for f in info_dir.iterdir() if f.is_file() and f.name.endswith("_config.yaml")]
+    if not config_files:
+        raise FileNotFoundError(f"No *_config.yaml file found in {info_dir}")
+        
+    config_file = config_files[0]
     
     with open(config_file, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
