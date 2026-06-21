@@ -1,202 +1,294 @@
-import streamlit as st
-import pandas as pd
-from pathlib import Path
+import io
+import subprocess
 import sys
-import os
+from pathlib import Path
 
-# Ensure src module can be imported
+import pandas as pd
+from rich.console import Console, Group
+from rich.table import Table
+from rich.panel import Panel
+from rich.prompt import Prompt, Confirm
+from rich.rule import Rule
+from rich.text import Text
+from rich import box
+
 script_path = Path(__file__).resolve()
 sys.path.insert(0, str(script_path.parent.parent))
 
 from src.data_loader import load_config, load_course_data
-from src.calculators import calculate_final_grades
+from src.calculators import calculate_final_grades, validate_scores
 
-st.set_page_config(page_title="Grade Dashboard", layout="wide")
+console = Console()
 
-st.title("🎓 Grade Dashboard")
+# │ between columns, ─┼ under header, no outer border
+_DIVIDER_BOX = box.Box("    \n  │ \n ─┼ \n  │ \n    \n    \n  │ \n    \n")
 
-# Find all courses
-current_dir = Path(".")
-courses_dir = current_dir / "courses"
 
-potential_course_paths = []
-# Look in current directory
-potential_course_paths.extend([d for d in current_dir.iterdir() if d.is_dir()])
-# Look in 'courses' directory if it exists
-if courses_dir.exists() and courses_dir.is_dir():
-    potential_course_paths.extend([d for d in courses_dir.iterdir() if d.is_dir()])
+def find_courses() -> dict:
+    current_dir = Path(".")
+    courses_dir = current_dir / "courses"
+    potential = []
+    potential.extend([d for d in current_dir.iterdir() if d.is_dir()])
+    if courses_dir.is_dir():
+        potential.extend([d for d in courses_dir.iterdir() if d.is_dir()])
+    return {d.name: d for d in potential if (d / "config.yaml").exists()}
 
-# Filter only those that have config.yaml
-course_map = {d.name: d for d in potential_course_paths if (d / "config.yaml").exists()}
 
-if not course_map:
-    st.warning("No course directories found (looking for folders containing config.yaml in the current directory or 'courses/' folder).")
-    st.stop()
+def select_course(course_map: dict) -> tuple[str, Path]:
+    names = sorted(course_map.keys())
+    console.print("\n[bold]Available Courses:[/bold]")
+    for i, name in enumerate(names, 1):
+        console.print(f"  [cyan]{i}.[/cyan] {name}")
+    while True:
+        choice = Prompt.ask("Select course", default="1")
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(names):
+                return names[idx], course_map[names[idx]]
+        except ValueError:
+            if choice in course_map:
+                return choice, course_map[choice]
+        console.print(f"[red]Invalid. Enter a number 1–{len(names)} or a course name.[/red]")
 
-st.sidebar.title("Select Course")
-selected_course_name = st.sidebar.selectbox("Course", sorted(course_map.keys()))
 
-course_path = course_map[selected_course_name]
+def show_warnings(warnings: list) -> None:
+    if not warnings:
+        return
+    lines = "\n".join(f"  • {w}" for w in warnings)
+    console.print(Panel(
+        Text(lines, style="yellow"),
+        title=f"[bold yellow]⚠  {len(warnings)} Score Validation Warning(s)[/bold yellow]",
+        border_style="yellow",
+    ))
 
-try:
-    config = load_config(course_path)
-    st.sidebar.success(f"Loaded config for {config.get('course', selected_course_name)}")
-except Exception as e:
-    st.error(f"Failed to load config for {selected_course_name}: {e}")
-    st.stop()
 
-# Load Data
-raw_df, max_scores = load_course_data(course_path)
-if raw_df.empty:
-    st.info(f"No student data found in {course_path / 'data'}")
-    st.stop()
+def show_metrics(final_df: pd.DataFrame) -> None:
+    tbl = Table(box=box.ROUNDED, show_header=True)
+    tbl.add_column("Total Students", style="cyan", justify="center", min_width=16)
+    tbl.add_column("Average Score", style="green", justify="center", min_width=16)
+    tbl.add_column("Highest Score", style="bold green", justify="center", min_width=16)
+    avg = final_df["Final Score"].mean()
+    high = final_df["Final Score"].max()
+    tbl.add_row(str(len(final_df)), f"{avg:.2f}%", f"{high:.2f}%")
+    console.print(tbl)
 
-st.header(f"{config.get('course', selected_course_name)} - {config.get('term', '')}")
 
-use_weighted_scores = st.checkbox("Show weighted scores (uncheck to show raw 100% scores)", value=True)
+def show_roundup_summary(final_df: pd.DataFrame, config: dict) -> None:
+    if "Original Grade" not in final_df.columns:
+        return
 
-with st.spinner("Calculating grades..."):
-    final_df = calculate_final_grades(raw_df, config, max_scores, use_weighted_scores)
+    grade_order = list(config.get("grade_boundaries", {}).keys()) + ["F"]
+    orig_counts = final_df["Original Grade"].value_counts().reindex(grade_order, fill_value=0)
+    new_counts = final_df["Grade"].value_counts().reindex(grade_order, fill_value=0)
 
-col1, col2, col3 = st.columns(3)
-col1.metric("Total Students", len(final_df))
-avg_score = final_df['Final Score'].mean()
-col2.metric("Average Score", f"{avg_score:.2f}%")
-highest_score = final_df['Final Score'].max()
-col3.metric("Highest Score", f"{highest_score:.2f}%")
+    dist_tbl = Table(box=box.SIMPLE, show_header=True)
+    dist_tbl.add_column("Grade", style="bold")
+    dist_tbl.add_column("Original", justify="right")
+    dist_tbl.add_column("Rounded", justify="right")
+    dist_tbl.add_column("Change", justify="right")
 
-st.subheader("Student Grades")
+    for grade in grade_order:
+        orig = int(orig_counts[grade])
+        rounded = int(new_counts[grade])
+        if orig == 0 and rounded == 0:
+            continue
+        delta = rounded - orig
+        change_text = Text(f"+{delta}" if delta > 0 else str(delta))
+        if delta > 0:
+            change_text.stylize("green")
+        elif delta < 0:
+            change_text.stylize("red")
+        dist_tbl.add_row(grade, str(orig), str(rounded), change_text)
 
-# --- Round-up Summary (Thick Box) ---
-st.markdown("### 📊 Round-up Score Grade Summary")
-with st.container(border=True):
-    col_a, col_b = st.columns([1, 2])
-    
-    # Calculate grade changes
-    # Ensure Original Grade and Grade columns exist from calculators.py
-    if 'Original Grade' in final_df.columns:
-        improved_students = final_df[final_df['Grade'] != final_df['Original Grade']]
-        improved_count = len(improved_students)
-        
-        col_a.metric("Grades Improved", improved_count, help="Number of students whose letter grade increased due to rounding up Coursework, Midterm, and Final scores.")
-        
-        # Grade Order for comparison table
-        grade_order = list(config.get('grade_boundaries', {}).keys()) + ["F"]
-        
-        orig_counts = final_df['Original Grade'].value_counts().reindex(grade_order, fill_value=0)
-        new_counts = final_df['Grade'].value_counts().reindex(grade_order, fill_value=0)
-        
-        comp_df = pd.DataFrame({
-            'Grade': grade_order,
-            'Original': orig_counts.values,
-            'Rounded': new_counts.values
-        })
-        comp_df['Change'] = comp_df['Rounded'] - comp_df['Original']
-        
-        # Only show grades that have students
-        comp_df = comp_df[(comp_df['Original'] > 0) | (comp_df['Rounded'] > 0)]
-        
-        col_b.write("**Grade Distribution Comparison**")
-        col_b.dataframe(comp_df, hide_index=True, use_container_width=True)
-        
-        if improved_count > 0:
-            with st.expander("View students with improved grades"):
-                st.write(improved_students[['Student ID', 'Name', 'Original Final Score', 'Final Score', 'Original Grade', 'Grade']])
-    else:
-        st.info("Original grade data not available for comparison.")
-# ------------------------------------
+    improved = final_df[final_df["Grade"] != final_df["Original Grade"]]
+    improved_count = len(improved)
+    summary_line = Text()
+    summary_line.append("Grades improved by rounding: ")
+    summary_line.append(str(improved_count), style="bold green" if improved_count > 0 else "dim")
 
-display_df = final_df.copy()
-rename_dict = {}
-weights = config.get('weights', {})
+    console.print(Panel(
+        Group(summary_line, dist_tbl),
+        title="[bold]📊 Round-up Score Grade Summary[/bold]",
+        border_style="blue",
+    ))
 
-for col in display_df.columns:
-    if col in max_scores:
-        rename_dict[col] = f"{col}\n({max_scores[col]:g} pts)"
-    elif col.endswith('_pct'):
-        category = col.replace('_pct', '')
-        weight = weights.get(category, 0)
-        if use_weighted_scores:
-            max_cat_pts = weight * 100
-            rename_dict[col] = f"{col}\n({max_cat_pts:g} pts)"
-        else:
-            rename_dict[col] = f"{col}\n(100%)"
-    elif col == 'Final Score':
-        rename_dict[col] = f"{col}\n(100 pts)" if use_weighted_scores else f"{col}\n(100%)"
-    elif col == 'Coursework Total':
-        # Automatically calculate the total weight for non-exam coursework
-        cw_weight = sum(w for c, w in weights.items() if c.lower() not in ['midterm', 'final'])
-        if use_weighted_scores:
-            max_cw_pts = cw_weight * 100
-            rename_dict[col] = f"{col}\n({max_cw_pts:g} pts)"
-        else:
-            rename_dict[col] = f"{col}\n(100%)"
+    if improved_count > 0 and Confirm.ask("Show students with improved grades?", default=False):
+        imp_tbl = Table(box=box.SIMPLE, show_header=True)
+        for col in ["Student ID", "Name", "Original Final Score", "Final Score", "Original Grade", "Grade"]:
+            imp_tbl.add_column(col)
+        for _, row in improved.iterrows():
+            imp_tbl.add_row(
+                str(row.get("Student ID", "")),
+                str(row.get("Name", "")),
+                str(row.get("Original Final Score", "")),
+                str(row.get("Final Score", "")),
+                str(row.get("Original Grade", "")),
+                str(row.get("Grade", "")),
+            )
+        console.print(imp_tbl)
 
-display_df.rename(columns=rename_dict, inplace=True)
-st.dataframe(display_df, use_container_width=True)
 
-import altair as alt
+def _col_headers(final_df: pd.DataFrame, max_scores: dict, config: dict, use_weighted: bool) -> dict:
+    """Maps original column names to two-line display headers (name / annotation)."""
+    weights = config.get("weights", {})
+    rename = {}
+    for col in final_df.columns:
+        if col in max_scores:
+            rename[col] = f"{col}\n({max_scores[col]:g} pts)"
+        elif col.endswith("_pct"):
+            category = col.replace("_pct", "")
+            weight = weights.get(category, 0)
+            rename[col] = f"{col}\n({weight * 100:g} pts)" if use_weighted else f"{col}\n(100%)"
+        elif col == "Final Score":
+            rename[col] = "Final Score\n(100 pts)" if use_weighted else "Final Score\n(100%)"
+        elif col == "Coursework Total":
+            cw_weight = sum(w for c, w in weights.items() if c.lower() not in ["midterm", "final"])
+            rename[col] = f"Coursework Total\n({cw_weight * 100:g} pts)" if use_weighted else "Coursework Total\n(100%)"
+    return rename
 
-st.subheader("Grade Distribution")
-# Reversing the order so 'F' is on the left and 'A' is on the right
-# The grade_boundaries in config.yaml are ordered highest to lowest ('A', 'B+', ...)
-grade_order = list(config.get('grade_boundaries', {}).keys()) + ["F"] # ['A', 'B+', ..., 'F']
-grade_order.reverse() # Now it is ['F', 'D', 'D+', ...]
 
-grade_counts = final_df['Grade'].value_counts().reindex(grade_order, fill_value=0).reset_index()
-grade_counts.columns = ['Grade', 'Count']
+def _fmt(v) -> str:
+    if not isinstance(v, str) and pd.isna(v):
+        return ""
+    return str(v)
 
-chart = alt.Chart(grade_counts).mark_bar().encode(
-    x=alt.X('Grade', sort=grade_order),
-    y='Count'
-)
-st.altair_chart(chart, use_container_width=True)
 
-# Export
-st.sidebar.markdown("---")
-st.sidebar.subheader("Export")
-if st.sidebar.button("Export Final Report to CSV"):
+def _print_wide(renderable) -> None:
+    """Render at full width (500 cols) and display in 'less -SR' for horizontal scrolling."""
+    buf = io.StringIO()
+    wide = Console(file=buf, width=500, force_terminal=True, color_system="256")
+    wide.print(renderable)
+    content = buf.getvalue()
+    try:
+        proc = subprocess.Popen(["less", "-SR"], stdin=subprocess.PIPE)
+        proc.communicate(input=content.encode("utf-8", errors="replace"))
+    except (FileNotFoundError, BrokenPipeError):
+        console.print(renderable)
+
+
+def show_student_table(final_df: pd.DataFrame, max_scores: dict, config: dict, use_weighted: bool) -> None:
+    rename = _col_headers(final_df, max_scores, config, use_weighted)
+
+    data_mapping = config.get("data_mapping", {})
+    raw_assignment_cols = {col for cols in data_mapping.values() for col in cols}
+
+    # Summary: calculated columns only — exclude raw assignment scores and Original* audit columns
+    exclude = raw_assignment_cols | {"Original Final Score", "Original Grade"}
+    summary_cols = [c for c in final_df.columns if c not in exclude]
+
+    summary_tbl = Table(box=_DIVIDER_BOX, show_header=True, title="[bold]Student Grades — Summary[/bold]")
+    for col in summary_cols:
+        summary_tbl.add_column(rename.get(col, col))
+    for _, row in final_df[summary_cols].iterrows():
+        summary_tbl.add_row(*[_fmt(v) for v in row])
+    console.print(summary_tbl)
+
+    # Raw assignment scores — only offer if there are any mapped columns in the data
+    raw_cols_present = [c for c in final_df.columns if c in raw_assignment_cols]
+    if raw_cols_present and Confirm.ask("Show raw assignment scores?", default=False):
+        raw_display_cols = ["Student ID", "Name"] + raw_cols_present
+        raw_tbl = Table(box=_DIVIDER_BOX, show_header=True, title="[bold]Raw Assignment Scores[/bold]")
+        for col in raw_display_cols:
+            raw_tbl.add_column(rename.get(col, col), no_wrap=True)
+        for _, row in final_df[raw_display_cols].iterrows():
+            raw_tbl.add_row(*[_fmt(v) for v in row])
+        console.print("[dim]← → to scroll  ·  q to exit[/dim]")
+        _print_wide(raw_tbl)
+
+
+def show_grade_distribution(final_df: pd.DataFrame, config: dict) -> None:
+    grade_order = list(config.get("grade_boundaries", {}).keys()) + ["F"]
+    counts = final_df["Grade"].value_counts()
+    total = len(final_df)
+    max_count = max((counts.get(g, 0) for g in grade_order), default=1)
+    bar_width = 30
+
+    console.print(Rule("[bold]Grade Distribution[/bold]"))
+    for grade in reversed(grade_order):
+        count = counts.get(grade, 0)
+        filled = int(bar_width * count / max_count) if max_count > 0 else 0
+        bar = "█" * filled + "░" * (bar_width - filled)
+        pct = count / total * 100 if total > 0 else 0
+        console.print(f"  [bold]{grade:<4}[/bold] [blue]{bar}[/blue]  {count} ({pct:.1f}%)")
+    console.print()
+
+
+def export_reports(final_df: pd.DataFrame, course_path: Path, config: dict, max_scores: dict, use_weighted: bool) -> None:
+    weights = config.get("weights", {})
+    data_mapping = config.get("data_mapping", {})
+    rename = {k: v.replace("\n", " ") for k, v in _col_headers(final_df, max_scores, config, use_weighted).items()}
+    display_df = final_df.rename(columns=rename)
+
     report_dir = course_path / "reports"
     report_dir.mkdir(exist_ok=True)
-    
-    # Export full final grades (using the display DataFrame so headers have max points)
-    report_path = report_dir / "final_grades.csv"
-    display_df.to_csv(report_path, index=False)
-    
-    # Export copy-friendly files
-    weights = config.get('weights', {})
-    data_mapping = config.get('data_mapping', {})
+    display_df.to_csv(report_dir / "final_grades.csv", index=False)
+
     copy_parts = []
-    
-    # Extract Coursework Total
     for col in display_df.columns:
-        if col.startswith('Coursework Total'):
-            part_df = display_df[['Student ID', col]].copy()
-            # E.g. "Coursework Total\n(30 pts)" -> "Coursework Total (30 pts)"
-            part_df.columns = ['Student ID', col.replace('\n', ' ')]
-            copy_parts.append(part_df)
+        if col.startswith("Coursework Total"):
+            copy_parts.append(display_df[["Student ID", col]].copy())
             break
-            
-    # Extract Exams (Midterm and Final)
-    for exam in ['midterm', 'final']:
+
+    for exam in ["midterm", "final"]:
         for col in display_df.columns:
-            # We must look for the _pct calculated column, not the raw score column
             if col.startswith(f"{exam}_pct"):
-                part_df = display_df[['Student ID', col]].copy()
-                
-                # Use the mapped column name from the config (e.g., 'midterm_score', 'final_exam')
+                part = display_df[["Student ID", col]].copy()
                 mapped_name = data_mapping.get(exam, [exam])[0]
                 max_pts = weights.get(exam, 0) * 100
-                
-                part_df.columns = ['Student ID', f"{mapped_name} ({max_pts:g} pts)"]
-                copy_parts.append(part_df)
+                part.columns = ["Student ID", f"{mapped_name} ({max_pts:g} pts)"]
+                copy_parts.append(part)
                 break
-            
+
     if copy_parts:
-        import pandas as pd
         copy_df = pd.concat(copy_parts, axis=1)
-        
-        copy_path = report_dir / "copy_friendly_scores.csv"
-        copy_df.to_csv(copy_path, index=False)
-            
-    st.sidebar.success(f"Saved reports and copy-friendly extracts to {report_dir}")
+        copy_df.to_csv(report_dir / "copy_friendly_scores.csv", index=False)
+
+    console.print(f"[green]✓ Reports saved to {report_dir}[/green]")
+
+
+def run() -> None:
+    while True:
+        course_map = find_courses()
+        if not course_map:
+            console.print("[red]No course directories found (looking for folders with config.yaml in current dir or 'courses/').[/red]")
+            sys.exit(1)
+
+        course_name, course_path = select_course(course_map)
+
+        try:
+            config = load_config(course_path)
+        except Exception as e:
+            console.print(f"[red]Failed to load config: {e}[/red]")
+            if not Confirm.ask("Try another course?", default=True):
+                break
+            continue
+
+        raw_df, max_scores = load_course_data(course_path)
+        if raw_df.empty:
+            console.print(f"[yellow]No student data found in {course_path / 'data'}[/yellow]")
+        else:
+            show_warnings(validate_scores(raw_df, config, max_scores))
+            use_weighted = Confirm.ask("Show weighted scores?", default=True)
+            final_df = calculate_final_grades(raw_df, config, max_scores, use_weighted)
+
+            console.print()
+            console.print(Rule(f"[bold]{config.get('course', course_name)} — {config.get('term', '')}[/bold]"))
+            console.print()
+
+            show_metrics(final_df)
+            console.print()
+            show_roundup_summary(final_df, config)
+            console.print()
+            show_student_table(final_df, max_scores, config, use_weighted)
+            console.print()
+            show_grade_distribution(final_df, config)
+
+            if Confirm.ask("Export final report to CSV?", default=False):
+                export_reports(final_df, course_path, config, max_scores, use_weighted)
+
+        if not Confirm.ask("\nView another course?", default=False):
+            break
+
+
+if __name__ == "__main__":
+    run()

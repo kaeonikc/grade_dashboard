@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import subprocess
 import sys
 from pathlib import Path
 
@@ -14,16 +13,19 @@ from src.calculators import calculate_final_grades
 def init_course(course_name: str, term_name: str):
     folder_name = f"{term_name}_{course_name}"
     base_dir = Path(folder_name)
+
+    if base_dir.exists():
+        print(f"❌ Directory '{base_dir}' already exists. Aborting to avoid overwriting existing files.")
+        sys.exit(1)
+
     data_dir = base_dir / "data"
     reports_dir = base_dir / "reports"
-    
-    data_dir.mkdir(parents=True, exist_ok=True)
-    reports_dir.mkdir(parents=True, exist_ok=True)
-    
+    data_dir.mkdir(parents=True)
+    reports_dir.mkdir(parents=True)
+
     config_path = base_dir / "config.yaml"
-    if not config_path.exists():
-        with open(config_path, "w") as f:
-            f.write(f"""course: "{course_name}"
+    with open(config_path, "w") as f:
+        f.write(f"""course: "{course_name}"
 term: "{term_name}"
 
 weights:
@@ -49,9 +51,8 @@ grade_boundaries:
     print(f"Modify the '{config_path}' file to set up your rules!")
 
 def run_dashboard():
-    dashboard_path = script_path.parent / "src" / "dashboard.py"
-    print(f"💡 Starting dashboard... (Running: streamlit run {dashboard_path.name})")
-    sys.exit(subprocess.call([sys.executable, "-m", "streamlit", "run", str(dashboard_path.resolve())]))
+    from src.dashboard import run
+    run()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="🎓 Grading System Dashboard & Manager")
@@ -63,7 +64,7 @@ if __name__ == "__main__":
     parser_init.add_argument("--term", required=True, help="The term for the course (e.g. '2026_S2')")
 
     # Dashboard command
-    parser_dashboard = subparsers.add_parser("dashboard", help="Launch the Streamlit dashboard")
+    parser_dashboard = subparsers.add_parser("dashboard", help="Launch the grade dashboard")
 
     args = parser.parse_args()
 

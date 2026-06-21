@@ -1,6 +1,34 @@
 import math
 import pandas as pd
 
+def validate_scores(df: pd.DataFrame, config: dict, max_scores: dict) -> list[str]:
+    """
+    Checks every mapped assignment column for scores that exceed their defined maximum.
+    Returns a list of human-readable warning strings, one per offending (student, column) pair.
+    """
+    warnings = []
+    data_mapping = config.get('data_mapping', {})
+
+    for category, columns in data_mapping.items():
+        for col in columns:
+            if col not in df.columns:
+                continue
+            max_val = max_scores.get(col, 100.0)
+            numeric_col = pd.to_numeric(df[col], errors='coerce')
+            offenders = df[numeric_col > max_val]
+            for _, row in offenders.iterrows():
+                score = numeric_col.loc[row.name]
+                student_id = str(row.get('Student ID', '?')).strip()
+                name = str(row.get('Name', '')).strip()
+                label = f"{student_id} ({name})" if name else student_id
+                warnings.append(
+                    f"[{category}] Column '{col}': student {label} "
+                    f"has score {score} which exceeds the max of {max_val}."
+                )
+
+    return warnings
+
+
 def assign_letter_grade(score: float, boundaries: dict) -> str:
     """Assigns a letter grade based on the score and defined boundaries."""
     # Convert boundaries dict to a sorted list of tuples: [('A', 80), ('B+', 75), ...]
