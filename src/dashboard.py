@@ -31,7 +31,15 @@ def find_courses() -> dict:
     potential.extend([d for d in current_dir.iterdir() if d.is_dir()])
     if courses_dir.is_dir():
         potential.extend([d for d in courses_dir.iterdir() if d.is_dir()])
-    return {d.name: d for d in potential if (d / "config.yaml").exists()}
+        
+    course_map = {}
+    for d in potential:
+        info_dir = d / "course_info"
+        if info_dir.is_dir():
+            config_files = [f for f in info_dir.iterdir() if f.is_file() and f.name.endswith("_config.yaml")]
+            if config_files:
+                course_map[d.name] = d
+    return course_map
 
 
 def select_course(course_map: dict) -> tuple[str, Path]:
@@ -272,7 +280,7 @@ def run() -> None:
             final_df = calculate_final_grades(raw_df, config, max_scores, use_weighted)
 
             console.print()
-            console.print(Rule(f"[bold]{config.get('course', course_name)} — {config.get('term', '')}[/bold]"))
+            console.print(Rule(f"[bold]{config.get('course_name', course_name)} — {config.get('term', '')}[/bold]"))
             console.print()
 
             show_metrics(final_df)
