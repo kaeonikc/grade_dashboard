@@ -4,12 +4,45 @@ import pandas as pd
 def validate_scores(df: pd.DataFrame, config: dict, max_scores: dict) -> list[str]:
     """
     Checks every mapped assignment column for scores that exceed their defined maximum.
-    Returns a list of human-readable warning strings, one per offending (student, column) pair.
+    Also validates that manually specified totals match column sums in the database.
+    Returns a list of human-readable warning strings.
     """
     warnings = []
     data_mapping = config.get('data_mapping', {})
+    total_pts_config = config.get('total_pts', {})
 
+    # Check for manual total points mismatch warnings
     for category, columns in data_mapping.items():
+        if category in total_pts_config:
+            target_total = total_pts_config[category]
+            cat_max_scores = {col: max_scores.get(col, 100.0) for col in columns if col in df.columns}
+            actual_total = sum(cat_max_scores.values())
+            if not math.isclose(actual_total, target_total, abs_tol=1e-2):
+                warnings.append(
+                    f"[{category}] Warning: Manual total score is determined as {target_total}pts, "
+                    f"but the sum of parts in database is {actual_total}pts."
+                )
+
+    # Check for scores exceeding max score
+    for category, columns in data_mapping.items():
+        if category == 'attendance':
+            valid_codes = {'P', 'A', 'L', 'EA', '', 'nan'}
+            for col in columns:
+                if col not in df.columns:
+                    continue
+                invalid_mask = ~df[col].astype(str).str.strip().replace('nan', '').isin(valid_codes)
+                offenders = df[invalid_mask]
+                for _, row in offenders.iterrows():
+                    val = row[col]
+                    student_id = str(row.get('Student ID', '?')).strip()
+                    name = str(row.get('Name', '')).strip()
+                    label = f"{student_id} ({name})" if name else student_id
+                    warnings.append(
+                        f"[{category}] Column '{col}': student {label} "
+                        f"has invalid attendance code '{val}' (must be P, A, L, or EA)."
+                    )
+            continue
+
         for col in columns:
             if col not in df.columns:
                 continue
@@ -58,9 +91,15 @@ def calculate_final_grades(df: pd.DataFrame, config: dict, max_scores: dict, use
     cols_to_keep = [col for col in result_df.columns if col in allowed_cols]
     result_df = result_df[cols_to_keep]
     
-    # Treat missing assignments as 0, but only for numeric columns
-    numeric_cols = [col for col in result_df.columns if col not in ['Student ID', 'Name']]
+    # Treat missing assignments as 0, but only for numeric columns (exclude attendance)
+    attendance_cols = set(data_mapping.get('attendance', []))
+    numeric_cols = [col for col in result_df.columns if col not in ['Student ID', 'Name'] and col not in attendance_cols]
     result_df[numeric_cols] = result_df[numeric_cols].fillna(0)
+    
+    # For attendance columns, fillna with empty string
+    for col in attendance_cols:
+        if col in result_df.columns:
+            result_df[col] = result_df[col].fillna('')
     
     total_score = pd.Series(0.0, index=df.index)
     weights = config.get('weights', {})
@@ -78,7 +117,20 @@ def calculate_final_grades(df: pd.DataFrame, config: dict, max_scores: dict, use
         # Use dynamic max score from CSV, default to 100 if missing
         cat_max_scores = {col: max_scores.get(col, 100.0) for col in valid_cols}
         
-        if category == 'homework' and rules.get('drop_lowest_homework') and len(valid_cols) > 1:
+        if category == 'attendance':
+            # Map P/L/EA/A to numeric values
+            mapping = {'P': 1.0, 'L': 0.8, 'EA': 1.0, 'A': 0.0}
+            
+            numeric_category_df = category_df.copy()
+            for col in valid_cols:
+                numeric_category_df[col] = numeric_category_df[col].astype(str).str.strip().map(mapping).fillna(0.0)
+            
+            cat_sum = numeric_category_df[valid_cols].sum(axis=1)
+            cat_max_scores = {col: 1.0 for col in valid_cols}
+            
+            # The total score (possible_max) is the static number of class columns
+            possible_max = float(len(valid_cols))
+        elif category == 'homework' and rules.get('drop_lowest_homework') and len(valid_cols) > 1:
             # We need to find the lowest percentage score to drop
             pct_df = pd.DataFrame()
             for col in valid_cols:
@@ -99,7 +151,23 @@ def calculate_final_grades(df: pd.DataFrame, config: dict, max_scores: dict, use
         else:
             cat_sum = category_df.sum(axis=1)
             possible_max = sum(cat_max_scores.values())
-        
+
+        total_pts_config = config.get('total_pts', {})
+        category_total_pts = total_pts_config.get(category)
+        if category_total_pts is not None:
+            if isinstance(possible_max, pd.Series):
+                possible_max = possible_max.clip(lower=category_total_pts)
+            else:
+                possible_max = max(possible_max, category_total_pts)
+
+        # Add raw category total points column, e.g., "Quiz Total" or "Homework Total"
+        total_col_name = f"{category.title()} Total"
+        result_df[total_col_name] = cat_sum.round(2)
+        if isinstance(possible_max, pd.Series):
+            max_scores[total_col_name] = float(possible_max.max())
+        else:
+            max_scores[total_col_name] = float(possible_max)
+
         # Calculate percentage for this category
         if isinstance(possible_max, pd.Series):
             category_pct = cat_sum / possible_max.replace(0, 1) # avoid div0

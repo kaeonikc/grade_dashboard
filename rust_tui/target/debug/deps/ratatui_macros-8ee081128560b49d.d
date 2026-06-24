@@ -1,0 +1,10 @@
+/Users/chakkritk/myUniverse/workflow/10_Dev_Studio/Projects/grade_dashboard/rust_tui/target/debug/deps/ratatui_macros-8ee081128560b49d.d: /Users/chakkritk/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-macros-0.7.2/src/lib.rs /Users/chakkritk/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-macros-0.7.2/src/layout.rs /Users/chakkritk/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-macros-0.7.2/src/line.rs /Users/chakkritk/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-macros-0.7.2/src/row.rs /Users/chakkritk/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-macros-0.7.2/src/span.rs /Users/chakkritk/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-macros-0.7.2/src/text.rs
+
+/Users/chakkritk/myUniverse/workflow/10_Dev_Studio/Projects/grade_dashboard/rust_tui/target/debug/deps/libratatui_macros-8ee081128560b49d.rmeta: /Users/chakkritk/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-macros-0.7.2/src/lib.rs /Users/chakkritk/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-macros-0.7.2/src/layout.rs /Users/chakkritk/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-macros-0.7.2/src/line.rs /Users/chakkritk/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-macros-0.7.2/src/row.rs /Users/chakkritk/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-macros-0.7.2/src/span.rs /Users/chakkritk/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-macros-0.7.2/src/text.rs
+
+/Users/chakkritk/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-macros-0.7.2/src/lib.rs:
+/Users/chakkritk/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-macros-0.7.2/src/layout.rs:
+/Users/chakkritk/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-macros-0.7.2/src/line.rs:
+/Users/chakkritk/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-macros-0.7.2/src/row.rs:
+/Users/chakkritk/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-macros-0.7.2/src/span.rs:
+/Users/chakkritk/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ratatui-macros-0.7.2/src/text.rs:

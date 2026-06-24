@@ -132,7 +132,27 @@ def extract_metadata(df: pd.DataFrame) -> dict:
             # 7. Exam Schedule
             if 'วันเวลาสอบ' in val_str or 'วันและเวลาสอบ' in val_str:
                 if not metadata['exam_schedule']:
-                    metadata['exam_schedule'] = val_str.replace('วันเวลาสอบ', '').replace('วันและเวลาสอบ', '').strip()
+                    raw_exam = val_str.replace('วันเวลาสอบ', '').replace('วันและเวลาสอบ', '').strip()
+                    
+                    # Convert DD/MM/YY format to d mmm yyyy (e.g. 7 Aug 2026)
+                    MONTH_ABBRS = {
+                        1: 'Jan', 2: 'Feb', 3: 'Mar', 4: 'Apr', 5: 'May', 6: 'Jun',
+                        7: 'Jul', 8: 'Aug', 9: 'Sep', 10: 'Oct', 11: 'Nov', 12: 'Dec'
+                    }
+                    def replace_date(match):
+                        date_str = match.group(0)
+                        try:
+                            d, m, y = date_str.split('/')
+                            day = int(d)
+                            month = int(m)
+                            year = 2000 + int(y)
+                            if month in MONTH_ABBRS:
+                                return f"{day} {MONTH_ABBRS[month]} {year}"
+                        except Exception:
+                            pass
+                        return date_str
+                    
+                    metadata['exam_schedule'] = re.sub(r'\b\d{2}/\d{2}/\d{2,4}\b', replace_date, raw_exam)
                     
     # Check defaults and print warnings for missing fields
     required_fields = {
@@ -152,7 +172,7 @@ def extract_metadata(df: pd.DataFrame) -> dict:
             
     return metadata
 
-def convert_excel_to_csv_and_yaml(input_path: Path):
+def convert_excel_to_csv_and_yaml(input_path: Path, csv_path: Path = None, yaml_path: Path = None) -> tuple[dict, pd.DataFrame]:
     print(f"Loading {input_path.name}...")
     try:
         df_raw = pd.read_excel(input_path, header=None)
@@ -169,8 +189,10 @@ def convert_excel_to_csv_and_yaml(input_path: Path):
     
     # Output file paths
     base_name = f"{term_str}_{course_id}_SEC_{sec_num}_student_info"
-    csv_path = input_path.parent / f"{base_name}.csv"
-    yaml_path = input_path.parent / f"{base_name}.yaml"
+    if csv_path is None:
+        csv_path = input_path.parent / f"{base_name}.csv"
+    if yaml_path is None:
+        yaml_path = input_path.parent / f"{base_name}.yaml"
 
     print(f"Parsed metadata details:")
     for k, v in metadata.items():
@@ -256,6 +278,7 @@ def convert_excel_to_csv_and_yaml(input_path: Path):
 
     print(f"✅ Successfully converted and exported {len(clean_df)} student rows to CSV!")
     print(f"✅ Successfully wrote structured metadata to YAML!")
+    return metadata, clean_df
 
 if __name__ == '__main__':
     script_dir = Path(__file__).resolve().parent

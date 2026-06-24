@@ -1,196 +1,158 @@
-# Spec: Rich Terminal Dashboard
+# Spec: Raw Details Tab — Three-Level Drill-Down with Student Popup
 
 ## Summary
 
-Replace the Streamlit web GUI (`src/dashboard.py`) with a sequential terminal dashboard
-using `python-rich`. The launch command (`python grader.py dashboard`) is unchanged.
-No browser or server is involved — everything renders in the current terminal session.
+Extend the **[2] Raw Details** tab from two levels to three, with dynamic breadcrumb
+titles at every level.
+
+### Navigation hierarchy
+
+```
+Level 0 — Category Overview
+    │  Enter on any category column (col ≥ 2)
+    ▼
+Level 1 — Sub-Column View  (selected category)
+    │  Enter on any student row
+    ▼
+Level 2 — Student Popup  (selected category × selected student)
+    │  Enter on any sub-column cell (col ≥ 2)
+    ▼
+Level 3 — Cell Editor  (existing tui-textarea overlay)
+```
+
+Esc ascends one level at a time.  
+Esc at Level 0 → CourseSelect screen (existing behaviour).
 
 ---
 
-## Dependencies
+## Level descriptions
 
-**Removed from `requirements.txt`:**
-- `streamlit>=1.30.0`
+### Level 0 — Category Overview (unchanged)
+- Full-screen table: `Student ID | Name | homework | midterm | final | attendance | …`
+- Each category cell = sum of sub-scores (using `score_value()` for P/A/L/EA).
+- Title: `"📋 Raw Details  (Enter: drill into category)"`
+- Enter on col ≥ 2 → sets `raw_selected_category`, resets `cursor_col = 2`, `scroll_col_offset = 0`.
 
-**Added to `requirements.txt`:**
-- `rich>=13.0.0`
+### Level 1 — Sub-Column View (minor update)
+- Full-screen table: `Student ID | Name | sub1 | sub2 | … | [Total (pts)]`
+- For attendance categories only, a "Total (pts)" column is appended (existing).
+- Title: `"📋 Raw Details  ›  {category}  (Enter: open student  Esc: back)"`
+- Enter on any row → sets `raw_selected_student = Some(cursor_row)`, resets `cursor_col = 2`.
+- Esc → clears `raw_selected_category`, returns to Level 0.
 
-`pandas`, `pyyaml`, `openpyxl` unchanged. `altair` was a transitive Streamlit
-dependency and is no longer required.
+### Level 2 — Student Popup (new)
+- Full-screen table: same column structure as Level 1 (`sub1 | sub2 | … | [Total]`),
+  but renders **only the one selected student's row** (plus the header row).
+- Title: `"📋 Raw Details  ›  {category}  ›  {student_name}  ({student_id})  (Enter: edit  Esc: back)"`
+- Vertical navigation (j/k/↑/↓) is disabled — single row.
+- Enter on col ≥ 2 → triggers `start_editing_cell()` (existing logic; `cursor_row` is the
+  student's index in `raw_scores`, so no changes needed in `start_editing_cell()`).
+- Esc (when not in edit mode) → clears `raw_selected_student`, returns to Level 1.
+
+### Level 3 — Cell Editor (unchanged)
+- Existing tui-textarea overlay on top of whatever is rendered behind it.
+- Enter saves, Esc cancels; both return to Level 2.
 
 ---
 
-## Files Changed
+## State fields
+
+### `app.rs` — changes to `App` struct
+
+| Field | Type | Meaning |
+|---|---|---|
+| `raw_selected_category` | `Option<String>` | Already present. `Some(cat)` = at Level 1 or 2. |
+| `raw_selected_student` | `Option<usize>` | **New.** `Some(row_idx)` = at Level 2. |
+
+### Key-handler changes (`App::update()`)
+
+**Enter key** (tab 1, not editing):
+- If `raw_selected_student.is_some()` → already at L2: `start_editing_cell()` (col ≥ 2 guard).
+- Else if `raw_selected_category.is_some()` → at L1: set `raw_selected_student = Some(cursor_row)`, reset `cursor_col = 2`, `scroll_col_offset = 0`.
+- Else → at L0: existing logic (set `raw_selected_category`, reset cursor).
+
+**Esc key** (tab 1, not editing):
+- If `raw_selected_student.is_some()` → at L2: clear `raw_selected_student` (return to L1).
+- Else if `raw_selected_category.is_some()` → at L1: clear `raw_selected_category` (return to L0).
+- Else → at L0: `app.state = CourseSelect` (existing).
+
+**Vertical navigation** (j/k/↑/↓, tab 1):
+- If `raw_selected_student.is_some()` → no-op (single row, nowhere to move vertically).
+
+**Horizontal navigation** (`move_right()`/`move_left()`, tab 1):
+- At L2: `max_cols = data_mapping[cat].len() + 2` (same as L1 sub-column calculation).
+
+**Reset on tab switch / course reload:**
+- Clear both `raw_selected_category` and `raw_selected_student` (already handled for `raw_selected_category`; add `raw_selected_student` to the same reset sites).
+
+---
+
+## UI (`ui.rs`) — changes
+
+### `draw_raw_details_tab()`
+```
+if raw_selected_student.is_some() → draw_student_popup()
+else if raw_selected_category.is_some() → draw_sub_column_view()
+else → draw_category_view()
+```
+
+### `draw_student_popup()` (new function)
+- Shares most code with `draw_sub_column_view()`.
+- `let student_row_idx = app.raw_selected_student.unwrap();`
+- Renders only `data.raw_scores[student_row_idx]` as the sole data row.
+- Header: sub-column names + max_scores (same as L1).
+- For attendance: append "Total (pts)" cell (same `show_total` logic).
+- Cursor highlight: `cursor_col` only (no row highlight needed — single row).
+- Block title: `"📋 Raw Details  ›  {cat}  ›  {name}  ({sid})  (Enter: edit  Esc: back)"`.
+- Border color: `category_color(&cat, &theme)`.
+
+### Title strings updated
+- Level 0: `" 📋 Raw Details — Category Overview (Enter: drill in) "` ← unchanged
+- Level 1: `format!(" 📋 Raw Details  ›  {}  —  sub-columns (Enter: open student  Esc: back) ", cat)`
+- Level 2: `format!(" 📋 Raw Details  ›  {}  ›  {}  ({})  (Enter: edit  Esc: back) ", cat, name, sid)`
+
+### `draw_footer()` — legend for tab 1
+| State | Legend |
+|---|---|
+| L0 | `[Enter] Drill Into Category` |
+| L1 | `[Enter] Open Student  [Esc] Back to Categories` |
+| L2 | `[Enter] Edit Score  [Esc] Back to Sub-columns` |
+
+---
+
+## Out of scope
+- Floating/overlay popup (non-full-screen) — user chose full-screen.
+- "All categories" view for a single student (full student card).
+- Keyboard shortcut to jump from L0 directly to L2.
+- Search/filter students by ID or name.
+
+---
+
+## Files changed
 
 | File | Change |
 |---|---|
-| `src/dashboard.py` | Full rewrite — Rich terminal flow replaces Streamlit script |
-| `requirements.txt` | Swap `streamlit` → `rich` |
-| `grader.py` | `run_dashboard()` imports and calls `src.dashboard.run()` directly (no subprocess) |
+| `rust_tui/src/app.rs` | Add `raw_selected_student: Option<usize>`; update Enter/Esc/move handlers |
+| `rust_tui/src/ui.rs` | Add `draw_student_popup()`; update titles in L1; update footer legends |
 
-`src/data_loader.py` and `src/calculators.py` are **not touched**.
-
----
-
-## Terminal Flow
-
-The dashboard runs as a sequential interactive loop. Prompts are handled by
-`rich.prompt.Prompt` and `rich.prompt.Confirm`.
-
-```
-python grader.py dashboard
-  │
-  ├─ [find_courses()] scan ./ and courses/ for dirs containing config.yaml
-  │
-  ├─ [select_course()] numbered list → Prompt.ask("Select course", default="1")
-  │
-  ├─ load_config()  →  load_course_data()
-  │
-  ├─ [show_warnings()]  Panel with yellow text — only printed if validation warnings exist
-  │
-  ├─ Confirm.ask("Show weighted scores?", default=True)
-  │
-  ├─ calculate_final_grades(use_weighted)
-  │
-  ├─ Rule  ─── Course Name — Term ───
-  │
-  ├─ [show_metrics()]         Table: Total Students | Average Score | Highest Score
-  │
-  ├─ [show_roundup_summary()] Panel (border=blue):
-  │     "Grades improved by rounding: N"
-  │     Table: Grade | Original | Rounded | Change (green/red delta)
-  │     └─ if N > 0: Confirm.ask("Show students with improved grades?")
-  │           └─ Table: Student ID | Name | Original Final Score | Final Score | Original Grade | Grade
-  │
-  ├─ [show_student_table()]
-  │     ├─ Summary table (console.print — inline, no pager):
-  │     │     Columns: Student ID, Name, *_pct cols, Coursework Total, Final Score, Grade
-  │     │     Box: custom _DIVIDER_BOX (│ between columns, ─┼ header separator, no outer border)
-  │     │     Headers: two-line (col name / annotation on separate lines)
-  │     │
-  │     └─ Raw scores table (pager via less -SR):
-  │           Columns: Student ID, Name, all raw assignment columns from data_mapping
-  │           Box: same _DIVIDER_BOX style
-  │           Headers: two-line where annotation exists
-  │
-  ├─ [show_grade_distribution()]  Rule + ASCII bar chart:
-  │     F → A printed top-to-bottom
-  │     bar = "█" * filled + "░" * (30 - filled)  (scaled to highest grade count)
-  │
-  ├─ Confirm.ask("Export final report to CSV?", default=False)
-  │     └─ [export_reports()] writes final_grades.csv + copy_friendly_scores.csv
-  │           under <course_path>/reports/
-  │
-  └─ Confirm.ask("View another course?", default=False)
-        ├─ Yes → loop back to select_course()
-        └─ No  → exit
-```
+No changes needed to `bridge.rs`, `types.rs`, `style.rs`, or any Python files.
 
 ---
 
-## Student Table Styling
+## End-to-end verification
 
-### `_DIVIDER_BOX` (custom `rich.box.Box`)
-
-```
-        (no top border)
-  │     (head rows: no outer edges, │ between columns)
- ─┼     (header separator: ─ fill, ┼ at column crossings, no outer edges)
-  │     (data rows: same as head)
-        (no row separators)
-        (no foot row separator)
-  │     (foot rows)
-        (no bottom border)
-```
-
-Each position is 4 characters: `[left_edge, fill, divider, right_edge]`.
-
-### Two-line column headers
-
-`_col_headers()` returns `\n`-separated strings instead of space-separated:
-
-| Column | Old header | New header |
-|--------|-----------|------------|
-| raw score col | `hw1 (10 pts)` | `hw1\n(10 pts)` |
-| `*_pct` col | `homework_pct (20 pts)` | `homework_pct\n(20 pts)` |
-| `Final Score` | `Final Score (100 pts)` | `Final Score\n(100 pts)` |
-| `Coursework Total` | `Coursework Total (30 pts)` | `Coursework Total\n(30 pts)` |
-
-Rich renders the `\n` as a genuine line break in the column header row, so each
-column is only as wide as its widest single line (col name or annotation), not the
-full concatenated string.
-
-### Visual result (summary table)
-
-```
- Student ID  Name   homework_pct  Coursework Total  midterm_pct  Final Score  Grade
-                    (20 pts)      (20 pts)          (30 pts)     (100 pts)
- ──────────────────────────────┼─────────────────┼────────────┼────────────┼──────
- 1001        Alice       17    │       17         │     25     │     87     │  A
- 1002        Bob         15    │       15         │     18     │     73     │  B
-```
-
-### Pager behavior
-
-- **Summary table**: `console.print()` — inline, no pager. Multi-line headers reduce
-  column widths enough to fit a standard ≥80-char terminal.
-- **Raw scores table**: `_print_wide()` — renders at 500-char width, piped through
-  `less -SR`. Falls back to `console.print()` if `less` is unavailable.
-
----
-
-## Decisions Made
-
-| Decision | Choice |
-|---|---|
-| Wide table overflow | Wrap/truncate to terminal width (Rich default) for summary; pager for raw scores |
-| Weighted toggle | Interactive `Confirm.ask` every run, never a CLI flag |
-| Per-loop settings | Re-prompt weighted toggle on each new course |
-| Grade chart order | F at top, A at bottom (matches bar-chart reading convention) |
-| Course pre-selection | Always interactive — no CLI arg to skip menu |
-| Summary table column headers | Two-line: name on line 1, `(X pts)` on line 2 |
-| Column dividers | Custom box with `│` inner dividers, `─┼` header separator, no outer border |
-| Summary table pager | Removed — inline print only |
-| Raw scores table pager | Kept — `less -SR` for horizontal scrolling |
-
----
-
-## Out of Scope
-
-- Live/reactive updates (no `textual`, no `curses`, no `Live` render loop).
-- Keyboard navigation within tables (terminal scroll only).
-- Persistent user preferences across sessions.
-- Multi-course comparison or side-by-side views.
-- Any new features not present in the original Streamlit dashboard.
-
----
-
-## End-to-End Verification
-
-```bash
-# 1. Install dependencies
-pip install -r requirements.txt
-# Confirm: no streamlit, rich>=13 installed
-
-# 2. Launch from project root
-python grader.py dashboard
-
-# 3. Expected terminal flow:
-#    - Numbered course list appears
-#    - Entering "1" (or course name) loads the course
-#    - "Show weighted scores? [Y/n]" prompt appears
-#    - After Enter: rule line, metrics table, round-up panel, student tables, bar chart
-#    - Summary table prints inline with two-line headers and │ column dividers
-#    - "Show raw assignment scores? [y/N]" — answering y opens less pager; q to exit
-#    - "Export final report to CSV? [y/N]" — answering y writes reports/
-#    - "View another course? [y/N]" — answering n exits cleanly
-
-# 4. Check summary table fits terminal
-#    Terminal width: tput cols  (typically 80–200)
-#    Summary table should not truncate any column name or value
-
-# 5. Verify export output
-ls courses/<course>/reports/
-# Should contain: final_grades.csv  copy_friendly_scores.csv
-```
+1. Build and run from project root.
+2. Select PHYS1120 course.
+3. Press **Tab** → Raw Details (L0). Title: "Category Overview".
+4. Press **→** three times to highlight the `attendance` column; press **Enter**.
+   - Title changes to "Raw Details › attendance — sub-columns".
+5. Press **↓** twice to reach student 69143303. Press **Enter**.
+   - Title changes to "Raw Details › attendance › นางสาวสุปวีร์ … (69143303)".
+   - Table shows one row: P, P, L, …, Total = 2.8.
+6. Press **→** to col 2 (8 Jun 2026); press **Enter**.
+   - Cell editor opens with current value "P".
+7. Clear and type `A`; press **Enter** to save.
+   - Student popup refreshes showing `A` in that cell and Total changes to 1.8.
+8. Press **Esc** → back to L1 sub-column view (attendance).
+9. Press **Esc** → back to L0 category overview.
+10. Press **Esc** → back to CourseSelect screen.
