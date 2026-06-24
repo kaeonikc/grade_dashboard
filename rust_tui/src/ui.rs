@@ -522,8 +522,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
     };
 
     let sub_cols = data.data_mapping.get(&cat).cloned().unwrap_or_default();
-    let cat_lower = cat.to_lowercase();
-    let show_total = cat_lower.contains("attendance") || cat_lower.contains("att");
+    let show_total = true;
 
     let border_color = if app.raw_right_focused {
         category_color(&cat, &theme)
@@ -568,8 +567,16 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
         );
     }
     if show_total {
+        let total_max: f64 = sub_cols.iter()
+            .filter_map(|sc| data.max_scores.get(sc))
+            .sum();
+        let total_header = if total_max > 0.0 {
+            format!("Total\n({:.0} pts)", total_max)
+        } else {
+            "Total\n(pts)".to_string()
+        };
         header_cells.push(
-            Cell::from("Total\n(pts)")
+            Cell::from(total_header)
                 .style(Style::default().fg(theme.success).add_modifier(Modifier::BOLD))
         );
     }
@@ -623,9 +630,12 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
                 .filter_map(|sc| record.get(sc))
                 .map(|v| score_value(v))
                 .sum();
+            let mut total_style = Style::default().fg(theme.success).add_modifier(Modifier::BOLD);
+            if app.raw_right_focused && r_idx == app.cursor_row && app.cursor_col == sub_cols.len() + 2 {
+                total_style = Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
+            }
             cells.push(
-                Cell::from(format!("{:.1}", total))
-                    .style(Style::default().fg(theme.success).add_modifier(Modifier::BOLD))
+                Cell::from(format!("{:.1}", total)).style(total_style)
             );
         }
 
@@ -1196,13 +1206,258 @@ fn draw_loading_overlay(f: &mut Frame, app: &App) {
     f.render_widget(paragraph, area);
 }
 
+fn calculate_instant_score_and_grade(
+    data: &crate::types::CourseData,
+    editing_student_id: &str,
+    editing_column: &str,
+    new_value_str: &str,
+) -> (f64, String) {
+    let record = match data.raw_scores.iter().find(|r| {
+        r.get("Student ID").and_then(|v| v.as_str()) == Some(editing_student_id)
+    }) {
+        Some(r) => r,
+        None => return (0.0, "F".to_string()),
+    };
+
+    let new_val_parsed = match new_value_str.trim().to_uppercase().as_str() {
+        "P" | "EA" => Some(1.0),
+        "L" => Some(0.8),
+        "A" => Some(0.0),
+        "" => Some(0.0),
+        other => other.parse::<f64>().ok(),
+    };
+
+    let get_val = |col: &str| -> f64 {
+        if col == editing_column {
+            return new_val_parsed.unwrap_or(0.0);
+        }
+        if let Some(v) = record.get(col) {
+            match v {
+                serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0),
+                serde_json::Value::String(s) => match s.trim().to_uppercase().as_str() {
+                    "P" | "EA" => 1.0,
+                    "L" => 0.8,
+                    "A" => 0.0,
+                    other => other.parse::<f64>().unwrap_or(0.0),
+                },
+                _ => 0.0,
+            }
+        } else {
+            0.0
+        }
+    };
+
+    let mut coursework_total = 0.0;
+    let mut midterm_pct = 0.0;
+    let mut final_pct = 0.0;
+
+    let drop_lowest_homework = if let Some(ref rules) = data.rules {
+        rules.get("drop_lowest_homework")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+    for (category, weight) in &data.weights {
+        let columns = match data.data_mapping.get(category) {
+            Some(cols) => cols,
+            None => continue,
+        };
+        if columns.is_empty() {
+            continue;
+        }
+
+        let cat_lower = category.to_lowercase();
+        
+        let category_pct = if cat_lower == "attendance" {
+            let sum: f64 = columns.iter().map(|col| {
+                if col == editing_column {
+                    new_val_parsed.unwrap_or(0.0)
+                } else if let Some(v) = record.get(col) {
+                    match v {
+                        serde_json::Value::String(s) => match s.trim().to_uppercase().as_str() {
+                            "P" | "EA" => 1.0,
+                            "L" => 0.8,
+                            "A" => 0.0,
+                            _ => 0.0,
+                        },
+                        _ => 0.0,
+                    }
+                } else {
+                    0.0
+                }
+            }).sum();
+            let possible_max = columns.len() as f64;
+            if possible_max > 0.0 { sum / possible_max } else { 0.0 }
+        } else if cat_lower == "homework" && drop_lowest_homework && columns.len() > 1 {
+            let mut lowest_idx: Option<usize> = None;
+            let mut lowest_pct = f64::MAX;
+            for (idx, col) in columns.iter().enumerate() {
+                let score = get_val(col);
+                let max_s = data.max_scores.get(col).cloned().unwrap_or(100.0);
+                let pct = if max_s > 0.0 { score / max_s } else { 0.0 };
+                if pct < lowest_pct {
+                    lowest_pct = pct;
+                    lowest_idx = Some(idx);
+                }
+            }
+
+            let mut sum = 0.0;
+            let mut possible_max = 0.0;
+            for (idx, col) in columns.iter().enumerate() {
+                if Some(idx) == lowest_idx {
+                    continue;
+                }
+                sum += get_val(col);
+                possible_max += data.max_scores.get(col).cloned().unwrap_or(100.0);
+            }
+            if possible_max > 0.0 { sum / possible_max } else { 0.0 }
+        } else {
+            let sum: f64 = columns.iter().map(|col| get_val(col)).sum();
+            let possible_max: f64 = columns.iter().map(|col| data.max_scores.get(col).cloned().unwrap_or(100.0)).sum();
+            if possible_max > 0.0 { sum / possible_max } else { 0.0 }
+        };
+
+        let category_weighted = category_pct * 100.0 * weight;
+
+        if cat_lower == "midterm" {
+            midterm_pct = category_weighted;
+        } else if cat_lower == "final" {
+            final_pct = category_weighted;
+        } else {
+            coursework_total += category_weighted;
+        }
+    }
+
+    let cw_rounded = coursework_total.ceil();
+    let midterm_rounded = midterm_pct.ceil();
+    let final_rounded = final_pct.ceil();
+
+    let final_score = cw_rounded + midterm_rounded + final_rounded;
+    let final_score_int = final_score.round() as i64;
+
+    let mut sorted_bounds: Vec<(&String, &f64)> = data.grade_boundaries.iter().collect();
+    sorted_bounds.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
+    
+    let mut grade = "F".to_string();
+    for (g, threshold) in sorted_bounds {
+        if final_score_int as f64 >= *threshold {
+            grade = g.clone();
+            break;
+        }
+    }
+
+    (final_score, grade)
+}
+
 fn draw_edit_overlay(f: &mut Frame, app: &mut App) {
-    let area = centered_rect(40, 25, f.area());
+    let area = centered_rect(45, 35, f.area());
     f.render_widget(Clear, area);
     
+    let theme = app.theme;
+
+    // Split vertically: 3 lines for input, remaining for student info & grades
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+        ])
+        .split(area);
+
     if let Some(ref mut ta) = app.edit_textarea {
-        f.render_widget(ta.widget(), area);
+        // Set purple border (theme.purple) for the input box
+        ta.set_block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme.purple))
+                .title(format!(" Edit Score: {} ", app.editing_column))
+                .title_style(Style::default().fg(theme.purple).bold())
+        );
+        f.render_widget(ta.widget(), chunks[0]);
     }
+
+    // Retrieve typed value from textarea
+    let mut new_value_str = String::new();
+    if let Some(ref ta) = app.edit_textarea {
+        if !ta.lines().is_empty() {
+            new_value_str = ta.lines()[0].clone();
+        }
+    }
+
+    // Retrieve selected student's Final Score and Grade dynamically
+    let mut final_score = 0.0;
+    let mut grade = String::from("F");
+    let mut student_name = String::new();
+    let mut warning_line = None;
+    if let Some(ref data) = app.course_data {
+        if let Some(student) = data.student_grades.iter().find(|s| {
+            s.get("Student ID").and_then(|v| v.as_str()) == Some(&app.editing_student_id)
+        }) {
+            student_name = student.get("Name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+        }
+
+        let res = calculate_instant_score_and_grade(data, &app.editing_student_id, &app.editing_column, &new_value_str);
+        final_score = res.0;
+        grade = res.1;
+
+        // Check if value exceeds max score
+        if let Some(&max_score) = data.max_scores.get(&app.editing_column) {
+            if let Some(val) = new_value_str.trim().parse::<f64>().ok() {
+                if val > max_score {
+                    warning_line = Some(Line::from(vec![
+                        Span::styled(" ⚠️ Warning: Score exceeds max (", Style::default().fg(theme.warning).bold()),
+                        Span::styled(format!("{:.1}", max_score), Style::default().fg(theme.warning).bold()),
+                        Span::styled(" pts)!", Style::default().fg(theme.warning).bold()),
+                    ]));
+                }
+            }
+        }
+    }
+
+    // Semantic grade coloring (easily notified colors)
+    let grade_color = match grade.trim().to_uppercase().as_str() {
+        "A" | "A+" | "A-" | "PASSED" | "P" => theme.success, // Green
+        "B" | "B+" | "B-" => theme.purple,                  // Purple
+        "C" | "C+" | "C-" => theme.key_accent,              // Yellow
+        "D" | "D+" | "D-" => theme.warning,                 // Orange
+        _ => theme.border_focus,                            // Red/Pink
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.purple)) // Match purple border
+        .style(Style::default().bg(theme.panel_bg))
+        .title(format!(" Student: {} ({}) ", format_thai_name(&student_name, 22), app.editing_student_id))
+        .title_style(Style::default().fg(theme.key_accent).bold());
+
+    let mut info_text = vec![
+        Line::from(vec![
+            Span::raw(" Current Final Score: "),
+            Span::styled(format!("{:.2}", final_score), Style::default().fg(theme.active_tab).bold()),
+        ]),
+        Line::from(vec![
+            Span::raw(" Current Grade:       "),
+            Span::styled(format!(" {} ", grade), Style::default().fg(theme.bg).bg(grade_color).bold()),
+        ]),
+    ];
+
+    if let Some(w_line) = warning_line {
+        info_text.push(Line::raw("")); // Spacer
+        info_text.push(w_line);
+    }
+
+    let paragraph = Paragraph::new(info_text)
+        .block(block)
+        .alignment(Alignment::Left);
+
+    f.render_widget(paragraph, chunks[1]);
 }
 
 fn draw_settings_overlay(f: &mut Frame, app: &mut App) {

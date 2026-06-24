@@ -205,7 +205,8 @@ def get_course_data(course_path, use_weighted=True):
             "raw_columns": raw_display_cols,
             "raw_scores": raw_scores,
             "grade_distribution": distribution,
-            "roundup_summary": roundup_summary
+            "roundup_summary": roundup_summary,
+            "rules": config.get("rules", {})
         }
     except Exception as e:
         import traceback
