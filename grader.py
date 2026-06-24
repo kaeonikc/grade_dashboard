@@ -13,7 +13,7 @@ from rich.prompt import Confirm
 script_path = Path(__file__).resolve()
 sys.path.insert(0, str(script_path.parent))
 
-from src.data_loader import load_config, load_course_data
+from src.data_loader import load_config, load_course_data, sync_attendance_xlsx_to_csv
 from src.calculators import calculate_final_grades
 
 def create_merged_config(metadata: dict, output_path: Path):
@@ -451,6 +451,7 @@ def init_course(course_name: str, term_name: str, course_id: str, input_file: st
         att_path = data_dir / att_filename
         class_cols = calculate_class_dates('', '', '')
         save_attendance_excel(att_path, clean_df, class_cols)
+        sync_attendance_xlsx_to_csv(att_path, att_path.with_suffix(".csv"))
         
         print(f"✅ Successfully created course structure at: {base_dir}")
         print(f"✅ Generated student list at: {csv_path}")
@@ -743,6 +744,7 @@ def update_course(input_file: str = None, config_file: str = None):
                 
                 class_cols = calculate_class_dates(term_start, weekday, exam_sch)
                 save_attendance_excel(att_path, merged_df, class_cols)
+                sync_attendance_xlsx_to_csv(att_path, att_path.with_suffix(".csv"))
             except Exception as e:
                 print(f"⚠️ Warning: Could not update attendance spreadsheet: {e}")
         else:
@@ -755,6 +757,7 @@ def update_course(input_file: str = None, config_file: str = None):
                 att_path = target_dir / "data" / att_filename
                 class_cols = calculate_class_dates('', '', '')
                 save_attendance_excel(att_path, merged_df, class_cols)
+                sync_attendance_xlsx_to_csv(att_path, att_path.with_suffix(".csv"))
             except Exception as e:
                 print(f"⚠️ Warning: Could not create attendance spreadsheet: {e}")
             
@@ -1031,6 +1034,7 @@ def update_course(input_file: str = None, config_file: str = None):
             
             class_cols = calculate_class_dates(term_start, weekday, exam_sch)
             save_attendance_excel(att_path, student_registry, class_cols)
+            sync_attendance_xlsx_to_csv(att_path, att_path.with_suffix(".csv"))
         except Exception as e:
             print(f"⚠️ Warning: Could not update/align attendance spreadsheet: {e}")
             

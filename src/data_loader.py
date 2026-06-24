@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import yaml
 import pandas as pd
 from pathlib import Path
@@ -37,9 +38,42 @@ def parse_config_col(col) -> tuple[str, float | None]:
         col_str = str(col).strip()
         return parse_pts(col_str)
 
+def sync_attendance_xlsx_to_csv(xlsx_path: Path, csv_path: Path):
+    """
+    Reads the attendance Excel file and saves it as a CSV file.
+    Ensures the CSV acts as the database for calculations/TUI.
+    """
+    try:
+        df = pd.read_excel(xlsx_path)
+        df.columns = df.columns.astype(str).str.strip()
+        # Clean Student ID and Name columns
+        if 'Student ID' in df.columns:
+            df['Student ID'] = df['Student ID'].astype(str).str.strip()
+        if 'Name' in df.columns:
+            df['Name'] = df['Name'].astype(str).str.strip()
+            
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(csv_path, index=False)
+        print(f"✅ Synced attendance database CSV at: {csv_path.name}", file=sys.stderr)
+    except Exception as e:
+        print(f"⚠️ Error syncing attendance XLSX to CSV: {e}", file=sys.stderr)
+
+def check_and_sync_attendance(course_path: Path):
+    data_dir = course_path / "data"
+    if not data_dir.exists() or not data_dir.is_dir():
+        return
+    xlsx_files = [f for f in data_dir.iterdir() if f.is_file() and f.name.endswith("attendance.xlsx")]
+    for xlsx_file in xlsx_files:
+        csv_file = xlsx_file.with_suffix(".csv")
+        # Sync if CSV doesn't exist or Excel is newer
+        if not csv_file.exists() or xlsx_file.stat().st_mtime > csv_file.stat().st_mtime:
+            sync_attendance_xlsx_to_csv(xlsx_file, csv_file)
+
 def load_config(course_path: str) -> dict:
     """Reads the <term>_<course_id>_config.yaml under course_info/ for a given course."""
-    info_dir = Path(course_path) / "course_info"
+    path = Path(course_path)
+    check_and_sync_attendance(path)
+    info_dir = path / "course_info"
     if not info_dir.is_dir():
         raise FileNotFoundError(f"course_info directory not found under {course_path}")
         
@@ -60,16 +94,21 @@ def load_config(course_path: str) -> dict:
             data_dir = Path(course_path) / "data"
             attendance_cols = []
             if data_dir.exists() and data_dir.is_dir():
-                att_files = [f for f in data_dir.iterdir() if f.is_file() and f.name.endswith("attendance.xlsx")]
+                att_files = [f for f in data_dir.iterdir() if f.is_file() and (f.name.endswith("attendance.csv") or f.name.endswith("attendance.xlsx"))]
                 if att_files:
                     try:
-                        df_att_headers = pd.read_excel(att_files[0], nrows=0)
+                        # Prefer CSV if it exists
+                        att_file = next((f for f in att_files if f.name.endswith("attendance.csv")), att_files[0])
+                        if att_file.suffix == '.csv':
+                            df_att_headers = pd.read_csv(att_file, nrows=0)
+                        else:
+                            df_att_headers = pd.read_excel(att_file, nrows=0)
                         for col in df_att_headers.columns:
                             col_str = str(col).strip()
                             if col_str not in ['Student ID', 'Name'] and not col_str.lower().startswith('total') and not col_str.startswith('=') and 'unnamed' not in col_str.lower():
                                 attendance_cols.append(col_str)
                     except Exception as e:
-                        print(f"⚠️ Warning: Could not auto-detect attendance headers: {e}")
+                        print(f"⚠️ Warning: Could not auto-detect attendance headers: {e}", file=sys.stderr)
             config['data_mapping']['attendance'] = attendance_cols
 
     # Clean data_mapping columns
@@ -105,6 +144,8 @@ def load_course_data(course_path: str) -> tuple[pd.DataFrame, dict]:
     Extracts max scores if a row has 'Student ID' as 'Full Score', 'Max Score', or 'Max'.
     Assumes all files have a 'Student ID' and 'Name' column to merge on.
     """
+    path = Path(course_path)
+    check_and_sync_attendance(path)
     all_dfs = []
     max_scores = {}
     attendance_cols = set()
@@ -140,12 +181,16 @@ def load_course_data(course_path: str) -> tuple[pd.DataFrame, dict]:
                         df = df[df['Student ID'].astype(str).str.strip() != '']
                         all_dfs.append(df)
                 except Exception as e:
-                    print(f"⚠️ Error reading student info file {file.name}: {e}")
+                    print(f"⚠️ Error reading student info file {file.name}: {e}", file=sys.stderr)
                     
     # 2. Load other CSV/Excel files from data/ directory
     data_dir = Path(course_path) / "data"
     if data_dir.exists() and data_dir.is_dir():
         for file in data_dir.iterdir():
+            # Skip Excel attendance file since we load the synced CSV version instead
+            if file.name.endswith("attendance.xlsx"):
+                continue
+                
             if file.suffix in ['.csv', '.xlsx']:
                 try:
                     if file.suffix == '.csv':
@@ -164,7 +209,7 @@ def load_course_data(course_path: str) -> tuple[pd.DataFrame, dict]:
                         df = df.dropna(subset=['Student ID'])
                         df = df[df['Student ID'].astype(str).str.strip() != '']
                     
-                    is_attendance = file.name.endswith("attendance.xlsx")
+                    is_attendance = "attendance" in file.name
                     
                     # Extract max scores directly from column names, e.g., "final_exam (30pts)"
                     new_columns = {}
@@ -200,7 +245,7 @@ def load_course_data(course_path: str) -> tuple[pd.DataFrame, dict]:
                     
                     all_dfs.append(df)
                 except Exception as e:
-                    print(f"⚠️ Error reading data file {file.name}: {e}")
+                    print(f"⚠️ Error reading data file {file.name}: {e}", file=sys.stderr)
 
     if not all_dfs:
         return pd.DataFrame(), {}

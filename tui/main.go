@@ -139,67 +139,74 @@ type model struct {
 	editingSubScoreCell bool
 
 	// Raw category details tab state
-	activeRawCatIndex int
+	activeRawCatIndex  int
+	rawRightFocused    bool // true = right table focused; false = left categories panel focused
 
 	// Warnings modal
 	showWarningsModal bool
 }
 
-// Styling definitions using LipGloss
+// Styling definitions using LipGloss — Monokai Pro dark theme
 var (
-	accentColor = lipgloss.Color("99")  // Modern Purple
-	cyanColor   = lipgloss.Color("45")  // Vibrant Cyan
-	greenColor  = lipgloss.Color("78")  // Pastel Green
-	yellowColor = lipgloss.Color("214") // Gold/Orange-Yellow
-	redColor    = lipgloss.Color("197") // Crimson Red
-	bgDarkColor = lipgloss.Color("233") // Rich dark charcoal
+	// Monokai Pro palette
+	accentColor   = lipgloss.Color("141") // Monokai Pro Purple  (#af87ff)
+	cyanColor     = lipgloss.Color("81")  // Monokai Pro Cyan    (#5fd7ff)
+	greenColor    = lipgloss.Color("114") // Monokai Pro Green   (#87d787)
+	yellowColor   = lipgloss.Color("221") // Monokai Pro Yellow  (#ffd75f)
+	redColor      = lipgloss.Color("197") // Monokai Pro Red     (#ff005f)
+	orangeColor   = lipgloss.Color("208") // Monokai Pro Orange  (#ff8700)
+	bgDarkColor   = lipgloss.Color("233") // Monokai Pro overlay (#121212)
+	bgColor       = lipgloss.Color("235") // Monokai Pro bg      (#262626)
+	borderColor   = lipgloss.Color("243") // Monokai Pro comment (#767676)
+	highlightColor = lipgloss.Color("237")// Selection row       (#3a3a3a)
+	altRowColor   = lipgloss.Color("234") // Zebra alt row       (#1c1c1c)
 
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("255")).
-			Background(accentColor).
+			Background(redColor). // Monokai Pro title uses red/pink accent
 			Padding(0, 2)
 
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(accentColor).
+			Foreground(cyanColor).
 			Border(lipgloss.NormalBorder(), false, false, true, false).
-			BorderForeground(accentColor).
+			BorderForeground(redColor).
 			Padding(0, 1)
 
 	subHeaderStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("244"))
+			Foreground(borderColor)
 
 	tabStyle = lipgloss.NewStyle().
 			Padding(0, 2).
-			Background(lipgloss.Color("235")).
-			Foreground(lipgloss.Color("245")).
+			Background(bgColor).
+			Foreground(borderColor).
 			Border(lipgloss.RoundedBorder(), true, true, false, true).
 			BorderForeground(lipgloss.Color("238"))
 
 	activeTabStyle = lipgloss.NewStyle().
 			Bold(true).
 			Padding(0, 2).
-			Background(accentColor).
-			Foreground(lipgloss.Color("255")).
+			Background(bgColor).
+			Foreground(cyanColor).
 			Border(lipgloss.RoundedBorder(), true, true, false, true).
-			BorderForeground(accentColor)
+			BorderForeground(cyanColor)
 
 	metricBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("240")).
+			BorderForeground(borderColor).
 			Padding(0, 2).
 			Width(25).
 			Align(lipgloss.Center)
 
 	tableHeaderStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("255")).
-				Background(lipgloss.Color("57")) // Deep Blue/Indigo header
+				Foreground(yellowColor).
+				Background(altRowColor) // Monokai Pro alt row for headers
 
 	selectedCellStyle = lipgloss.NewStyle().
-				Background(lipgloss.Color("208")). // High contrast orange
-				Foreground(lipgloss.Color("255")).
+				Background(cyanColor). // Monokai Pro Cyan active highlight
+				Foreground(bgColor).
 				Bold(true)
 
 	editCellHighlightStyle = lipgloss.NewStyle().
@@ -211,7 +218,7 @@ var (
 			Padding(0, 1)
 
 	footerStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("243")).
+			Foreground(borderColor).
 			Border(lipgloss.NormalBorder(), true, false, false, false).
 			BorderForeground(lipgloss.Color("238"))
 
@@ -229,11 +236,12 @@ func initialModel() model {
 	ti.Width = 10
 
 	return model{
-		state:       stateCourseSelect,
-		courseIndex: 0,
-		activeTab:   tabSummary,
-		useWeighted: true,
-		editInput:   ti,
+		state:           stateCourseSelect,
+		courseIndex:     0,
+		activeTab:       tabSummary,
+		useWeighted:     true,
+		editInput:       ti,
+		rawRightFocused: false, // start with left categories panel focused
 	}
 }
 
@@ -294,7 +302,7 @@ func loadCoursesCmd() tea.Cmd {
 		}
 
 		if resp.Status == "error" {
-			return fmt.Errorf(resp.Message)
+			return fmt.Errorf("%s", resp.Message)
 		}
 
 		return resp
@@ -322,7 +330,7 @@ func loadCourseDataCmd(path string, useWeighted bool) tea.Cmd {
 		}
 
 		if data.Status == "error" {
-			return fmt.Errorf(data.Message)
+			return fmt.Errorf("%s", data.Message)
 		}
 
 		return &data
@@ -346,7 +354,7 @@ func updateScoreCmd(coursePath, studentID, colName, value string) tea.Cmd {
 		}
 
 		if status, ok := res["status"].(string); ok && status == "error" {
-			return fmt.Errorf(res["message"].(string))
+			return fmt.Errorf("%s", res["message"].(string))
 		}
 
 		return res["message"].(string)
@@ -373,7 +381,7 @@ func updateConfigCmd(coursePath string, weights map[string]float64, boundaries m
 		}
 
 		if status, ok := res["status"].(string); ok && status == "error" {
-			return fmt.Errorf(res["message"].(string))
+			return fmt.Errorf("%s", res["message"].(string))
 		}
 
 		return res["message"].(string)
@@ -401,7 +409,7 @@ func exportReportsCmd(coursePath string, useWeighted bool) tea.Cmd {
 		}
 
 		if status, ok := res["status"].(string); ok && status == "error" {
-			return fmt.Errorf(res["message"].(string))
+			return fmt.Errorf("%s", res["message"].(string))
 		}
 
 		return res["message"].(string)
@@ -650,6 +658,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursorCol = 0
 				m.scrollRowOffset = 0
 				m.scrollColOffset = 0
+				m.rawRightFocused = false
 				return m, nil
 			case "shift+tab":
 				m.activeTab = (m.activeTab - 1 + 4) % 4
@@ -657,6 +666,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursorCol = 0
 				m.scrollRowOffset = 0
 				m.scrollColOffset = 0
+				m.rawRightFocused = false
 				return m, nil
 			case "w":
 				m.useWeighted = !m.useWeighted
@@ -703,7 +713,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "up":
-				if m.activeTab == tabSummary || m.activeTab == tabRawDetails {
+				if m.activeTab == tabRawDetails && !m.rawRightFocused {
+					// Left panel focused: navigate categories
+					cats := m.getRawCategories()
+					if m.activeRawCatIndex > 0 {
+						m.activeRawCatIndex--
+						m.cursorCol = 0
+						m.cursorRow = 0
+						m.scrollColOffset = 0
+						m.scrollRowOffset = 0
+						_ = cats
+					}
+				} else if m.activeTab == tabSummary || (m.activeTab == tabRawDetails && m.rawRightFocused) {
 					if m.cursorRow > 0 {
 						m.cursorRow--
 						m.scrollTableVertical()
@@ -711,7 +732,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "down":
-				if m.activeTab == tabSummary || m.activeTab == tabRawDetails {
+				if m.activeTab == tabRawDetails && !m.rawRightFocused {
+					// Left panel focused: navigate categories
+					cats := m.getRawCategories()
+					if m.activeRawCatIndex < len(cats)-1 {
+						m.activeRawCatIndex++
+						m.cursorCol = 0
+						m.cursorRow = 0
+						m.scrollColOffset = 0
+						m.scrollRowOffset = 0
+					}
+				} else if m.activeTab == tabSummary || (m.activeTab == tabRawDetails && m.rawRightFocused) {
 					maxRows := 0
 					if m.courseData != nil {
 						if m.activeTab == tabSummary {
@@ -727,7 +758,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "left":
-				if m.activeTab == tabSummary || m.activeTab == tabRawDetails {
+				if m.activeTab == tabRawDetails {
+					if m.rawRightFocused {
+						if m.cursorCol > 0 {
+							m.cursorCol--
+							m.scrollTableHorizontal()
+						} else {
+							// Leftmost col: move focus back to left panel
+							m.rawRightFocused = false
+						}
+					}
+				} else if m.activeTab == tabSummary {
 					if m.cursorCol > 0 {
 						m.cursorCol--
 						m.scrollTableHorizontal()
@@ -735,12 +776,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "right":
-				if m.activeTab == tabSummary || m.activeTab == tabRawDetails {
-					maxCols := 0
-					if m.courseData != nil {
-						if m.activeTab == tabSummary {
-							maxCols = len(m.courseData.SummaryColumns)
-						} else {
+				if m.activeTab == tabRawDetails {
+					if !m.rawRightFocused {
+						// Enter right panel from left panel
+						m.rawRightFocused = true
+						m.cursorCol = 0
+					} else {
+						maxCols := 0
+						if m.courseData != nil {
 							cats := m.getRawCategories()
 							if len(cats) > 0 {
 								if m.activeRawCatIndex >= len(cats) {
@@ -751,6 +794,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								maxCols = 2 + len(subCols)
 							}
 						}
+						if m.cursorCol < maxCols-1 {
+							m.cursorCol++
+							m.scrollTableHorizontal()
+						}
+					}
+				} else if m.activeTab == tabSummary {
+					maxCols := 0
+					if m.courseData != nil {
+						maxCols = len(m.courseData.SummaryColumns)
 					}
 					if m.cursorCol < maxCols-1 {
 						m.cursorCol++
@@ -891,6 +943,9 @@ func (m *model) openEditBoundaries() {
 // Table viewport scrolling adjustments
 func (m *model) scrollTableVertical() {
 	tableHeight := m.height - 13 // Approximate space left for table rows
+	if m.activeTab == tabRawDetails {
+		tableHeight = m.height - 15
+	}
 	if tableHeight < 5 {
 		tableHeight = 5
 	}
@@ -909,6 +964,7 @@ func (m *model) scrollTableHorizontal() {
 
 	var cols []string
 	var rows []map[string]interface{}
+	activeCat := ""
 	if m.activeTab == tabSummary {
 		cols = m.courseData.SummaryColumns
 		rows = m.courseData.StudentGrades
@@ -920,7 +976,7 @@ func (m *model) scrollTableHorizontal() {
 		if m.activeRawCatIndex >= len(cats) {
 			m.activeRawCatIndex = 0
 		}
-		activeCat := cats[m.activeRawCatIndex]
+		activeCat = cats[m.activeRawCatIndex]
 		subCols := m.courseData.DataMapping[activeCat]
 		cols = make([]string, 0, 2+len(subCols))
 		cols = append(cols, "Student ID", "Name")
@@ -936,19 +992,31 @@ func (m *model) scrollTableHorizontal() {
 
 	// Calculate column widths based on content
 	colWidths := make(map[string]int)
-	for _, col := range cols {
-		width := thaiVisualWidth(col)
+	for i, col := range cols {
+		colNameForWidth := col
+		if m.activeTab == tabRawDetails && activeCat == "attendance" && i >= 2 {
+			colNameForWidth = fmt.Sprintf("a%d", i-1)
+		}
+		width := thaiVisualWidth(colNameForWidth)
+
 		if col == "Name" {
 			width = 18
 		} else if col == "Student ID" {
 			width = 12
 		} else {
-			if width < 8 {
-				width = 8
+			minW := 8
+			if m.activeTab == tabRawDetails && activeCat == "attendance" {
+				minW = 5
+			}
+			if width < minW {
+				width = minW
 			}
 		}
 		for _, row := range rows {
 			cellVal := fmt.Sprintf("%v", row[col])
+			if cellVal == "<nil>" || cellVal == "nan" {
+				cellVal = ""
+			}
 			cellW := thaiVisualWidth(cellVal)
 			if cellW > width {
 				width = cellW
@@ -958,6 +1026,9 @@ func (m *model) scrollTableHorizontal() {
 	}
 
 	tableWidth := m.width - 4
+	if m.activeTab == tabRawDetails {
+		tableWidth = m.width - 28 - 6 // Sidebar width is 28 + space is 2 + border/padding adjustments
+	}
 	if tableWidth < 40 {
 		tableWidth = 40
 	}
@@ -1683,6 +1754,45 @@ func (m model) getRawCategories() []string {
 	return cats
 }
 
+func (m model) getStudentSummaryRow(studentID string) map[string]interface{} {
+	if m.courseData == nil {
+		return nil
+	}
+	for _, row := range m.courseData.StudentGrades {
+		if fmt.Sprintf("%v", row["Student ID"]) == studentID {
+			return row
+		}
+	}
+	return nil
+}
+
+func getCategorySummaryValue(summaryRow map[string]interface{}, activeCat string) string {
+	if summaryRow == nil {
+		return "N/A"
+	}
+	key := activeCat + "_pct"
+	val, ok := summaryRow[key]
+	if !ok {
+		key = strings.ToLower(activeCat) + "_pct"
+		val, ok = summaryRow[key]
+	}
+	if !ok {
+		return "N/A"
+	}
+	switch v := val.(type) {
+	case float64:
+		return fmt.Sprintf("%.1f%%", v)
+	case float32:
+		return fmt.Sprintf("%.1f%%", v)
+	case int:
+		return fmt.Sprintf("%d%%", v)
+	case int64:
+		return fmt.Sprintf("%d%%", v)
+	default:
+		return fmt.Sprintf("%v", val)
+	}
+}
+
 func (m model) viewRawCategoryTab() string {
 	if m.courseData == nil {
 		return ""
@@ -1707,64 +1817,58 @@ func (m model) viewRawCategoryTab() string {
 		return "  No raw score data found."
 	}
 
-	var sb strings.Builder
-
-	// Render Category Sub-Menu Selector
-	sb.WriteString("  " + lipgloss.NewStyle().Bold(true).Foreground(accentColor).Render("Category:") + " ")
-	for i, cat := range cats {
-		catLabel := strings.Title(cat)
-		if i == m.activeRawCatIndex {
-			sb.WriteString(lipgloss.NewStyle().Bold(true).Underline(true).Foreground(cyanColor).Render("["+catLabel+"]") + "  ")
-		} else {
-			sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render(catLabel) + "  ")
-		}
+	// Layout dimensions
+	leftPanelWidth := 26
+	tableWidth := m.width - leftPanelWidth - 6
+	if tableWidth < 40 {
+		tableWidth = 40
 	}
-	sb.WriteString("\n\n")
-
-	// Calculate visible table dimensions
-	tableWidth := m.width - 4
-	tableHeight := m.height - 15 // Leave slightly more space for the sub-menu selector
+	tableHeight := m.height - 14 // leave space for header, tabs, category bar, footer
 	if tableHeight < 5 {
 		tableHeight = 5
 	}
 
-	// Setup column widths
+	// Column widths
 	colWidths := make(map[string]int)
-	for _, col := range cols {
-		width := thaiVisualWidth(col)
+	for i, col := range cols {
+		colNameForWidth := col
+		if activeCat == "attendance" && i >= 2 {
+			colNameForWidth = fmt.Sprintf("a%d", i-1)
+		}
+		width := thaiVisualWidth(colNameForWidth)
 		if col == "Name" {
 			width = 18
 		} else if col == "Student ID" {
 			width = 12
 		} else {
-			if width < 8 {
-				width = 8
+			minW := 8
+			if activeCat == "attendance" {
+				minW = 4
+			}
+			if width < minW {
+				width = minW
 			}
 		}
 		for _, row := range rows {
 			cellVal := fmt.Sprintf("%v", row[col])
-			cellW := thaiVisualWidth(cellVal)
-			if cellW > width {
-				width = cellW
+			if cellVal == "<nil>" || cellVal == "nan" {
+				cellVal = ""
+			}
+			if cw := thaiVisualWidth(cellVal); cw > width {
+				width = cw
 			}
 		}
-		colWidths[col] = width + 2 // include cell padding
+		colWidths[col] = width + 2
 	}
 
-	// Figure out visible columns
 	var visibleCols []string
 	accumWidth := 0
-
-	// Fixed columns: ID and Name
 	for _, col := range cols {
-		colW := colWidths[col]
 		if col == "Student ID" || col == "Name" {
 			visibleCols = append(visibleCols, col)
-			accumWidth += colW
+			accumWidth += colWidths[col]
 		}
 	}
-
-	// Dynamic columns
 	for i, col := range cols {
 		if col == "Student ID" || col == "Name" {
 			continue
@@ -1778,36 +1882,176 @@ func (m model) viewRawCategoryTab() string {
 		}
 	}
 
-	// Render table header
+	// Active student info
+	var studentID, studentName string
+	var studentRow map[string]interface{}
+	if len(rows) > 0 && m.cursorRow < len(rows) {
+		studentRow = rows[m.cursorRow]
+		studentID = fmt.Sprintf("%v", studentRow["Student ID"])
+		studentName = fmt.Sprintf("%v", studentRow["Name"])
+	}
+	summaryRow := m.getStudentSummaryRow(studentID)
+	_ = studentName
+
+	// Resolve current cell
+	var colName, aliasCol, valStr string
+	if m.rawRightFocused && m.cursorCol < len(cols) {
+		colName = cols[m.cursorCol]
+		aliasCol = formatHeaderName(colName)
+		if activeCat == "attendance" && m.cursorCol >= 2 {
+			aliasCol = fmt.Sprintf("a%d", m.cursorCol-1)
+		}
+		valStr = fmt.Sprintf("%v", studentRow[colName])
+		if valStr == "<nil>" || valStr == "nan" {
+			valStr = "-"
+		}
+	}
+
+	// Category color (Rust TUI parity)
+	catColor := func(cat string) lipgloss.Color {
+		l := strings.ToLower(cat)
+		switch {
+		case strings.Contains(l, "attendance") || strings.Contains(l, "att"):
+			return greenColor
+		case strings.Contains(l, "homework") || strings.Contains(l, "hw"):
+			return cyanColor
+		case strings.Contains(l, "midterm") || strings.Contains(l, "mid"):
+			return yellowColor
+		case strings.Contains(l, "final"):
+			return lipgloss.Color("33")
+		default:
+			return accentColor
+		}
+	}
+
+	// LEFT PANEL — Categories list
+	lowerInfoHeight := 5
+	upperListHeight := tableHeight - lowerInfoHeight - 2
+	if upperListHeight < 3 {
+		upperListHeight = 3
+	}
+
+	var catListSb strings.Builder
+	for i, cat := range cats {
+		label := " " + strings.Title(cat)
+		if i == m.activeRawCatIndex {
+			if !m.rawRightFocused {
+				catListSb.WriteString(
+					lipgloss.NewStyle().Bold(true).
+						Foreground(bgColor).
+						Background(cyanColor).
+						Width(leftPanelWidth - 2).
+						Render(label) + "\n",
+				)
+			} else {
+				catListSb.WriteString(
+					lipgloss.NewStyle().Bold(true).
+						Foreground(cyanColor).
+						Background(highlightColor).
+						Width(leftPanelWidth - 2).
+						Render(label) + "\n",
+				)
+			}
+		} else {
+			catListSb.WriteString(
+				lipgloss.NewStyle().
+					Foreground(borderColor).
+					Width(leftPanelWidth - 2).
+					Render(label) + "\n",
+			)
+		}
+	}
+
+	leftBorderColor := cyanColor
+	if m.rawRightFocused {
+		leftBorderColor = borderColor
+	}
+
+	upperPanel := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(leftBorderColor).
+		Padding(0, 1).
+		Width(leftPanelWidth).
+		Height(upperListHeight).
+		Render(catListSb.String())
+
+	// LEFT PANEL — Attendance info sub-panel
+	var infoSb strings.Builder
+	infoSb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(cyanColor).Render("📅 ATT. CELL") + "\n")
+	if m.rawRightFocused && activeCat == "attendance" && m.cursorCol >= 2 {
+		infoSb.WriteString(
+			lipgloss.NewStyle().Foreground(borderColor).Render("Date: ") +
+				lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252")).Render(colName) + "\n")
+		statusDisplay := valStr
+		if statusDisplay == "-" || statusDisplay == "" {
+			statusDisplay = "\xe2\x80\x94"
+		}
+		statusColor := greenColor
+		switch statusDisplay {
+		case "A":
+			statusColor = redColor
+		case "L":
+			statusColor = yellowColor
+		case "EA":
+			statusColor = cyanColor
+		}
+		infoSb.WriteString(
+			lipgloss.NewStyle().Foreground(borderColor).Render("Code: ") +
+				lipgloss.NewStyle().Bold(true).Foreground(statusColor).Render(statusDisplay) + "\n")
+	} else {
+		infoSb.WriteString(
+			lipgloss.NewStyle().Foreground(borderColor).Italic(true).
+				Render("Move to att. cell\nfor date & code") + "\n")
+	}
+
+	lowerPanel := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(leftBorderColor).
+		Padding(0, 1).
+		Width(leftPanelWidth).
+		Height(lowerInfoHeight).
+		Render(infoSb.String())
+
+	leftColumn := lipgloss.JoinVertical(lipgloss.Left, upperPanel, lowerPanel)
+
+	// RIGHT PANEL — Data table
+	var tableSb strings.Builder
+
 	var headerCells []string
 	for _, col := range visibleCols {
 		w := colWidths[col]
-		headerCells = append(headerCells, tableHeaderStyle.Width(w).Render(padRight(formatHeaderName(col), w)))
+		origIdx := -1
+		for i, c := range cols {
+			if c == col {
+				origIdx = i
+				break
+			}
+		}
+		displayName := formatHeaderName(col)
+		if activeCat == "attendance" && origIdx >= 2 {
+			displayName = fmt.Sprintf("a%d", origIdx-1)
+		}
+		headerCells = append(headerCells, tableHeaderStyle.Width(w).Render(padRight(displayName, w)))
 	}
-	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, headerCells...) + "\n")
+	tableSb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, headerCells...) + "\n")
 
-	// Render table rows
 	endRow := m.scrollRowOffset + tableHeight
 	if endRow > len(rows) {
 		endRow = len(rows)
 	}
-
 	for r := m.scrollRowOffset; r < endRow; r++ {
 		var rowCells []string
-		studentRow := rows[r]
-		isSelectedRow := (r == m.cursorRow)
+		sRow := rows[r]
+		isSelectedRow := (r == m.cursorRow) && m.rawRightFocused
 
 		for _, col := range visibleCols {
 			w := colWidths[col]
-			valStr := fmt.Sprintf("%v", studentRow[col])
-			if valStr == "<nil>" || valStr == "nan" {
-				valStr = ""
+			v := fmt.Sprintf("%v", sRow[col])
+			if v == "<nil>" || v == "nan" {
+				v = ""
 			}
-
-			cellStyleToUse := cellStyle.Copy()
-			isSelectedCell := isSelectedRow && (col == cols[m.cursorCol])
-
-			cellVal := padRight(valStr, w)
+			isSelectedCell := isSelectedRow && m.rawRightFocused && (col == cols[m.cursorCol])
+			cellVal := padRight(v, w)
 			if isSelectedCell {
 				if m.editing {
 					rowCells = append(rowCells, editCellHighlightStyle.Width(w).Render(cellVal))
@@ -1817,22 +2061,80 @@ func (m model) viewRawCategoryTab() string {
 			} else {
 				var bg lipgloss.Color
 				if isSelectedRow {
-					bg = lipgloss.Color("238")
+					bg = highlightColor
 				} else if r%2 == 0 {
-					bg = lipgloss.Color("234")
+					bg = altRowColor
 				} else {
-					bg = lipgloss.Color("235")
+					bg = bgColor
 				}
-				rowCells = append(rowCells, cellStyleToUse.Background(bg).Width(w).Render(cellVal))
+				rowCells = append(rowCells, cellStyle.Copy().Background(bg).Width(w).Render(cellVal))
 			}
 		}
-		sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, rowCells...) + "\n")
+		tableSb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, rowCells...) + "\n")
 	}
 
 	if m.scrollColOffset > 0 || len(visibleCols) < len(cols) {
-		indicators := fmt.Sprintf(" ← Horizontal scroll active: showing %d/%d columns. Use Left/Right keys. → ", len(visibleCols), len(cols))
-		sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(indicators) + "\n")
+		indicators := fmt.Sprintf(" \xe2\x86\x90 scroll: %d/%d cols \xe2\x86\x92 ", len(visibleCols), len(cols))
+		tableSb.WriteString(lipgloss.NewStyle().Foreground(borderColor).Render(indicators) + "\n")
 	}
 
+	rightBorderColor := borderColor
+	if m.rawRightFocused {
+		rightBorderColor = catColor(activeCat)
+	}
+
+	tableBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(rightBorderColor).
+		Padding(0, 1).
+		Width(tableWidth + 2).
+		Height(tableHeight + 2).
+		Render(tableSb.String())
+
+	// Status / hint bar
+	var detailLine string
+	if m.rawRightFocused && colName != "" {
+		detailLine = "  " +
+			lipgloss.NewStyle().Foreground(borderColor).Render("Col: ") +
+			lipgloss.NewStyle().Bold(true).Foreground(cyanColor).Render(aliasCol) +
+			"  " +
+			lipgloss.NewStyle().Foreground(borderColor).Render("Student: ") +
+			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252")).Render(studentID) +
+			"  " +
+			lipgloss.NewStyle().Foreground(borderColor).Render("Cat total: ") +
+			lipgloss.NewStyle().Bold(true).Foreground(greenColor).Render(getCategorySummaryValue(summaryRow, activeCat)) +
+			"\n"
+	} else if !m.rawRightFocused {
+		detailLine = "  " +
+			lipgloss.NewStyle().Foreground(borderColor).Italic(true).
+				Render(fmt.Sprintf("\xe2\x86\x91/\xe2\x86\x93: select category  \xc2\xb7  \xe2\x86\x92/Enter: navigate table  \xc2\xb7  [/]: quick switch  \xc2\xb7  Selected: %s", strings.Title(activeCat))) +
+			"\n"
+	}
+
+	// ── Category title bar (spans full width above both panels) ─────────────────
+	var catBarSb strings.Builder
+	catBarSb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(cyanColor).Render("Category:") + " ")
+	for i, cat := range cats {
+		catLabel := strings.Title(cat)
+		if i == m.activeRawCatIndex {
+			catBarSb.WriteString(
+				lipgloss.NewStyle().Bold(true).Underline(true).Foreground(cyanColor).Render("["+catLabel+"]") + "  ",
+			)
+		} else {
+			catBarSb.WriteString(
+				lipgloss.NewStyle().Foreground(borderColor).Render(catLabel) + "  ",
+			)
+		}
+	}
+
+	// Assemble
+	var sb strings.Builder
+	sb.WriteString("  " + catBarSb.String() + "\n\n")
+	panelsJoined := lipgloss.JoinHorizontal(lipgloss.Top, leftColumn, "  ", tableBox)
+	sb.WriteString("  " + panelsJoined + "\n")
+	if detailLine != "" {
+		sb.WriteString(detailLine)
+	}
 	return sb.String()
 }
+

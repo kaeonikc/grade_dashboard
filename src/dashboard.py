@@ -261,8 +261,13 @@ def update_database_totals(course_path: Path, final_df: pd.DataFrame, data_mappi
     if not data_dir.is_dir():
         return
     for category, columns in data_mapping.items():
-        csv_path = data_dir / f"{category}.csv"
-        if csv_path.exists():
+        if category == 'attendance':
+            csv_files = [f for f in data_dir.iterdir() if f.is_file() and f.name.endswith("attendance.csv")]
+            csv_path = csv_files[0] if csv_files else None
+        else:
+            csv_path = data_dir / f"{category}.csv"
+            
+        if csv_path and csv_path.exists():
             try:
                 df = pd.read_csv(csv_path)
                 df.columns = df.columns.astype(str).str.strip()

@@ -75,6 +75,13 @@ pub struct App {
     pub raw_right_focused: bool,
     pub raw_selected_category: Option<String>,
     pub raw_selected_student: Option<usize>,
+
+    // Attendance picker state
+    pub editing_attendance: bool,
+    pub attendance_index: usize,
+
+    // Reload behaviour
+    pub preserve_nav_on_reload: bool,
 }
 
 impl App {
@@ -114,6 +121,9 @@ impl App {
             raw_right_focused: false,
             raw_selected_category: None,
             raw_selected_student: None,
+            editing_attendance: false,
+            attendance_index: 0,
+            preserve_nav_on_reload: false,
         }
     }
 
@@ -193,6 +203,29 @@ impl App {
                 let _ = tx.send(event).await;
             });
         }
+    }
+
+    pub fn save_attendance_score(&mut self) {
+        let options = ["P", "L", "EA", "A"];
+        let val = options[self.attendance_index].to_string();
+
+        if val == self.editing_original_value {
+            return;
+        }
+
+        self.loading = true;
+        self.loading_msg = format!("Saving attendance for {}: {} = {}...", self.editing_student_id, self.editing_column, val);
+
+        let path = self.selected_course_path.clone();
+        let student_id = self.editing_student_id.clone();
+        let col = self.editing_column.clone();
+        let tx = self.tx.clone();
+
+        tokio::spawn(async move {
+            let res = crate::bridge::update_score(&path, &student_id, &col, &val).await;
+            let event = AppEvent::ScoreUpdated(res.map(|_| ()));
+            let _ = tx.send(event).await;
+        });
     }
 
     pub fn save_config(&mut self) {
@@ -291,12 +324,26 @@ impl App {
                 return;
             }
 
-            let col_name = {
-                let cat = self.raw_selected_category.as_deref().unwrap();
-                let sub_cols = data.data_mapping.get(cat).cloned().unwrap_or_default();
+            let cat = self.raw_selected_category.as_deref().unwrap().to_string();
+            let (col_name, raw_val) = {
+                let sub_cols = data.data_mapping.get(&cat).cloned().unwrap_or_default();
                 let sub_idx = self.cursor_col - 2;
                 if sub_idx >= sub_cols.len() { return; }
-                sub_cols[sub_idx].clone()
+                let cn = sub_cols[sub_idx].clone();
+                let student_row = &data.raw_scores[self.cursor_row];
+                let rv = match student_row.get(&cn) {
+                    Some(v) => {
+                        if v.is_f64() {
+                            format!("{}", v.as_f64().unwrap())
+                        } else if v.is_i64() {
+                            format!("{}", v.as_i64().unwrap())
+                        } else {
+                            v.as_str().unwrap_or("").to_string()
+                        }
+                    }
+                    None => "".to_string(),
+                };
+                (cn, rv)
             };
 
             let student_row = &data.raw_scores[self.cursor_row];
@@ -304,40 +351,35 @@ impl App {
                 Some(v) => v.as_str().unwrap_or("").to_string(),
                 None => return,
             };
-            let col_name = &col_name;
-            let raw_val = match student_row.get(col_name) {
-                Some(v) => {
-                    if v.is_f64() {
-                        format!("{}", v.as_f64().unwrap())
-                    } else if v.is_i64() {
-                        format!("{}", v.as_i64().unwrap())
-                    } else {
-                        v.as_str().unwrap_or("").to_string()
-                    }
-                }
-                None => "".to_string(),
-            };
 
-            self.editing = true;
             self.editing_student_id = student_id;
             self.editing_column = col_name.clone();
             self.editing_original_value = raw_val.clone();
-            
-            let mut ta = tui_textarea::TextArea::new(vec![raw_val]);
-            ta.move_cursor(tui_textarea::CursorMove::End);
-            ta.set_cursor_line_style(ratatui::style::Style::default().bg(self.theme.highlight));
-            ta.set_style(
-                ratatui::style::Style::default()
-                    .fg(self.theme.info)
-                    .bg(self.theme.panel_bg)
-            );
-            ta.set_block(
-                ratatui::widgets::Block::default()
-                    .borders(ratatui::widgets::Borders::ALL)
-                    .border_style(ratatui::style::Style::default().fg(self.theme.border_focus))
-                    .title(format!(" Edit: {} for ID {} ", col_name, self.editing_student_id))
-            );
-            self.edit_textarea = Some(ta);
+
+            let is_attendance = cat.to_lowercase().contains("attendance");
+            if is_attendance {
+                let options = ["P", "L", "EA", "A"];
+                let current_idx = options.iter().position(|&o| o == raw_val.as_str()).unwrap_or(0);
+                self.attendance_index = current_idx;
+                self.editing_attendance = true;
+            } else {
+                self.editing = true;
+                let mut ta = tui_textarea::TextArea::new(vec![raw_val]);
+                ta.move_cursor(tui_textarea::CursorMove::End);
+                ta.set_cursor_line_style(ratatui::style::Style::default().bg(self.theme.highlight));
+                ta.set_style(
+                    ratatui::style::Style::default()
+                        .fg(self.theme.info)
+                        .bg(self.theme.panel_bg)
+                );
+                ta.set_block(
+                    ratatui::widgets::Block::default()
+                        .borders(ratatui::widgets::Borders::ALL)
+                        .border_style(ratatui::style::Style::default().fg(self.theme.border_focus))
+                        .title(format!(" Edit: {} for ID {} ", col_name, self.editing_student_id))
+                );
+                self.edit_textarea = Some(ta);
+            }
         }
     }
 
@@ -546,11 +588,36 @@ impl App {
 
     fn adjust_scroll_col(&mut self) {
         if self.active_tab == 1 {
-            let visible_scrollable_cols = 5;
             if self.cursor_col < 2 {
                 self.scroll_col_offset = 2;
                 return;
             }
+            // Total column is always rendered last — navigating to it never needs a scroll
+            let sub_col_count = self.raw_selected_category.as_ref()
+                .and_then(|cat| self.course_data.as_ref().and_then(|d| d.data_mapping.get(cat)))
+                .map(|v| v.len())
+                .unwrap_or(0);
+            if self.cursor_col == sub_col_count + 2 {
+                return;
+            }
+
+            let is_attendance = self.raw_selected_category.as_deref()
+                .map(|c| c.to_lowercase().contains("attendance") || c.to_lowercase().contains("att"))
+                .unwrap_or(false);
+            // popup = full-width; category view = terminal minus left panel (33) + 2 borders
+            let right_inner = if self.raw_selected_student.is_some() {
+                (self.width as usize).saturating_sub(2)
+            } else {
+                (self.width as usize).saturating_sub(35)
+            };
+            // Frozen cols: StudentID (12) + Name (≈32) + 3 spacing = 47
+            let scrollable_width = right_inner.saturating_sub(47);
+            // col width (attendance uses column_spacing=0, so no extra spacing)
+            let col_width: usize = if is_attendance {
+                3 + format!("{}", sub_col_count).len() // matches sub_col_width = max_digits + 3
+            } else { 13 };
+            let visible_scrollable_cols = (scrollable_width / col_width).max(1);
+
             if self.cursor_col < self.scroll_col_offset {
                 self.scroll_col_offset = self.cursor_col;
             } else if self.cursor_col >= self.scroll_col_offset + visible_scrollable_cols {
@@ -559,7 +626,7 @@ impl App {
             return;
         }
 
-        let visible_cols = 6; 
+        let visible_cols = 6;
         if self.cursor_col < self.scroll_col_offset {
             self.scroll_col_offset = self.cursor_col;
         } else if self.cursor_col >= self.scroll_col_offset + visible_cols {
@@ -599,15 +666,27 @@ impl App {
                     Ok(data) => {
                         self.course_data = Some(data);
                         self.state = AppState::Dashboard;
-                        self.cursor_row = 0;
-                        self.cursor_col = 0;
-                        self.scroll_row_offset = 0;
-                        self.scroll_col_offset = 0;
-                        self.raw_selected_category = None;
-                        self.raw_selected_student = None;
-                        self.raw_category_index = 0;
-                        self.raw_right_focused = false;
-                        self.sync_raw_category();
+                        if self.preserve_nav_on_reload {
+                            self.preserve_nav_on_reload = false;
+                            // Clamp cursor_row if student count shrank
+                            let max_rows = self.course_data.as_ref()
+                                .map(|d| d.raw_scores.len())
+                                .unwrap_or(0);
+                            if max_rows > 0 && self.cursor_row >= max_rows {
+                                self.cursor_row = max_rows - 1;
+                            }
+                            self.sync_raw_category();
+                        } else {
+                            self.cursor_row = 0;
+                            self.cursor_col = 0;
+                            self.scroll_row_offset = 0;
+                            self.scroll_col_offset = 0;
+                            self.raw_selected_category = None;
+                            self.raw_selected_student = None;
+                            self.raw_category_index = 0;
+                            self.raw_right_focused = false;
+                            self.sync_raw_category();
+                        }
                     }
                     Err(e) => {
                         self.error = Some(e);
@@ -620,7 +699,7 @@ impl App {
                     Ok(_) => {
                         self.info_msg = Some("Score successfully saved and database updated!".to_string());
                         self.info_msg_ticks = 0;
-                        // Reload data to recalculate
+                        self.preserve_nav_on_reload = true;
                         self.load_course_data();
                     }
                     Err(e) => {
@@ -634,7 +713,7 @@ impl App {
                     Ok(_) => {
                         self.info_msg = Some("Configuration successfully updated!".to_string());
                         self.info_msg_ticks = 0;
-                        // Reload data to recalculate
+                        self.preserve_nav_on_reload = true;
                         self.load_course_data();
                     }
                     Err(e) => {
@@ -670,6 +749,28 @@ impl App {
                                 ta.input(key);
                             }
                         }
+                    }
+                    return;
+                }
+
+                if self.editing_attendance {
+                    match key.code {
+                        crossterm::event::KeyCode::Esc => {
+                            self.editing_attendance = false;
+                        }
+                        crossterm::event::KeyCode::Enter => {
+                            self.save_attendance_score();
+                            self.editing_attendance = false;
+                        }
+                        crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k') => {
+                            self.attendance_index = self.attendance_index.saturating_sub(1);
+                        }
+                        crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j') => {
+                            if self.attendance_index < 3 {
+                                self.attendance_index += 1;
+                            }
+                        }
+                        _ => {}
                     }
                     return;
                 }
@@ -804,10 +905,15 @@ impl App {
                                     // L2 student popup → edit cell
                                     self.start_editing_cell();
                                 } else if self.raw_right_focused {
-                                    // Right panel → open student popup
-                                    self.raw_selected_student = Some(self.cursor_row);
-                                    self.cursor_col = 2;
-                                    self.scroll_col_offset = 2;
+                                    // Right panel: data cell → edit/picker directly; ID/Name/Total → no-op
+                                    let sub_col_count = self.raw_selected_category.as_ref()
+                                        .and_then(|cat| self.course_data.as_ref().and_then(|d| d.data_mapping.get(cat)))
+                                        .map(|v| v.len())
+                                        .unwrap_or(0);
+                                    let on_data_cell = self.cursor_col >= 2 && self.cursor_col < sub_col_count + 2;
+                                    if on_data_cell {
+                                        self.start_editing_cell();
+                                    }
                                 } else {
                                     // Left panel → focus right panel
                                     self.raw_right_focused = true;
