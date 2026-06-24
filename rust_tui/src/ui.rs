@@ -442,19 +442,179 @@ fn draw_raw_left_panel(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(list, area);
 }
 
+fn draw_student_info_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme;
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border))
+        .title(" Student ")
+        .title_style(Style::default().fg(theme.info).bold());
+
+    if !app.raw_right_focused {
+        let placeholder = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  ─ no selection ─",
+                Style::default().fg(theme.inactive_tab),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  → to focus table",
+                Style::default().fg(theme.inactive_tab),
+            )),
+        ])
+        .block(block);
+        f.render_widget(placeholder, area);
+        return;
+    }
+
+    let data = match &app.course_data {
+        Some(d) => d,
+        None => { f.render_widget(block, area); return; }
+    };
+
+    if app.cursor_row >= data.raw_scores.len() {
+        f.render_widget(block, area);
+        return;
+    }
+
+    let record = &data.raw_scores[app.cursor_row];
+    let sid = record.get("Student ID").and_then(|v| v.as_str()).unwrap_or("—");
+    let name_raw = record.get("Name").and_then(|v| v.as_str()).unwrap_or("—");
+
+    // Look up Final Score and Grade from student_grades
+    let (final_score_str, grade_str) = data.student_grades.iter()
+        .find(|r| r.get("Student ID").and_then(|v| v.as_str()) == Some(sid))
+        .map(|r| {
+            let fs = r.get("Final Score")
+                .and_then(|v| v.as_f64())
+                .map(|n| format!("{:.1}", n))
+                .unwrap_or_else(|| "—".into());
+            let g = r.get("Grade")
+                .and_then(|v| v.as_str())
+                .unwrap_or("—")
+                .to_string();
+            (fs, g)
+        })
+        .unwrap_or_else(|| ("—".into(), "—".into()));
+
+    let grade_color = match grade_str.trim() {
+        g if g.starts_with("A") => theme.grade_a,
+        g if g.starts_with("B") => theme.grade_b,
+        g if g.starts_with("C") => theme.grade_c,
+        g if g.starts_with("D") => theme.grade_d,
+        _ => theme.grade_f,
+    };
+
+    // Build current-cell line
+    let cat = app.raw_selected_category.as_deref().unwrap_or("");
+    let sub_cols = data.data_mapping.get(cat).cloned().unwrap_or_default();
+    let total_col = sub_cols.len() + 2;
+
+    let cell_line: Option<Line> = if app.cursor_col >= 2 {
+        if app.cursor_col == total_col {
+            let total: f64 = sub_cols.iter()
+                .filter_map(|sc| record.get(sc))
+                .map(|v| score_value(v))
+                .sum();
+            Some(Line::from(vec![
+                Span::styled("  Total  : ", Style::default().fg(theme.key_accent)),
+                Span::styled(
+                    format!("{:.1} pts", total),
+                    Style::default().fg(theme.success).bold(),
+                ),
+            ]))
+        } else {
+            let sub_idx = app.cursor_col.saturating_sub(2);
+            if sub_idx < sub_cols.len() {
+                let col_name = &sub_cols[sub_idx];
+                let raw_val = record.get(col_name)
+                    .map(|v| match v {
+                        serde_json::Value::Number(n) => format!("{}", n.as_f64().unwrap_or(0.0)),
+                        serde_json::Value::String(s) => s.clone(),
+                        serde_json::Value::Null => "—".into(),
+                        _ => v.to_string(),
+                    })
+                    .unwrap_or_else(|| "—".into());
+                // Truncate col name if too long for the narrow panel
+                let short_name = if col_name.chars().count() > 9 {
+                    format!("{}…", &col_name.chars().take(8).collect::<String>())
+                } else {
+                    col_name.clone()
+                };
+                Some(Line::from(vec![
+                    Span::styled(
+                        format!("  {:<9}: ", short_name),
+                        Style::default().fg(theme.key_accent),
+                    ),
+                    Span::styled(raw_val, Style::default().fg(theme.fg).bold()),
+                ]))
+            } else {
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Truncate name for narrow panel (max ~14 chars)
+    let name_display: String = name_raw.chars().take(14).collect();
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("  Name   : ", Style::default().fg(theme.key_accent)),
+            Span::styled(name_display, Style::default().fg(theme.fg)),
+        ]),
+        Line::from(vec![
+            Span::styled("  ID     : ", Style::default().fg(theme.key_accent)),
+            Span::styled(sid.to_string(), Style::default().fg(theme.info)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Score  : ", Style::default().fg(theme.key_accent)),
+            Span::styled(final_score_str, Style::default().fg(theme.key_accent).bold()),
+        ]),
+        Line::from(vec![
+            Span::styled("  Grade  : ", Style::default().fg(theme.key_accent)),
+            Span::styled(
+                format!(" {} ", grade_str),
+                Style::default().fg(theme.bg).bg(grade_color).bold(),
+            ),
+        ]),
+    ];
+
+    if let Some(cl) = cell_line {
+        lines.push(Line::from(Span::styled(
+            "  ─────────────────",
+            Style::default().fg(theme.border),
+        )));
+        lines.push(cl);
+    }
+
+    let paragraph = Paragraph::new(lines).block(block);
+    f.render_widget(paragraph, area);
+}
+
 fn draw_raw_details_tab(f: &mut Frame, app: &mut App, area: Rect) {
     if app.raw_selected_student.is_some() {
         draw_student_popup(f, app, area);
         return;
     }
 
-    let chunks = Layout::default()
+    let h_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(22), Constraint::Min(40)])
         .split(area);
 
-    draw_raw_left_panel(f, app, chunks[0]);
-    draw_sub_column_view(f, app, chunks[1]);
+    let left_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(h_chunks[0]);
+
+    draw_raw_left_panel(f, app, left_chunks[0]);
+    draw_student_info_panel(f, app, left_chunks[1]);
+    draw_sub_column_view(f, app, h_chunks[1]);
 }
 
 fn score_value(v: &serde_json::Value) -> f64 {
