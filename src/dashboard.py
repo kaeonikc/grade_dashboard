@@ -142,16 +142,16 @@ def _col_headers(final_df: pd.DataFrame, max_scores: dict, config: dict, use_wei
     rename = {}
     for col in final_df.columns:
         if col in max_scores:
-            rename[col] = f"{col}\n({max_scores[col]:g} pts)"
+            rename[col] = f"{col}\n({max_scores[col]:g}pts)"
         elif col.endswith("_pct"):
             category = col.replace("_pct", "")
             weight = weights.get(category, 0)
-            rename[col] = f"{col}\n({weight * 100:g} pts)" if use_weighted else f"{col}\n(100%)"
+            rename[col] = f"{category.title()} Grade\n({weight * 100:g}pts)" if use_weighted else f"{category.title()} Grade\n(100%)"
         elif col == "Final Score":
-            rename[col] = "Final Score\n(100 pts)" if use_weighted else "Final Score\n(100%)"
+            rename[col] = "Final Score\n(100pts)" if use_weighted else "Final Score\n(100%)"
         elif col == "Coursework Total":
             cw_weight = sum(w for c, w in weights.items() if c.lower() not in ["midterm", "final"])
-            rename[col] = f"Coursework Total\n({cw_weight * 100:g} pts)" if use_weighted else "Coursework Total\n(100%)"
+            rename[col] = f"Coursework Total\n({cw_weight * 100:g}pts)" if use_weighted else f"Coursework Total\n(100%)"
     return rename
 
 
@@ -232,27 +232,81 @@ def export_reports(final_df: pd.DataFrame, course_path: Path, config: dict, max_
     display_df.to_csv(report_dir / "final_grades.csv", index=False)
 
     copy_parts = []
-    for col in display_df.columns:
-        if col.startswith("Coursework Total"):
-            copy_parts.append(display_df[["Student ID", col]].copy())
-            break
+    if "Coursework Total" in final_df.columns:
+        disp_name = rename.get("Coursework Total", "Coursework Total")
+        if disp_name in display_df.columns:
+            copy_parts.append(display_df[["Student ID", disp_name]].copy())
 
     for exam in ["midterm", "final"]:
-        for col in display_df.columns:
-            if col.startswith(f"{exam}_pct"):
-                part = display_df[["Student ID", col]].copy()
+        pct_col = f"{exam}_pct"
+        if pct_col in final_df.columns:
+            disp_name = rename.get(pct_col, pct_col)
+            if disp_name in display_df.columns:
+                part = display_df[["Student ID", disp_name]].copy()
                 mapped_name = data_mapping.get(exam, [exam])[0]
                 max_pts = weights.get(exam, 0) * 100
-                part.columns = ["Student ID", f"{mapped_name} ({max_pts:g} pts)"]
+                part.columns = ["Student ID", f"{mapped_name} ({max_pts:g}pts)"]
                 copy_parts.append(part)
-                break
 
     if copy_parts:
+        for i in range(1, len(copy_parts)):
+            copy_parts[i] = copy_parts[i].drop(columns=["Student ID"])
         copy_df = pd.concat(copy_parts, axis=1)
         copy_df.to_csv(report_dir / "copy_friendly_scores.csv", index=False)
 
     console.print(f"[green]✓ Reports saved to {report_dir}[/green]")
 
+def update_database_totals(course_path: Path, final_df: pd.DataFrame, data_mapping: dict, max_scores: dict):
+    data_dir = course_path / "data"
+    if not data_dir.is_dir():
+        return
+    for category, columns in data_mapping.items():
+        csv_path = data_dir / f"{category}.csv"
+        if csv_path.exists():
+            try:
+                df = pd.read_csv(csv_path)
+                df.columns = df.columns.astype(str).str.strip()
+                
+                # Check for Student ID column
+                if 'Student ID' not in df.columns:
+                    continue
+                    
+                df['Student ID'] = df['Student ID'].astype(str).str.strip()
+                
+                # Determine total points
+                cat_max_scores = {col: max_scores.get(col, 100.0) for col in columns}
+                total_pts = sum(cat_max_scores.values())
+                total_pts_str = str(int(total_pts)) if total_pts.is_integer() else str(total_pts)
+                total_header = f"total ({total_pts_str}pts)"
+                
+                # Find if any existing total column exists
+                existing_total_col = None
+                for col in df.columns:
+                    if str(col).lower().strip().startswith('total'):
+                        existing_total_col = col
+                        break
+                        
+                calc_col = f"{category.title()} Total"
+                if calc_col in final_df.columns:
+                    totals_map = final_df.set_index("Student ID")[calc_col].to_dict()
+                    target_col = existing_total_col if existing_total_col else total_header
+                    
+                    # Fill the total column only for rows that are not 'Max' / sentinel rows
+                    max_mask = df['Student ID'].str.lower().isin(['max', 'max score', 'full score', 'full'])
+                    
+                    # For student rows, map totals from final_df
+                    df.loc[~max_mask, target_col] = df.loc[~max_mask, 'Student ID'].map(totals_map)
+                    
+                    # For Max row, put Z
+                    df.loc[max_mask, target_col] = total_pts
+                    
+                    if target_col != total_header:
+                        df.rename(columns={target_col: total_header}, inplace=True)
+                        
+                    # Save back
+                    df.to_csv(csv_path, index=False)
+            except Exception as e:
+                console.print(f"[yellow]⚠️ Warning: Failed to update total in {csv_path.name}: {e}[/yellow]")
 
 def run() -> None:
     while True:
@@ -278,6 +332,9 @@ def run() -> None:
             show_warnings(validate_scores(raw_df, config, max_scores))
             use_weighted = Confirm.ask("Show weighted scores?", default=True)
             final_df = calculate_final_grades(raw_df, config, max_scores, use_weighted)
+            
+            # Automatically calculate and write totals back to the raw CSV database files
+            update_database_totals(course_path, final_df, config.get("data_mapping", {}), max_scores)
 
             console.print()
             console.print(Rule(f"[bold]{config.get('course_name', course_name)} — {config.get('term', '')}[/bold]"))

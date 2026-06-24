@@ -1,0 +1,28 @@
+{
+  "//": "Custom TUI Theme Configuration Template (theme.json)",
+  "//": "Save this file as 'theme.json' next to the 'grade-tui' binary",
+  "//": "or at '~/.config/grade_dashboard/theme.json'.",
+  "//": "Colors can be set as: Integers (0-255) for indexed ANSI, Hex strings (e.g. '#2d2a2e'), or RGB arrays (e.g. [45, 42, 46]).",
+
+  "bg": 235,
+  "fg": 252,
+  "panel_bg": 233,
+  "border": 243,
+  "border_focus": 197,
+  "active_tab": 81,
+  "inactive_tab": 243,
+  "warning": 208,
+  "success": 114,
+  "info": 81,
+  "highlight": 237,
+  "key_accent": 221,
+  "purple": 141,
+  "alt_row": 234,
+  "title": 197,
+
+  "grade_a": 114,
+  "grade_b": 141,
+  "grade_c": 221,
+  "grade_d": 208,
+  "grade_f": 197
+}
