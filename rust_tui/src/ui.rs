@@ -520,7 +520,7 @@ fn draw_student_info_panel(f: &mut Frame, app: &mut App, area: Rect) {
                 .map(|v| score_value(v))
                 .sum();
             Some(Line::from(vec![
-                Span::styled("  Total  : ", Style::default().fg(theme.key_accent)),
+                Span::styled("  Total            : ", Style::default().fg(theme.key_accent)),
                 Span::styled(
                     format!("{:.1} pts", total),
                     Style::default().fg(theme.success).bold(),
@@ -538,15 +538,15 @@ fn draw_student_info_panel(f: &mut Frame, app: &mut App, area: Rect) {
                         _ => v.to_string(),
                     })
                     .unwrap_or_else(|| "—".into());
-                // Truncate col name if too long for the narrow panel
-                let short_name = if col_name.chars().count() > 9 {
-                    format!("{}…", &col_name.chars().take(8).collect::<String>())
+                // Truncate col name to fit wider panel
+                let short_name = if col_name.chars().count() > 16 {
+                    format!("{}…", &col_name.chars().take(15).collect::<String>())
                 } else {
                     col_name.clone()
                 };
                 Some(Line::from(vec![
                     Span::styled(
-                        format!("  {:<9}: ", short_name),
+                        format!("  {:<16}: ", short_name),
                         Style::default().fg(theme.key_accent),
                     ),
                     Span::styled(raw_val, Style::default().fg(theme.fg).bold()),
@@ -559,24 +559,23 @@ fn draw_student_info_panel(f: &mut Frame, app: &mut App, area: Rect) {
         None
     };
 
-    // Truncate name for narrow panel (max ~14 chars)
-    let name_display: String = name_raw.chars().take(14).collect();
+    // Truncate name to fit wider panel (inner width ~29 chars after borders+padding)
+    let name_display: String = name_raw.chars().take(27).collect();
 
     let mut lines = vec![
+        Line::from(Span::styled(
+            format!("  {}", name_display),
+            Style::default().fg(theme.fg).bold(),
+        )),
+        Line::from(Span::styled(
+            format!("  {}", sid),
+            Style::default().fg(theme.info),
+        )),
         Line::from(vec![
-            Span::styled("  Name   : ", Style::default().fg(theme.key_accent)),
-            Span::styled(name_display, Style::default().fg(theme.fg)),
-        ]),
-        Line::from(vec![
-            Span::styled("  ID     : ", Style::default().fg(theme.key_accent)),
-            Span::styled(sid.to_string(), Style::default().fg(theme.info)),
-        ]),
-        Line::from(vec![
-            Span::styled("  Score  : ", Style::default().fg(theme.key_accent)),
-            Span::styled(final_score_str, Style::default().fg(theme.key_accent).bold()),
-        ]),
-        Line::from(vec![
-            Span::styled("  Grade  : ", Style::default().fg(theme.key_accent)),
+            Span::styled(
+                format!("  {} ", final_score_str),
+                Style::default().fg(theme.key_accent).bold(),
+            ),
             Span::styled(
                 format!(" {} ", grade_str),
                 Style::default().fg(theme.bg).bg(grade_color).bold(),
@@ -586,7 +585,7 @@ fn draw_student_info_panel(f: &mut Frame, app: &mut App, area: Rect) {
 
     if let Some(cl) = cell_line {
         lines.push(Line::from(Span::styled(
-            "  ─────────────────",
+            "  ─────────────────────────────",
             Style::default().fg(theme.border),
         )));
         lines.push(cl);
@@ -604,7 +603,7 @@ fn draw_raw_details_tab(f: &mut Frame, app: &mut App, area: Rect) {
 
     let h_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(22), Constraint::Min(40)])
+        .constraints([Constraint::Length(33), Constraint::Min(40)])
         .split(area);
 
     let left_chunks = Layout::default()
