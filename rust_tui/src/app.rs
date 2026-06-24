@@ -502,7 +502,7 @@ impl App {
                     let max_cols = match &self.course_data {
                         Some(data) => {
                             match &self.raw_selected_category {
-                                Some(cat) => data.data_mapping.get(cat).map(|v| v.len()).unwrap_or(0) + 2,
+                                Some(cat) => data.data_mapping.get(cat).map(|v| v.len()).unwrap_or(0) + 3,
                                 None => 2,
                             }
                         }
