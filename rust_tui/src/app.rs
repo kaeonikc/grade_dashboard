@@ -71,6 +71,8 @@ pub struct App {
     pub theme: crate::style::Theme,
 
     // Raw Details tab drill-down state
+    pub raw_category_index: usize,
+    pub raw_right_focused: bool,
     pub raw_selected_category: Option<String>,
     pub raw_selected_student: Option<usize>,
 }
@@ -108,8 +110,22 @@ impl App {
             settings_index: 0,
             info_msg_ticks: 0,
             theme: crate::style::load_theme(),
+            raw_category_index: 0,
+            raw_right_focused: false,
             raw_selected_category: None,
             raw_selected_student: None,
+        }
+    }
+
+    pub fn sync_raw_category(&mut self) {
+        let cats = self.get_categories();
+        if cats.is_empty() {
+            self.raw_selected_category = None;
+        } else {
+            if self.raw_category_index >= cats.len() {
+                self.raw_category_index = cats.len() - 1;
+            }
+            self.raw_selected_category = Some(cats[self.raw_category_index].clone());
         }
     }
 
@@ -392,6 +408,15 @@ impl App {
                 if self.active_tab == 1 && self.raw_selected_student.is_some() {
                     return;
                 }
+                if self.active_tab == 1 && !self.raw_right_focused {
+                    if self.raw_category_index > 0 {
+                        self.raw_category_index -= 1;
+                        self.sync_raw_category();
+                        self.cursor_row = 0;
+                        self.scroll_row_offset = 0;
+                    }
+                    return;
+                }
                 if self.cursor_row > 0 {
                     self.cursor_row -= 1;
                     self.adjust_scroll_row();
@@ -412,6 +437,16 @@ impl App {
                 }
             } else if !self.editing {
                 if self.active_tab == 1 && self.raw_selected_student.is_some() {
+                    return;
+                }
+                if self.active_tab == 1 && !self.raw_right_focused {
+                    let cat_count = self.get_categories().len();
+                    if self.raw_category_index + 1 < cat_count {
+                        self.raw_category_index += 1;
+                        self.sync_raw_category();
+                        self.cursor_row = 0;
+                        self.scroll_row_offset = 0;
+                    }
                     return;
                 }
                 let max_rows = match &self.course_data {
@@ -438,6 +473,18 @@ impl App {
 
     pub fn move_left(&mut self) {
         if self.state == AppState::Dashboard && !self.editing && !self.editing_weights && !self.editing_boundaries {
+            if self.active_tab == 1 {
+                if self.raw_right_focused {
+                    if self.cursor_col > 0 {
+                        self.cursor_col -= 1;
+                        self.adjust_scroll_col();
+                    } else if self.raw_selected_student.is_none() {
+                        // L1 right panel: return focus to left panel
+                        self.raw_right_focused = false;
+                    }
+                }
+                return;
+            }
             if self.cursor_col > 0 {
                 self.cursor_col -= 1;
                 self.adjust_scroll_col();
@@ -447,18 +494,31 @@ impl App {
 
     pub fn move_right(&mut self) {
         if self.state == AppState::Dashboard && !self.editing && !self.editing_weights && !self.editing_boundaries {
-            let max_cols = match &self.course_data {
-                Some(data) => {
-                    if self.active_tab == 1 {
-                        if self.raw_selected_student.is_some() || self.raw_selected_category.is_some() {
-                            // L1 or L2: Student ID + Name + sub_cols + Total
+            if self.active_tab == 1 {
+                if !self.raw_right_focused {
+                    // Left panel → focus right panel
+                    self.raw_right_focused = true;
+                    self.cursor_col = 2;
+                    self.scroll_col_offset = 2;
+                } else {
+                    // Right panel (L1 or L2): navigate cols
+                    let max_cols = match &self.course_data {
+                        Some(data) => {
                             let cat = self.raw_selected_category.as_deref().unwrap_or("");
                             data.data_mapping.get(cat).map(|v| v.len()).unwrap_or(0) + 3
-                        } else {
-                            // L0: Student ID + Name + one col per category
-                            self.get_categories().len() + 2
                         }
-                    } else if self.active_tab == 0 {
+                        None => 0,
+                    };
+                    if self.cursor_col + 1 < max_cols {
+                        self.cursor_col += 1;
+                        self.adjust_scroll_col();
+                    }
+                }
+                return;
+            }
+            let max_cols = match &self.course_data {
+                Some(data) => {
+                    if self.active_tab == 0 {
                         data.summary_columns.len()
                     } else {
                         0
@@ -545,6 +605,9 @@ impl App {
                         self.scroll_col_offset = 0;
                         self.raw_selected_category = None;
                         self.raw_selected_student = None;
+                        self.raw_category_index = 0;
+                        self.raw_right_focused = false;
+                        self.sync_raw_category();
                     }
                     Err(e) => {
                         self.error = Some(e);
@@ -670,6 +733,9 @@ impl App {
                             self.scroll_col_offset = 0;
                             self.raw_selected_category = None;
                             self.raw_selected_student = None;
+                            self.raw_category_index = 0;
+                            self.raw_right_focused = false;
+                            self.sync_raw_category();
                         }
                     }
                     crossterm::event::KeyCode::BackTab => {
@@ -685,6 +751,9 @@ impl App {
                             self.scroll_col_offset = 0;
                             self.raw_selected_category = None;
                             self.raw_selected_student = None;
+                            self.raw_category_index = 0;
+                            self.raw_right_focused = false;
+                            self.sync_raw_category();
                         }
                     }
                     crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k') => {
@@ -703,16 +772,15 @@ impl App {
                         if self.state == AppState::Dashboard {
                             if self.active_tab == 1 {
                                 if self.raw_selected_student.is_some() {
-                                    // L2 → back to L1
+                                    // L2 student popup → back to right panel
                                     self.raw_selected_student = None;
                                     self.cursor_col = 2;
                                     self.scroll_col_offset = 2;
-                                } else if self.raw_selected_category.is_some() {
-                                    // L1 → back to L0
-                                    self.raw_selected_category = None;
-                                    self.cursor_col = 0;
-                                    self.scroll_col_offset = 0;
+                                } else if self.raw_right_focused {
+                                    // Right panel → back to left panel
+                                    self.raw_right_focused = false;
                                 } else {
+                                    // Left panel → CourseSelect
                                     self.state = AppState::CourseSelect;
                                     self.course_data = None;
                                     self.load_courses();
@@ -733,22 +801,18 @@ impl App {
                         } else if self.state == AppState::Dashboard {
                             if self.active_tab == 1 {
                                 if self.raw_selected_student.is_some() {
-                                    // L2 → edit cell (col >= 2 guard in start_editing_cell)
+                                    // L2 student popup → edit cell
                                     self.start_editing_cell();
-                                } else if self.raw_selected_category.is_some() {
-                                    // L1 → open student popup
+                                } else if self.raw_right_focused {
+                                    // Right panel → open student popup
                                     self.raw_selected_student = Some(self.cursor_row);
                                     self.cursor_col = 2;
                                     self.scroll_col_offset = 2;
-                                } else if self.cursor_col >= 2 {
-                                    // L0 → drill into category
-                                    let cats = self.get_categories();
-                                    let cat_idx = self.cursor_col - 2;
-                                    if cat_idx < cats.len() {
-                                        self.raw_selected_category = Some(cats[cat_idx].clone());
-                                        self.cursor_col = 2;
-                                        self.scroll_col_offset = 2;
-                                    }
+                                } else {
+                                    // Left panel → focus right panel
+                                    self.raw_right_focused = true;
+                                    self.cursor_col = 2;
+                                    self.scroll_col_offset = 2;
                                 }
                             } else {
                                 self.start_editing_cell();
