@@ -572,10 +572,11 @@ fn draw_student_info_panel(f: &mut Frame, app: &mut App, area: Rect) {
             Style::default().fg(theme.info),
         )),
         Line::from(vec![
-            Span::styled(
-                format!("  {} ", final_score_str),
-                Style::default().fg(theme.key_accent).bold(),
-            ),
+            Span::styled("  Score : ", Style::default().fg(theme.key_accent)),
+            Span::styled(final_score_str, Style::default().fg(theme.key_accent).bold()),
+        ]),
+        Line::from(vec![
+            Span::styled("  Grade : ", Style::default().fg(theme.key_accent)),
             Span::styled(
                 format!(" {} ", grade_str),
                 Style::default().fg(theme.bg).bg(grade_color).bold(),
