@@ -5,7 +5,7 @@ import (
 	runewidth "github.com/mattn/go-runewidth"
 )
 
-func main() {
+func mainScratchTest() {
 	// Base character: ส (Sua - U+0E2a)
 	// Combining vowel: ั (Mai Han Akat - U+0E31)
 	// Combining tone: ้ (Mai Tho - U+0E49)

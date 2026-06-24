@@ -6,7 +6,6 @@ use ratatui::{
     Frame,
 };
 use crate::app::{App, AppState};
-// theme
 use unicode_width::UnicodeWidthStr;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -43,6 +42,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_loading_overlay(f, app);
     } else if app.editing {
         draw_edit_overlay(f, app);
+    } else if app.editing_attendance {
+        draw_attendance_picker(f, app);
     } else if app.editing_weights || app.editing_boundaries {
         draw_settings_overlay(f, app);
     }
@@ -646,6 +647,18 @@ fn category_color(cat: &str, theme: &crate::style::Theme) -> Color {
     }
 }
 
+fn att_cell_style(val: &str, is_cursor: bool, theme: &crate::style::Theme) -> Style {
+    if is_cursor {
+        return Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
+    }
+    match val.trim() {
+        "P"  => Style::default().fg(theme.bg).bg(theme.success).add_modifier(Modifier::BOLD),
+        "A"  => Style::default().fg(theme.bg).bg(theme.grade_f).add_modifier(Modifier::BOLD),
+        "EA" => Style::default().fg(theme.bg).bg(theme.key_accent).add_modifier(Modifier::BOLD),
+        "L"  => Style::default().fg(theme.bg).bg(theme.warning).add_modifier(Modifier::BOLD),
+        _    => Style::default().fg(theme.fg),
+    }
+}
 
 
 fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
@@ -661,6 +674,27 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
 
     let sub_cols = data.data_mapping.get(&cat).cloned().unwrap_or_default();
     let show_total = true;
+    let is_attendance = cat.to_lowercase().contains("attendance");
+    let max_att_digits = format!("{}", sub_cols.len()).len();
+    // | + space(s) + number + space(s): enough for "| 10 |" style with equal widths
+    let sub_col_width: u16 = if is_attendance {
+        (max_att_digits + 3) as u16
+    } else { 12 };
+
+    // Compute name alignment from actual data (display widths so Thai combining vowels are 0-width)
+    let max_first_display = data.raw_scores.iter()
+        .filter_map(|r| r.get("Name").and_then(|v| v.as_str()))
+        .map(|n| n.split_whitespace().next().map(|p| UnicodeWidthStr::width(p)).unwrap_or(0))
+        .max()
+        .unwrap_or(12);
+    let max_surname_display = data.raw_scores.iter()
+        .filter_map(|r| r.get("Name").and_then(|v| v.as_str()))
+        .map(|n| { let mut it = n.split_whitespace(); it.next(); UnicodeWidthStr::width(it.collect::<Vec<_>>().join(" ").as_str()) })
+        .max()
+        .unwrap_or(8);
+    // +4: minimum gap of 4 spaces after the longest first name
+    let alignment_target = max_first_display + 4;
+    let name_col_width = (alignment_target + max_surname_display + 2).max(20) as u16;
 
     let border_color = if app.raw_right_focused { category_color(&cat, &theme) } else { theme.border };
     let title_text = if app.raw_right_focused {
@@ -679,8 +713,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
     // Build visible column indices: frozen (0,1) + scrollable sub-cols
     let frozen_count = 2usize;
     let scroll_offset = app.scroll_col_offset.saturating_sub(frozen_count);
-    let max_scroll_cols = 5usize;
-    let scroll_end = std::cmp::min(scroll_offset + max_scroll_cols, sub_cols.len());
+    let scroll_end = std::cmp::min(scroll_offset + sub_cols.len(), sub_cols.len());
     let visible_sub: &[String] = &sub_cols[scroll_offset..scroll_end];
 
     // Header
@@ -688,22 +721,33 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
         Cell::from("Student ID\n").style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD)),
         Cell::from("Name\n").style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD)),
     ];
-    for sc in visible_sub {
-        let max_text = if let Some(max_s) = data.max_scores.get(sc) {
-            format!("\n({:.0} pts)", max_s)
+    for (sc_index, sc) in visible_sub.iter().enumerate() {
+        let header_text = if is_attendance {
+            // Center the column number inside the cell (inner width = col_width - 1 pipe char)
+            format!("|{:^inner$}\n", scroll_offset + sc_index + 1, inner = max_att_digits + 2)
         } else {
-            "\n".to_string()
+            let max_text = if let Some(max_s) = data.max_scores.get(sc) {
+                format!("\n({:.0} pts)", max_s)
+            } else {
+                "\n".to_string()
+            };
+            format!("{}{}", sc, max_text)
         };
         header_cells.push(
-            Cell::from(format!("{}{}", sc, max_text))
+            Cell::from(header_text)
                 .style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD))
         );
     }
     if show_total {
-        let total_max: f64 = sub_cols.iter()
-            .filter_map(|sc| data.max_scores.get(sc))
-            .sum();
-        let total_header = if total_max > 0.0 {
+        // Attendance max = 1 pt/session × n sessions; other categories sum explicit max_scores
+        let total_max: f64 = if is_attendance {
+            sub_cols.len() as f64
+        } else {
+            sub_cols.iter().filter_map(|sc| data.max_scores.get(sc)).sum()
+        };
+        let total_header = if is_attendance {
+            format!("| Total\n({:.0} pts)", total_max)
+        } else if total_max > 0.0 {
             format!("Total\n({:.0} pts)", total_max)
         } else {
             "Total\n(pts)".to_string()
@@ -731,7 +775,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
 
         let name = record.get("Name")
             .map(|v| match v {
-                serde_json::Value::String(s) => format_thai_name(s, 18),
+                serde_json::Value::String(s) => format_thai_name(s, alignment_target),
                 _ => v.to_string(),
             })
             .unwrap_or_default();
@@ -751,11 +795,20 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
             };
 
             let abs_col = frozen_count + scroll_offset + sc_offset;
-            let mut style = Style::default().fg(theme.fg);
-            if app.raw_right_focused && r_idx == app.cursor_row && abs_col == app.cursor_col {
-                style = style.fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
-            }
-            cells.push(Cell::from(text).style(style));
+            let is_cursor = app.raw_right_focused && r_idx == app.cursor_row && abs_col == app.cursor_col;
+            let display_text = if is_attendance {
+                format!("{:^width$}", text, width = sub_col_width as usize)
+            } else {
+                text.clone()
+            };
+            let style = if is_attendance {
+                att_cell_style(&text, is_cursor, &theme)
+            } else if is_cursor {
+                Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.fg)
+            };
+            cells.push(Cell::from(display_text).style(style));
         }
 
         if show_total {
@@ -767,9 +820,12 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
             if app.raw_right_focused && r_idx == app.cursor_row && app.cursor_col == sub_cols.len() + 2 {
                 total_style = Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
             }
-            cells.push(
-                Cell::from(format!("{:.1}", total)).style(total_style)
-            );
+            let total_text = if is_attendance {
+                format!("| {:.1}", total)
+            } else {
+                format!("{:.1}", total)
+            };
+            cells.push(Cell::from(total_text).style(total_style));
         }
 
         let mut row_style = Style::default();
@@ -782,9 +838,9 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
     }).collect();
 
     // Widths
-    let mut widths = vec![Constraint::Length(12), Constraint::Length(28)];
+    let mut widths = vec![Constraint::Length(12), Constraint::Length(name_col_width)];
     for _ in visible_sub {
-        widths.push(Constraint::Length(12));
+        widths.push(Constraint::Length(sub_col_width));
     }
     if show_total {
         widths.push(Constraint::Length(8));
@@ -793,7 +849,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
     let table = Table::new(rows, widths)
         .header(header)
         .block(block)
-        .column_spacing(1);
+        .column_spacing(if is_attendance { 0 } else { 1 });
 
     f.render_widget(table, area);
 }
@@ -833,10 +889,28 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
         ))
         .title_style(Style::default().fg(category_color(&cat, &theme)).bold());
 
+    let is_attendance_popup = cat.to_lowercase().contains("attendance");
+    let max_att_digits_popup = format!("{}", sub_cols.len()).len();
+    let sub_col_width_popup: u16 = if is_attendance_popup {
+        (max_att_digits_popup + 3) as u16
+    } else { 12 };
+
+    let max_first_display_popup = data.raw_scores.iter()
+        .filter_map(|r| r.get("Name").and_then(|v| v.as_str()))
+        .map(|n| n.split_whitespace().next().map(|p| UnicodeWidthStr::width(p)).unwrap_or(0))
+        .max()
+        .unwrap_or(12);
+    let max_surname_display_popup = data.raw_scores.iter()
+        .filter_map(|r| r.get("Name").and_then(|v| v.as_str()))
+        .map(|n| { let mut it = n.split_whitespace(); it.next(); UnicodeWidthStr::width(it.collect::<Vec<_>>().join(" ").as_str()) })
+        .max()
+        .unwrap_or(8);
+    let alignment_target_popup = max_first_display_popup + 4;
+    let name_col_width_popup = (alignment_target_popup + max_surname_display_popup + 2).max(20) as u16;
+
     let frozen_count = 2usize;
     let scroll_offset = app.scroll_col_offset.saturating_sub(frozen_count);
-    let max_scroll_cols = 5usize;
-    let scroll_end = std::cmp::min(scroll_offset + max_scroll_cols, sub_cols.len());
+    let scroll_end = std::cmp::min(scroll_offset + sub_cols.len(), sub_cols.len());
     let visible_sub: Vec<String> = sub_cols[scroll_offset..scroll_end].to_vec();
 
     // Header
@@ -844,22 +918,31 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
         Cell::from("Student ID\n").style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD)),
         Cell::from("Name\n").style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD)),
     ];
-    for sc in &visible_sub {
-        let max_text = if let Some(max_s) = data.max_scores.get(sc) {
-            format!("\n({:.0} pts)", max_s)
+    for (sc_index, sc) in visible_sub.iter().enumerate() {
+        let header_text = if is_attendance_popup {
+            format!("|{:^inner$}\n", scroll_offset + sc_index + 1, inner = max_att_digits_popup + 2)
         } else {
-            "\n".to_string()
+            let max_text = if let Some(max_s) = data.max_scores.get(sc) {
+                format!("\n({:.0} pts)", max_s)
+            } else {
+                "\n".to_string()
+            };
+            format!("{}{}", sc, max_text)
         };
         header_cells.push(
-            Cell::from(format!("{}{}", sc, max_text))
+            Cell::from(header_text)
                 .style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD))
         );
     }
     if show_total {
-        let total_max: f64 = sub_cols.iter()
-            .filter_map(|sc| data.max_scores.get(sc))
-            .sum();
-        let total_header = if total_max > 0.0 {
+        let total_max: f64 = if is_attendance_popup {
+            sub_cols.len() as f64
+        } else {
+            sub_cols.iter().filter_map(|sc| data.max_scores.get(sc)).sum()
+        };
+        let total_header = if is_attendance_popup {
+            format!("| Total\n({:.0} pts)", total_max)
+        } else if total_max > 0.0 {
             format!("Total\n({:.0} pts)", total_max)
         } else {
             "Total\n(pts)".to_string()
@@ -874,7 +957,7 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
     // Single data row
     let mut cells = vec![];
     cells.push(Cell::from(sid.clone()).style(Style::default().fg(theme.info)));
-    cells.push(Cell::from(format_thai_name(&name, 18)).style(Style::default().fg(theme.fg)));
+    cells.push(Cell::from(format_thai_name(&name, alignment_target_popup)).style(Style::default().fg(theme.fg)));
 
     for (sc_offset, sc) in visible_sub.iter().enumerate() {
         let cell_val = record.get(sc).unwrap_or(&serde_json::Value::Null);
@@ -886,11 +969,20 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
         };
 
         let abs_col = frozen_count + scroll_offset + sc_offset;
-        let mut style = Style::default().fg(theme.fg);
-        if abs_col == app.cursor_col {
-            style = style.fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
-        }
-        cells.push(Cell::from(text).style(style));
+        let is_cursor = abs_col == app.cursor_col;
+        let display_text = if is_attendance_popup {
+            format!("{:^width$}", text, width = sub_col_width_popup as usize)
+        } else {
+            text.clone()
+        };
+        let style = if is_attendance_popup {
+            att_cell_style(&text, is_cursor, &theme)
+        } else if is_cursor {
+            Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.fg)
+        };
+        cells.push(Cell::from(display_text).style(style));
     }
 
     if show_total {
@@ -898,17 +990,22 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
             .filter_map(|sc| record.get(sc))
             .map(|v| score_value(v))
             .sum();
+        let total_text = if is_attendance_popup {
+            format!("| {:.1}", total)
+        } else {
+            format!("{:.1}", total)
+        };
         cells.push(
-            Cell::from(format!("{:.1}", total))
+            Cell::from(total_text)
                 .style(Style::default().fg(theme.success).add_modifier(Modifier::BOLD))
         );
     }
 
     let row = Row::new(cells).style(Style::default().bg(theme.highlight)).height(1);
 
-    let mut widths = vec![Constraint::Length(12), Constraint::Length(28)];
+    let mut widths = vec![Constraint::Length(12), Constraint::Length(name_col_width_popup)];
     for _ in &visible_sub {
-        widths.push(Constraint::Length(12));
+        widths.push(Constraint::Length(sub_col_width_popup));
     }
     if show_total {
         widths.push(Constraint::Length(8));
@@ -917,7 +1014,7 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
     let table = Table::new(vec![row], widths)
         .header(header)
         .block(block)
-        .column_spacing(1);
+        .column_spacing(if is_attendance_popup { 0 } else { 1 });
 
     f.render_widget(table, area);
 }
@@ -1238,6 +1335,16 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                         Span::raw("  "),
                         Span::styled(" [Enter] ", Style::default().fg(theme.success).bold()),
                         Span::raw("Save  "),
+                        Span::styled(" [Esc] ", Style::default().fg(theme.grade_f).bold()),
+                        Span::raw("Cancel"),
+                    ]
+                } else if app.editing_attendance {
+                    vec![
+                        Span::raw(" Select Attendance: "),
+                        Span::styled(" [▲/▼] ", Style::default().fg(theme.active_tab).bold()),
+                        Span::raw("Navigate  "),
+                        Span::styled(" [Enter] ", Style::default().fg(theme.success).bold()),
+                        Span::raw("Confirm  "),
                         Span::styled(" [Esc] ", Style::default().fg(theme.grade_f).bold()),
                         Span::raw("Cancel"),
                     ]
@@ -1683,6 +1790,55 @@ fn draw_settings_overlay(f: &mut Frame, app: &mut App) {
     f.render_widget(buttons_p, vertical_chunks[2]);
 }
 
+fn draw_attendance_picker(f: &mut Frame, app: &mut App) {
+    let theme = app.theme;
+    let area = centered_rect(30, 40, f.area());
+    f.render_widget(Clear, area);
+
+    let col_name = app.editing_column.clone();
+    let student_name = app.course_data.as_ref()
+        .and_then(|d| d.raw_scores.get(app.cursor_row))
+        .and_then(|r| r.get("Name").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .unwrap_or_default();
+
+    let title = format!(" Attendance  {}  {} ", col_name, student_name);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme.active_tab))
+        .style(Style::default().bg(theme.panel_bg))
+        .title(title)
+        .title_style(Style::default().fg(theme.key_accent).bold());
+
+    let options = [("P", "Present"), ("L", "Late"), ("EA", "Excused Absence"), ("A", "Absent")];
+    let items: Vec<ListItem> = options.iter().enumerate().map(|(i, &(code, label))| {
+        let selected = i == app.attendance_index;
+        let bullet = if selected { "●" } else { "○" };
+        let bullet_color = match code {
+            "P"  => theme.success,
+            "L"  => theme.warning,
+            "EA" => theme.key_accent,
+            "A"  => theme.grade_f,
+            _    => theme.fg,
+        };
+        let bullet_style = Style::default().fg(bullet_color).add_modifier(Modifier::BOLD);
+        let text_style = if selected {
+            Style::default().fg(bullet_color).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.fg)
+        };
+        let line = Line::from(vec![
+            Span::raw("  "),
+            Span::styled(bullet, bullet_style),
+            Span::styled(format!(" {:<2}  {}  ", code, label), text_style),
+        ]);
+        ListItem::new(line)
+    }).collect();
+
+    let list = List::new(items).block(block);
+    f.render_widget(list, area);
+}
+
 // Helper to center overlay rects on the terminal screen
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
@@ -1710,12 +1866,12 @@ fn format_thai_name(name: &str, target_first_name_width: usize) -> String {
         let first_name = parts[0];
         let surname = parts[1..].join(" ");
         let first_width = UnicodeWidthStr::width(first_name);
-        if first_width < target_first_name_width {
-            let padding = " ".repeat(target_first_name_width - first_width);
-            format!("{}{}{}", first_name, padding, surname)
+        let padding = if first_width < target_first_name_width {
+            target_first_name_width - first_width
         } else {
-            format!("{} {}", first_name, surname)
-        }
+            1
+        };
+        format!("{}{}{}", first_name, " ".repeat(padding), surname)
     } else {
         name.to_string()
     }

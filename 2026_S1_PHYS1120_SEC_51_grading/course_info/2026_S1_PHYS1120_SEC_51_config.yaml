@@ -1,0 +1,37 @@
+course_id: PHYS1120
+course_name: ฟิสิกส์สำหรับอุตสาหกรรม
+term: 2026_S1
+sec_num: '51'
+teacher: อาจารย์ ดร. จักรกฤษ แก้วนิคม
+credits: 2(2-0-4)
+university: มหาวิทยาลัยราชภัฏเชียงใหม่
+campus: วิทยาเขต แม่ริม
+program: ปริญญาตรี (4 ปี) ภาคปกติ
+class_schedule:
+  day: จ.
+  time: 12:30-14:30
+  classroom: SCI5-201
+exam_schedule: F 9 Oct 2026 10:10-11:40, M 7 Aug 2026 10:10-11:40
+term_start_date: '2026-06-22'
+
+weights:
+  attendance: 0.1
+  homework: 0.2
+  midterm: 0.3
+  final: 0.4
+data_mapping:
+  homework:
+  - hw1
+  - hw2
+  midterm:
+  - midterm_score
+  final:
+  - final_exam
+grade_boundaries:
+  A: 80
+  B+: 75
+  B: 70
+  C+: 65
+  C: 60
+  D+: 55
+  D: 50

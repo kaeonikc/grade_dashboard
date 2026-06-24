@@ -216,6 +216,41 @@ def get_course_data(course_path, use_weighted=True):
             "traceback": traceback.format_exc()
         }
 
+def _update_xlsx_attendance(xlsx_path, student_id, target_col_orig_name, val_to_set):
+    import openpyxl
+    wb = openpyxl.load_workbook(xlsx_path)
+    ws = wb.active
+    
+    header_row = 1
+    col_idx = None
+    student_id_col_idx = None
+    
+    for c in range(1, ws.max_column + 1):
+        val = ws.cell(row=header_row, column=c).value
+        if val:
+            val_str = str(val).strip()
+            if val_str == target_col_orig_name:
+                col_idx = c
+            if val_str == "Student ID":
+                student_id_col_idx = c
+                
+    if not col_idx or not student_id_col_idx:
+        return False
+        
+    row_idx = None
+    for r in range(2, ws.max_row + 1):
+        sid_val = ws.cell(row=r, column=student_id_col_idx).value
+        if sid_val and str(sid_val).strip() == student_id:
+            row_idx = r
+            break
+            
+    if not row_idx:
+        return False
+        
+    ws.cell(row=row_idx, column=col_idx, value=val_to_set)
+    wb.save(xlsx_path)
+    return True
+
 def update_student_score(course_path, student_id, col_name, value):
     try:
         path = Path(course_path)
@@ -289,11 +324,24 @@ def update_student_score(course_path, student_id, col_name, value):
             if not mask.any():
                 return {"status": "error", "message": f"Student ID '{student_id}' not found in {target_file.name}."}
                 
+            if target_col_orig_name in df.columns:
+                df[target_col_orig_name] = df[target_col_orig_name].astype(object)
             df.loc[mask, target_col_orig_name] = val_to_set
             
             # Save back
             df.to_csv(target_file, index=False)
-            return {"status": "success", "message": f"Updated {col_name} to {value} for student {student_id} in {target_file.name}."}
+            
+            # If this is attendance, also update the XLSX companion
+            msg = f"Updated {col_name} to {value} for student {student_id} in {target_file.name}."
+            if target_file.name.endswith("attendance.csv"):
+                xlsx_path = target_file.with_suffix(".xlsx")
+                if xlsx_path.exists():
+                    ok = _update_xlsx_attendance(xlsx_path, student_id, target_col_orig_name, val_to_set)
+                    if ok:
+                        msg += " (also updated Excel spreadsheet)"
+                    else:
+                        msg += " (failed to update Excel spreadsheet)"
+            return {"status": "success", "message": msg}
         else:
             # Update XLSX file using openpyxl to preserve formulas/formats
             import openpyxl
