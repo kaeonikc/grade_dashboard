@@ -412,70 +412,120 @@ fn get_category_max_points(data: &crate::types::CourseData, cat: &str) -> f64 {
         .sum()
 }
 
-fn draw_raw_left_panel(f: &mut Frame, app: &mut App, area: Rect) {
+fn draw_category_view(f: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme;
     let data = match &app.course_data {
         Some(d) => d,
         None => return,
     };
 
-    let categories = app.get_categories();
-    
-    let list_items: Vec<ListItem> = categories.iter().enumerate().map(|(idx, cat)| {
+    let cats = app.get_categories();
+
+    let border_color = theme.info;
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .title(" 📋 Raw Details — Category Overview (Enter: drill in) ")
+        .title_style(Style::default().fg(border_color).bold());
+
+    let frozen_count = 2usize;
+    let scroll_offset = app.scroll_col_offset.saturating_sub(frozen_count);
+    let max_scroll_cats = 5usize;
+    let scroll_end = std::cmp::min(scroll_offset + max_scroll_cats, cats.len());
+    let visible_cats: Vec<String> = if !cats.is_empty() {
+        cats[scroll_offset..scroll_end].to_vec()
+    } else {
+        Vec::new()
+    };
+
+    // Header
+    let mut header_cells = vec![
+        Cell::from("Student ID\n").style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD)),
+        Cell::from("Name\n").style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD)),
+    ];
+    for cat in &visible_cats {
         let max_pts = get_category_max_points(data, cat);
-        let text = format!(" {} ({:.0} pts)", cat, max_pts);
-        
-        let mut style = Style::default().fg(theme.fg);
-        if idx == app.raw_category_index {
-            if !app.raw_right_focused {
-                style = style.fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
-            } else {
-                style = style.fg(theme.active_tab).add_modifier(Modifier::BOLD).bg(theme.alt_row);
-            }
+        let header_text = if max_pts > 0.0 {
+            format!("{}\n({:.0} pts)", cat, max_pts)
+        } else {
+            format!("{}\n", cat)
+        };
+        header_cells.push(
+            Cell::from(header_text)
+                .style(Style::default().fg(category_color(cat, &theme)).add_modifier(Modifier::BOLD))
+        );
+    }
+    let header = Row::new(header_cells).height(2).bottom_margin(1).style(Style::default().bg(theme.alt_row));
+
+    // Rows: one per student, category cells = sum of sub-scores
+    let rows: Vec<Row> = data.raw_scores.iter().enumerate().map(|(r_idx, record)| {
+        let mut cells = vec![];
+
+        let sid = record.get("Student ID").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let mut sid_style = Style::default().fg(theme.info);
+        if r_idx == app.cursor_row && app.cursor_col == 0 {
+            sid_style = Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
         }
-        ListItem::new(text).style(style)
+        cells.push(Cell::from(sid).style(sid_style));
+
+        let name = record.get("Name")
+            .map(|v| match v {
+                serde_json::Value::String(s) => format_thai_name(s, 18),
+                _ => v.to_string(),
+            })
+            .unwrap_or_default();
+        let mut name_style = Style::default().fg(theme.fg);
+        if r_idx == app.cursor_row && app.cursor_col == 1 {
+            name_style = Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
+        }
+        cells.push(Cell::from(name).style(name_style));
+
+        for (cat_offset, cat) in visible_cats.iter().enumerate() {
+            let sub_cols = data.data_mapping.get(cat).cloned().unwrap_or_default();
+            let total: f64 = sub_cols.iter()
+                .filter_map(|sc| record.get(sc))
+                .map(|v| score_value(v))
+                .sum();
+
+            let abs_col = frozen_count + scroll_offset + cat_offset;
+            let mut style = Style::default().fg(category_color(cat, &theme));
+            if r_idx == app.cursor_row && abs_col == app.cursor_col {
+                style = style.fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
+            }
+            cells.push(Cell::from(format!("{:.1}", total)).style(style));
+        }
+
+        let mut row_style = Style::default();
+        if r_idx == app.cursor_row {
+            row_style = row_style.bg(theme.highlight);
+        } else if r_idx % 2 == 1 {
+            row_style = row_style.bg(theme.alt_row);
+        }
+        Row::new(cells).style(row_style).height(1)
     }).collect();
 
-    let border_color = if !app.raw_right_focused { theme.info } else { theme.border };
+    // Widths
+    let mut widths = vec![Constraint::Length(12), Constraint::Length(28)];
+    for _ in &visible_cats {
+        widths.push(Constraint::Length(14));
+    }
 
-    let list = List::new(list_items)
-        .block(Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(border_color))
-            .title(" Categories ")
-            .title_style(Style::default().fg(border_color).bold()));
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(block)
+        .column_spacing(1);
 
-    f.render_widget(list, area);
+    f.render_widget(table, area);
 }
 
 fn draw_raw_details_tab(f: &mut Frame, app: &mut App, area: Rect) {
     if app.raw_selected_student.is_some() {
         draw_student_popup(f, app, area);
-        return;
-    }
-
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(25),
-            Constraint::Min(40),
-        ])
-        .split(area);
-
-    draw_raw_left_panel(f, app, chunks[0]);
-
-    if app.raw_selected_category.is_some() {
-        draw_sub_column_view(f, app, chunks[1]);
+    } else if app.raw_selected_category.is_some() {
+        draw_sub_column_view(f, app, area);
     } else {
-        let theme = app.theme;
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(theme.border))
-            .title(" Raw Details ")
-            .title_style(Style::default().fg(theme.border).bold());
-        f.render_widget(block, chunks[1]);
+        draw_category_view(f, app, area);
     }
 }
 
@@ -524,17 +574,8 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
     let sub_cols = data.data_mapping.get(&cat).cloned().unwrap_or_default();
     let show_total = true;
 
-    let border_color = if app.raw_right_focused {
-        category_color(&cat, &theme)
-    } else {
-        theme.border
-    };
-    
-    let title_text = if app.raw_right_focused {
-        format!(" 📋 Raw Details  ›  {}  — sub-columns (Enter: edit  Esc: back) ", cat)
-    } else {
-        format!(" 📋 Raw Details  ›  {}  (Press Right/Enter to focus) ", cat)
-    };
+    let border_color = category_color(&cat, &theme);
+    let title_text = format!(" 📋 Raw Details  ›  {}  —  sub-columns (Enter: open student  Esc: back) ", cat);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -591,7 +632,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
             .unwrap_or("")
             .to_string();
         let mut sid_style = Style::default().fg(theme.info);
-        if app.raw_right_focused && r_idx == app.cursor_row && app.cursor_col == 0 {
+        if r_idx == app.cursor_row && app.cursor_col == 0 {
             sid_style = Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
         }
         cells.push(Cell::from(sid).style(sid_style));
@@ -603,7 +644,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
             })
             .unwrap_or_default();
         let mut name_style = Style::default().fg(theme.fg);
-        if app.raw_right_focused && r_idx == app.cursor_row && app.cursor_col == 1 {
+        if r_idx == app.cursor_row && app.cursor_col == 1 {
             name_style = Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
         }
         cells.push(Cell::from(name).style(name_style));
@@ -619,7 +660,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
 
             let abs_col = frozen_count + scroll_offset + sc_offset;
             let mut style = Style::default().fg(theme.fg);
-            if app.raw_right_focused && r_idx == app.cursor_row && abs_col == app.cursor_col {
+            if r_idx == app.cursor_row && abs_col == app.cursor_col {
                 style = style.fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
             }
             cells.push(Cell::from(text).style(style));
@@ -631,7 +672,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
                 .map(|v| score_value(v))
                 .sum();
             let mut total_style = Style::default().fg(theme.success).add_modifier(Modifier::BOLD);
-            if app.raw_right_focused && r_idx == app.cursor_row && app.cursor_col == sub_cols.len() + 2 {
+            if r_idx == app.cursor_row && app.cursor_col == sub_cols.len() + 2 {
                 total_style = Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
             }
             cells.push(
@@ -640,7 +681,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
         }
 
         let mut row_style = Style::default();
-        if app.raw_right_focused && r_idx == app.cursor_row {
+        if r_idx == app.cursor_row {
             row_style = row_style.bg(theme.highlight);
         } else if r_idx % 2 == 1 {
             row_style = row_style.bg(theme.alt_row);
@@ -688,8 +729,7 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
     let name = record.get("Name").and_then(|v| v.as_str()).unwrap_or("?").to_string();
 
     let sub_cols = data.data_mapping.get(&cat).cloned().unwrap_or_default();
-    let cat_lower = cat.to_lowercase();
-    let show_total = cat_lower.contains("attendance") || cat_lower.contains("att");
+    let show_total = true;
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -724,8 +764,16 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
         );
     }
     if show_total {
+        let total_max: f64 = sub_cols.iter()
+            .filter_map(|sc| data.max_scores.get(sc))
+            .sum();
+        let total_header = if total_max > 0.0 {
+            format!("Total\n({:.0} pts)", total_max)
+        } else {
+            "Total\n(pts)".to_string()
+        };
         header_cells.push(
-            Cell::from("Total\n(pts)")
+            Cell::from(total_header)
                 .style(Style::default().fg(theme.success).add_modifier(Modifier::BOLD))
         );
     }

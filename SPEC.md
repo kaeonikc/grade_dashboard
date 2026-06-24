@@ -1,130 +1,44 @@
-# Spec: Raw Details Tab — Three-Level Drill-Down with Student Popup
+# Spec: Restore SPEC.md Three-Level Drill-Down on Raw Details Tab
 
-## Summary
+## Problem
 
-Extend the **[2] Raw Details** tab from two levels to three, with dynamic breadcrumb
-titles at every level.
+A collaborator ("Antigravity") replaced the full-screen three-level drill-down on the
+Raw Details tab with a left-panel + right-table layout.  
+The student popup (Level 2) exists in `ui.rs` but is currently unreachable because
+`raw_selected_student` is never set by the Enter handler.  
+This spec restores the original navigation hierarchy from the previous SPEC.md.
 
-### Navigation hierarchy
+---
+
+## Navigation hierarchy (to restore)
 
 ```
-Level 0 — Category Overview
-    │  Enter on any category column (col ≥ 2)
+Level 0 — Category Overview      (full screen)
+    │  Enter on col ≥ 2
     ▼
-Level 1 — Sub-Column View  (selected category)
+Level 1 — Sub-Column View        (full screen)
     │  Enter on any student row
     ▼
-Level 2 — Student Popup  (selected category × selected student)
-    │  Enter on any sub-column cell (col ≥ 2)
+Level 2 — Student Popup          (full screen, single row)
+    │  Enter on col ≥ 2
     ▼
-Level 3 — Cell Editor  (existing tui-textarea overlay)
+Level 3 — Cell Editor            (overlay, already correct)
 ```
 
-Esc ascends one level at a time.  
-Esc at Level 0 → CourseSelect screen (existing behaviour).
+Esc ascends one level.  Esc at Level 0 → CourseSelect.
 
 ---
 
-## Level descriptions
+## What to keep (no rollback)
 
-### Level 0 — Category Overview (unchanged)
-- Full-screen table: `Student ID | Name | homework | midterm | final | attendance | …`
-- Each category cell = sum of sub-scores (using `score_value()` for P/A/L/EA).
-- Title: `"📋 Raw Details  (Enter: drill into category)"`
-- Enter on col ≥ 2 → sets `raw_selected_category`, resets `cursor_col = 2`, `scroll_col_offset = 0`.
-
-### Level 1 — Sub-Column View (minor update)
-- Full-screen table: `Student ID | Name | sub1 | sub2 | … | [Total (pts)]`
-- For attendance categories only, a "Total (pts)" column is appended (existing).
-- Title: `"📋 Raw Details  ›  {category}  (Enter: open student  Esc: back)"`
-- Enter on any row → sets `raw_selected_student = Some(cursor_row)`, resets `cursor_col = 2`.
-- Esc → clears `raw_selected_category`, returns to Level 0.
-
-### Level 2 — Student Popup (new)
-- Full-screen table: same column structure as Level 1 (`sub1 | sub2 | … | [Total]`),
-  but renders **only the one selected student's row** (plus the header row).
-- Title: `"📋 Raw Details  ›  {category}  ›  {student_name}  ({student_id})  (Enter: edit  Esc: back)"`
-- Vertical navigation (j/k/↑/↓) is disabled — single row.
-- Enter on col ≥ 2 → triggers `start_editing_cell()` (existing logic; `cursor_row` is the
-  student's index in `raw_scores`, so no changes needed in `start_editing_cell()`).
-- Esc (when not in edit mode) → clears `raw_selected_student`, returns to Level 1.
-
-### Level 3 — Cell Editor (unchanged)
-- Existing tui-textarea overlay on top of whatever is rendered behind it.
-- Enter saves, Esc cancels; both return to Level 2.
-
----
-
-## State fields
-
-### `app.rs` — changes to `App` struct
-
-| Field | Type | Meaning |
-|---|---|---|
-| `raw_selected_category` | `Option<String>` | Already present. `Some(cat)` = at Level 1 or 2. |
-| `raw_selected_student` | `Option<usize>` | **New.** `Some(row_idx)` = at Level 2. |
-
-### Key-handler changes (`App::update()`)
-
-**Enter key** (tab 1, not editing):
-- If `raw_selected_student.is_some()` → already at L2: `start_editing_cell()` (col ≥ 2 guard).
-- Else if `raw_selected_category.is_some()` → at L1: set `raw_selected_student = Some(cursor_row)`, reset `cursor_col = 2`, `scroll_col_offset = 0`.
-- Else → at L0: existing logic (set `raw_selected_category`, reset cursor).
-
-**Esc key** (tab 1, not editing):
-- If `raw_selected_student.is_some()` → at L2: clear `raw_selected_student` (return to L1).
-- Else if `raw_selected_category.is_some()` → at L1: clear `raw_selected_category` (return to L0).
-- Else → at L0: `app.state = CourseSelect` (existing).
-
-**Vertical navigation** (j/k/↑/↓, tab 1):
-- If `raw_selected_student.is_some()` → no-op (single row, nowhere to move vertically).
-
-**Horizontal navigation** (`move_right()`/`move_left()`, tab 1):
-- At L2: `max_cols = data_mapping[cat].len() + 2` (same as L1 sub-column calculation).
-
-**Reset on tab switch / course reload:**
-- Clear both `raw_selected_category` and `raw_selected_student` (already handled for `raw_selected_category`; add `raw_selected_student` to the same reset sites).
-
----
-
-## UI (`ui.rs`) — changes
-
-### `draw_raw_details_tab()`
-```
-if raw_selected_student.is_some() → draw_student_popup()
-else if raw_selected_category.is_some() → draw_sub_column_view()
-else → draw_category_view()
-```
-
-### `draw_student_popup()` (new function)
-- Shares most code with `draw_sub_column_view()`.
-- `let student_row_idx = app.raw_selected_student.unwrap();`
-- Renders only `data.raw_scores[student_row_idx]` as the sole data row.
-- Header: sub-column names + max_scores (same as L1).
-- For attendance: append "Total (pts)" cell (same `show_total` logic).
-- Cursor highlight: `cursor_col` only (no row highlight needed — single row).
-- Block title: `"📋 Raw Details  ›  {cat}  ›  {name}  ({sid})  (Enter: edit  Esc: back)"`.
-- Border color: `category_color(&cat, &theme)`.
-
-### Title strings updated
-- Level 0: `" 📋 Raw Details — Category Overview (Enter: drill in) "` ← unchanged
-- Level 1: `format!(" 📋 Raw Details  ›  {}  —  sub-columns (Enter: open student  Esc: back) ", cat)`
-- Level 2: `format!(" 📋 Raw Details  ›  {}  ›  {}  ({})  (Enter: edit  Esc: back) ", cat, name, sid)`
-
-### `draw_footer()` — legend for tab 1
-| State | Legend |
+| Item | Why |
 |---|---|
-| L0 | `[Enter] Drill Into Category` |
-| L1 | `[Enter] Open Student  [Esc] Back to Categories` |
-| L2 | `[Enter] Edit Score  [Esc] Back to Sub-columns` |
-
----
-
-## Out of scope
-- Floating/overlay popup (non-full-screen) — user chose full-screen.
-- "All categories" view for a single student (full student card).
-- Keyboard shortcut to jump from L0 directly to L2.
-- Search/filter students by ID or name.
+| `draw_edit_overlay` redesign (student info + live grade preview) | Useful; keep as-is |
+| `show_total = true` in `draw_sub_column_view` | Always show Total column |
+| Total max pts in header (`"Total\n({:.0} pts)"`) | Keep |
+| Total column cursor-highlight code | Keep |
+| `draw_student_popup` function | Already correct; just needs to be reachable |
+| Footer legend text (already references L0/L1/L2 correctly) | Keep |
 
 ---
 
@@ -132,27 +46,239 @@ else → draw_category_view()
 
 | File | Change |
 |---|---|
-| `rust_tui/src/app.rs` | Add `raw_selected_student: Option<usize>`; update Enter/Esc/move handlers |
-| `rust_tui/src/ui.rs` | Add `draw_student_popup()`; update titles in L1; update footer legends |
+| `rust_tui/src/app.rs` | Remove left-panel state; fix Enter/Esc/move handlers |
+| `rust_tui/src/ui.rs` | Remove `draw_raw_left_panel`; add `draw_category_view`; fix `draw_sub_column_view`; fix `draw_raw_details_tab` dispatch |
 
-No changes needed to `bridge.rs`, `types.rs`, `style.rs`, or any Python files.
+No changes to `bridge.rs`, `types.rs`, `style.rs`, or Python files.
+
+---
+
+## app.rs changes
+
+### Fields to remove from `App` struct
+
+```rust
+// DELETE these two fields:
+pub raw_category_index: usize,
+pub raw_right_focused: bool,
+```
+
+Remove their initializers in `App::new()` and all reset sites (`CourseDataLoaded`,
+`Tab`, `BackTab`).
+
+### `sync_raw_category()` — delete entirely
+
+This method was only used to keep `raw_selected_category` in sync with
+`raw_category_index`.  After removal, `raw_selected_category` is set exclusively
+by the Enter handler at Level 0.
+
+### `move_up` / `move_down`
+
+Remove the branch that checks `!self.raw_right_focused` for left-panel navigation:
+
+```rust
+// DELETE these blocks from move_up and move_down:
+if self.active_tab == 1 && !self.raw_right_focused {
+    // Left panel is focused: navigate categories
+    ...
+    return;
+}
+```
+
+The remaining `cursor_row` movement already handles Level 0, 1, and 2 correctly
+(Level 2 still has the `raw_selected_student.is_some()` early-return guard).
+
+### `move_left`
+
+Remove the entire `if self.active_tab == 1 { ... return; }` early-return block that
+handled left/right panel focus.  Replace with standard col-boundary movement:
+
+```rust
+pub fn move_left(&mut self) {
+    if self.state == AppState::Dashboard && !self.editing && !self.editing_weights && !self.editing_boundaries {
+        if self.cursor_col > 0 {
+            self.cursor_col -= 1;
+            self.adjust_scroll_col();
+        }
+    }
+}
+```
+
+### `move_right`
+
+Replace the tab-1 branch with three-level aware max_cols:
+
+```rust
+if self.active_tab == 1 {
+    let max_cols = match &self.course_data {
+        Some(data) => {
+            if self.raw_selected_student.is_some() || self.raw_selected_category.is_some() {
+                // Level 1 or 2: Student ID + Name + sub_cols + Total
+                let cat = self.raw_selected_category.as_deref().unwrap_or("");
+                data.data_mapping.get(cat).map(|v| v.len()).unwrap_or(0) + 3
+            } else {
+                // Level 0: Student ID + Name + one col per category
+                self.get_categories().len() + 2
+            }
+        }
+        None => 0,
+    };
+    if self.cursor_col + 1 < max_cols {
+        self.cursor_col += 1;
+        self.adjust_scroll_col();
+    }
+    return;
+}
+```
+
+### Enter handler (tab 1)
+
+Replace the current block with:
+
+```rust
+if self.active_tab == 1 {
+    if self.raw_selected_student.is_some() {
+        // Level 2 → edit cell (col ≥ 2 guard is already in start_editing_cell)
+        self.start_editing_cell();
+    } else if self.raw_selected_category.is_some() {
+        // Level 1 → open student popup
+        self.raw_selected_student = Some(self.cursor_row);
+        self.cursor_col = 2;
+        self.scroll_col_offset = 2;
+    } else {
+        // Level 0 → drill into category (only if on a category column)
+        if self.cursor_col >= 2 {
+            let cats = self.get_categories();
+            let cat_idx = self.cursor_col - 2;
+            if cat_idx < cats.len() {
+                self.raw_selected_category = Some(cats[cat_idx].clone());
+                self.cursor_col = 2;
+                self.scroll_col_offset = 2;
+            }
+        }
+    }
+}
+```
+
+### Esc handler (tab 1)
+
+```rust
+if self.active_tab == 1 {
+    if self.raw_selected_student.is_some() {
+        // Level 2 → back to Level 1
+        self.raw_selected_student = None;
+        self.cursor_col = 2;
+        self.scroll_col_offset = 2;
+    } else if self.raw_selected_category.is_some() {
+        // Level 1 → back to Level 0
+        self.raw_selected_category = None;
+        self.cursor_col = 2;
+        self.scroll_col_offset = 0;
+    } else {
+        // Level 0 → CourseSelect
+        self.state = AppState::CourseSelect;
+        self.course_data = None;
+        self.load_courses();
+    }
+}
+```
+
+### Reset sites (Tab / BackTab / CourseDataLoaded)
+
+Remove `raw_category_index = 0`, `raw_right_focused = false`, and
+`sync_raw_category()` calls.  Keep `raw_selected_category = None` and
+`raw_selected_student = None` resets.
+
+---
+
+## ui.rs changes
+
+### Delete `draw_raw_left_panel`
+
+Remove the entire function (lines ~415–450).
+
+### `draw_raw_details_tab` — full-screen dispatch
+
+```rust
+fn draw_raw_details_tab(f: &mut Frame, app: &mut App, area: Rect) {
+    if app.raw_selected_student.is_some() {
+        draw_student_popup(f, app, area);
+    } else if app.raw_selected_category.is_some() {
+        draw_sub_column_view(f, app, area);
+    } else {
+        draw_category_view(f, app, area);
+    }
+}
+```
+
+### `draw_sub_column_view` — remove `raw_right_focused` references
+
+Replace every occurrence of `app.raw_right_focused` in this function:
+
+1. **Border color** → always `category_color(&cat, &theme)` (was conditional)
+2. **Title** → `format!(" 📋 Raw Details  ›  {}  —  sub-columns (Enter: open student  Esc: back) ", cat)`
+3. **Cursor/row highlights** → remove the `app.raw_right_focused &&` guard; always highlight
+   on `r_idx == app.cursor_row` and the matching column
+
+### `draw_category_view` (new — Level 0)
+
+Full-screen table: `Student ID | Name | cat1 | cat2 | …`
+
+- Each category cell = sum of sub-scores via `score_value()`.
+- Columns Student ID and Name are pinned (not scrolled); category columns follow the
+  same `scroll_col_offset` logic as `draw_sub_column_view`.
+- Cursor highlight on (cursor_row, cursor_col); row highlight on cursor_row.
+- Alternating row bg on even/odd rows.
+- Block title: `" 📋 Raw Details — Category Overview (Enter: drill in) "` in `theme.info` color.
+- Border color: `theme.info` always.
+- Column widths: Student ID 12, Name 28, each category 12.
+
+Skeleton:
+
+```rust
+fn draw_category_view(f: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme;
+    let data = match &app.course_data { Some(d) => d, None => return };
+    let cats = app.get_categories();
+
+    let frozen_count = 2usize;
+    let scroll_offset = app.scroll_col_offset.saturating_sub(frozen_count);
+    let max_scroll_cats = 5usize;
+    let scroll_end = std::cmp::min(scroll_offset + max_scroll_cats, cats.len());
+    let visible_cats = &cats[scroll_offset..scroll_end];
+
+    // header: Student ID | Name | visible category names
+    // rows: one per raw_scores entry, category cell = sum via score_value()
+    // widths: [12, 28, 12 × visible_cats.len()]
+    // highlight: same cursor_row / cursor_col logic as draw_sub_column_view
+}
+```
+
+---
+
+## Out of scope
+
+- Left-panel layout (removed, not restored).
+- "All categories" card for a single student.
+- Jump shortcut from L0 to L2.
 
 ---
 
 ## End-to-end verification
 
-1. Build and run from project root.
-2. Select PHYS1120 course.
-3. Press **Tab** → Raw Details (L0). Title: "Category Overview".
-4. Press **→** three times to highlight the `attendance` column; press **Enter**.
-   - Title changes to "Raw Details › attendance — sub-columns".
-5. Press **↓** twice to reach student 69143303. Press **Enter**.
-   - Title changes to "Raw Details › attendance › นางสาวสุปวีร์ … (69143303)".
-   - Table shows one row: P, P, L, …, Total = 2.8.
-6. Press **→** to col 2 (8 Jun 2026); press **Enter**.
-   - Cell editor opens with current value "P".
-7. Clear and type `A`; press **Enter** to save.
-   - Student popup refreshes showing `A` in that cell and Total changes to 1.8.
-8. Press **Esc** → back to L1 sub-column view (attendance).
-9. Press **Esc** → back to L0 category overview.
+1. `cd rust_tui && cargo build --release && cd ..`
+2. Run `./rust_tui/target/release/rust_tui`, select PHYS1120 course.
+3. Press **Tab** to reach Raw Details tab.
+   - Screen shows full-width table: Student ID | Name | homework | midterm | final | attendance.
+   - Title: "Category Overview (Enter: drill in)".
+4. Press **→** to highlight `attendance` column (col 4 or wherever it falls); press **Enter**.
+   - Title changes to "📋 Raw Details  ›  attendance — sub-columns (Enter: open student  Esc: back)".
+5. Press **↓** twice; press **Enter**.
+   - Title changes to "📋 Raw Details  ›  attendance  ›  {name}  ({sid})  (Enter: edit  Esc: back)".
+   - Table shows ONE student row only.
+6. Press **→** to col 2; press **Enter**.
+   - Cell editor opens over the student popup.
+7. Type a new value; press **Enter** to save.
+8. Press **Esc** → back to Level 1 (sub-column view).
+9. Press **Esc** → back to Level 0 (category overview).
 10. Press **Esc** → back to CourseSelect screen.
