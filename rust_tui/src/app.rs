@@ -82,6 +82,9 @@ pub struct App {
 
     // Reload behaviour
     pub preserve_nav_on_reload: bool,
+
+    // Viewport height for scroll calculation (updated each render frame)
+    pub table_visible_rows: usize,
 }
 
 impl App {
@@ -124,6 +127,7 @@ impl App {
             editing_attendance: false,
             attendance_index: 0,
             preserve_nav_on_reload: false,
+            table_visible_rows: 15,
         }
     }
 
@@ -576,9 +580,7 @@ impl App {
     }
 
     fn adjust_scroll_row(&mut self) {
-        // Simple viewport scrolling calculation
-        // Typically, table displays around 12-16 rows on screen depending on layout size
-        let visible_rows = 15; 
+        let visible_rows = self.table_visible_rows.max(1);
         if self.cursor_row < self.scroll_row_offset {
             self.scroll_row_offset = self.cursor_row;
         } else if self.cursor_row >= self.scroll_row_offset + visible_rows {

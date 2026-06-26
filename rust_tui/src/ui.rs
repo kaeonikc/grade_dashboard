@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, Wrap},
+    widgets::{Block, BorderType, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, TableState, Wrap},
     Frame,
 };
 use crate::app::{App, AppState};
@@ -259,15 +259,29 @@ fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
         None => return,
     };
 
+    // area.height - 2 borders - 3 header (height=2 + bottom_margin=1)
+    app.table_visible_rows = (area.height as usize).saturating_sub(5).max(1);
+
+    let num_col_width = format!("{}", data.student_grades.len()).len().max(1) as u16 + 1;
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme.border))
         .title(" 📋 Course Grades Summary ")
-        .title_style(Style::default().fg(theme.info).bold());
+        .title_style(Style::default().fg(theme.info).bold())
+        .title_top(
+            Line::from(Span::styled(
+                format!(" [{}/{}] ", app.cursor_row + 1, data.student_grades.len()),
+                Style::default().fg(theme.key_accent).bold(),
+            ))
+            .right_aligned(),
+        );
 
     // Prepare table headers
-    let header_cells = data.summary_columns.iter().map(|h| {
+    let num_header = Cell::from("#\n")
+        .style(Style::default().fg(theme.inactive_tab).add_modifier(Modifier::BOLD));
+    let data_header_cells = data.summary_columns.iter().map(|h| {
         if h.ends_with("_pct") {
             let cat = h.trim_end_matches("_pct");
             let cat_lower = cat.to_lowercase();
@@ -296,7 +310,8 @@ fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
                 .style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD))
         }
     });
-    
+    let header_cells: Vec<Cell> = std::iter::once(num_header).chain(data_header_cells).collect();
+
     let header = Row::new(header_cells).height(2).bottom_margin(1).style(Style::default().bg(theme.alt_row));
 
     // Prepare rows
@@ -305,7 +320,9 @@ fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .enumerate()
         .map(|(r_idx, record)| {
-            let cells = data.summary_columns.iter().map(|col_name| {
+            let num_cell = Cell::from(format!("{}", r_idx + 1))
+                .style(Style::default().fg(theme.inactive_tab));
+            let data_cells = data.summary_columns.iter().map(|col_name| {
                 let cell_val = record.get(col_name).unwrap_or(&serde_json::Value::Null);
                 let text = match cell_val {
                     serde_json::Value::Null => "".to_string(),
@@ -345,6 +362,7 @@ fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
 
                 Cell::from(text).style(cell_style)
             });
+            let cells: Vec<Cell> = std::iter::once(num_cell).chain(data_cells).collect();
 
             let mut row_style = Style::default();
             if r_idx == app.cursor_row {
@@ -352,7 +370,7 @@ fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
             } else if r_idx % 2 == 1 {
                 row_style = row_style.bg(theme.alt_row);
             }
-            
+
             Row::new(cells).style(row_style).height(1)
         })
         .collect();
@@ -377,15 +395,15 @@ fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let inner_width = area.width.saturating_sub(2) as usize; // subtract block borders
     let n_cols = data.summary_columns.len();
     let n_other_cols = n_cols.saturating_sub(3); // all cols except StudentID, Name, Grade
-    let spacings = n_cols.saturating_sub(1);     // column_spacing(1) × (n_cols - 1)
-    let fixed = 12usize + name_col_width as usize + 7;
+    let spacings = n_cols;                        // column_spacing(1) × (n_cols+1 total cols − 1)
+    let fixed = num_col_width as usize + 12usize + name_col_width as usize + 7;
     let score_col_width = if n_other_cols > 0 && inner_width > fixed + spacings {
         ((inner_width - fixed - spacings) / n_other_cols).max(6) as u16
     } else {
         6u16
     };
 
-    let mut widths = vec![];
+    let mut widths = vec![Constraint::Length(num_col_width)];
     for col_name in &data.summary_columns {
         if col_name == "Student ID" {
             widths.push(Constraint::Length(12));
@@ -403,7 +421,8 @@ fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
         .block(block)
         .column_spacing(1);
 
-    f.render_widget(table, area);
+    let mut table_state = TableState::default().with_offset(app.scroll_row_offset);
+    f.render_stateful_widget(table, area, &mut table_state);
 }
 
 fn draw_raw_left_panel(f: &mut Frame, app: &mut App, area: Rect) {
@@ -672,6 +691,11 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
         None => return,
     };
 
+    // area.height - 2 borders - 3 header (height=2 + bottom_margin=1)
+    app.table_visible_rows = (area.height as usize).saturating_sub(5).max(1);
+
+    let num_col_width = format!("{}", data.raw_scores.len()).len().max(1) as u16 + 1;
+
     let sub_cols = data.data_mapping.get(&cat).cloned().unwrap_or_default();
     let show_total = true;
     let is_attendance = cat.to_lowercase().contains("attendance");
@@ -708,7 +732,14 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color))
         .title(title_text)
-        .title_style(Style::default().fg(border_color).bold());
+        .title_style(Style::default().fg(border_color).bold())
+        .title_top(
+            Line::from(Span::styled(
+                format!(" [{}/{}] ", app.cursor_row + 1, data.raw_scores.len()),
+                Style::default().fg(theme.key_accent).bold(),
+            ))
+            .right_aligned(),
+        );
 
     // Build visible column indices: frozen (0,1) + scrollable sub-cols
     let frozen_count = 2usize;
@@ -718,6 +749,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Header
     let mut header_cells = vec![
+        Cell::from("#\n").style(Style::default().fg(theme.inactive_tab).add_modifier(Modifier::BOLD)),
         Cell::from("Student ID\n").style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD)),
         Cell::from("Name\n").style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD)),
     ];
@@ -761,7 +793,9 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Rows
     let rows: Vec<Row> = data.raw_scores.iter().enumerate().map(|(r_idx, record)| {
-        let mut cells = vec![];
+        let mut cells = vec![
+            Cell::from(format!("{}", r_idx + 1)).style(Style::default().fg(theme.inactive_tab)),
+        ];
 
         let sid = record.get("Student ID")
             .and_then(|v| v.as_str())
@@ -838,7 +872,11 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
     }).collect();
 
     // Widths
-    let mut widths = vec![Constraint::Length(12), Constraint::Length(name_col_width)];
+    let mut widths = vec![
+        Constraint::Length(num_col_width),
+        Constraint::Length(12),
+        Constraint::Length(name_col_width),
+    ];
     for _ in visible_sub {
         widths.push(Constraint::Length(sub_col_width));
     }
@@ -851,7 +889,8 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
         .block(block)
         .column_spacing(if is_attendance { 0 } else { 1 });
 
-    f.render_widget(table, area);
+    let mut table_state = TableState::default().with_offset(app.scroll_row_offset);
+    f.render_stateful_widget(table, area, &mut table_state);
 }
 
 fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {

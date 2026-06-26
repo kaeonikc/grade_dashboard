@@ -712,3 +712,557 @@ so no extra clamping is needed there.
 6. The edited cell displays the new value.
 7. **Initial load regression:** press Esc back to course select, reload the course.
    The view resets to the left panel on the first category (homework) — no state carryover.
+
+---
+
+## 10 — Fix student row cut-off in Tab [1] and Tab [2] when student count exceeds window height
+
+### Root cause
+
+Both `draw_summary_tab` (Tab [1]) and `draw_sub_column_view` (Tab [2] right panel) use
+`f.render_widget(table, area)`. Ratatui's non-stateful `Table` render simply clips rows
+that don't fit in the area — students beyond the visible height are silently dropped.
+
+`App` already tracks `cursor_row` and `scroll_row_offset`, and `adjust_scroll_row()`
+keeps them in sync, but the offset is never passed to the renderer. Additionally,
+`adjust_scroll_row()` hard-codes `visible_rows = 15` instead of using the actual
+rendered area height, so scrolling triggers at the wrong point on short or tall terminals.
+
+### Desired behaviour
+
+- Up/Down (or j/k) in Tab [1] and Tab [2] scrolls the table so the student list is always
+  fully reachable regardless of class size or terminal height.
+- Tab [1] has no visible row-cursor highlight (it is a read-only summary view); scrolling
+  moves the viewport without highlighting a row.
+- Tab [2] right panel keeps its existing cursor highlight on `cursor_row`.
+- Scroll tracks the real terminal height — no magic numbers.
+
+### Changes
+
+#### `rust_tui/src/app.rs`
+
+**New field on `App`:**
+```rust
+pub table_visible_rows: usize,
+```
+Initialise to `15` in `App::new()` (safe fallback before the first render).
+
+**`adjust_scroll_row()` — replace hard-coded constant:**
+```rust
+fn adjust_scroll_row(&mut self) {
+    let visible_rows = self.table_visible_rows.max(1);
+    if self.cursor_row < self.scroll_row_offset {
+        self.scroll_row_offset = self.cursor_row;
+    } else if self.cursor_row >= self.scroll_row_offset + visible_rows {
+        self.scroll_row_offset = self.cursor_row - visible_rows + 1;
+    }
+}
+```
+
+#### `rust_tui/src/ui.rs`
+
+**New import** — add `TableState` to the existing ratatui `widgets` import line:
+```rust
+widgets::{Block, BorderType, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, TableState, Wrap},
+```
+
+**`draw_summary_tab`:**
+
+1. Before building rows, store the visible row count in app state:
+   ```rust
+   // area.height - 2 borders - 3 header (height=2 + bottom_margin=1)
+   app.table_visible_rows = (area.height as usize).saturating_sub(5).max(1);
+   ```
+
+2. In the row-building loop, remove the cursor-row highlight (Tab [1] is read-only).
+   Change:
+   ```rust
+   if r_idx == app.cursor_row {
+       row_style = row_style.bg(theme.highlight);
+   } else if r_idx % 2 == 1 {
+       row_style = row_style.bg(theme.alt_row);
+   }
+   ```
+   To:
+   ```rust
+   if r_idx % 2 == 1 {
+       row_style = row_style.bg(theme.alt_row);
+   }
+   ```
+
+3. Replace the final render call:
+   ```rust
+   // Before:
+   f.render_widget(table, area);
+
+   // After:
+   let mut table_state = TableState::default().with_offset(app.scroll_row_offset);
+   f.render_stateful_widget(table, area, &mut table_state);
+   ```
+
+**`draw_sub_column_view`:**
+
+1. Before building rows, store the visible row count:
+   ```rust
+   app.table_visible_rows = (area.height as usize).saturating_sub(5).max(1);
+   ```
+   Place this after the `cat` and `sub_cols` bindings, before any row construction.
+
+2. Replace the final render call:
+   ```rust
+   // Before:
+   f.render_widget(table, area);
+
+   // After:
+   let mut table_state = TableState::default().with_offset(app.scroll_row_offset);
+   f.render_stateful_widget(table, area, &mut table_state);
+   ```
+   The existing per-row cursor highlight (`row_style.bg(theme.highlight)`) is unchanged
+   — it continues to work because all rows are still in the `rows` Vec; ratatui only
+   adjusts which slice is rendered from the given offset.
+
+### Out of scope
+
+- Tab [3] (Distribution) and Tab [4] (Roundup) — neither displays a per-student scrollable
+  list, so no changes needed.
+- The left category panel in Tab [2] — the category count is small enough that overflow is
+  not a practical issue.
+- Horizontal (column) scrolling — that is handled separately by `scroll_col_offset` and is
+  already working.
+- The `draw_student_popup` (L2) — that view is no longer reachable via normal navigation
+  (per §8), but if triggered, it renders a single student row so no scrolling is needed.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `rust_tui/src/app.rs` | New field `table_visible_rows`; `adjust_scroll_row` uses it instead of hard-coded `15` |
+| `rust_tui/src/ui.rs` | Add `TableState` import; `draw_summary_tab`: set visible rows, remove cursor highlight, use `render_stateful_widget`; `draw_sub_column_view`: set visible rows, use `render_stateful_widget` |
+
+### End-to-end verification
+
+1. Build: `cargo build --release` inside `rust_tui/`.
+2. Run from project root with a course that has ≥20 students.
+3. **Tab [1] — Summary:**
+   - Press Down (or j) repeatedly.
+   - Students below the initial visible area scroll into view; no rows are clipped.
+   - No row is highlighted as the cursor moves (read-only view).
+   - Press Up (or k) to scroll back — the first student returns to the top.
+4. **Tab [2] — Raw Details:**
+   - Enter the right panel for any category, press Down repeatedly.
+   - The cursor row stays highlighted and visible; students below the fold scroll in.
+   - The cursor never disappears off the bottom of the table.
+5. **Terminal resize:** shrink the terminal to ~20 rows, then scroll through students in
+   both tabs — viewport adjusts to the real height (no off-by-15 artifacts).
+6. **Regression — Tab [2] edit:** edit a score cell; after reload, cursor position is
+   preserved (§9 behaviour unchanged).
+
+---
+
+## 11 — Replace stale `grade-tui` binary copy with a symlink
+
+### Root cause
+
+`grade-tui` is a binary copy of a previous release build (Jun 25 01:11). Every
+`cargo build --release` writes to `rust_tui/target/release/rust_tui` but does NOT
+update `grade-tui`, so the shortcut silently runs an outdated binary.
+
+This is the reason the §10 scroll fix appeared to have no effect: the user ran
+`./grade-tui`, which still contains the pre-fix code. The new binary was never
+executed.
+
+### Fix
+
+Replace the binary copy with a symlink that always resolves to the latest release
+build:
+
+```bash
+rm grade-tui
+ln -s rust_tui/target/release/rust_tui grade-tui
+```
+
+After this, `cargo build --release` inside `rust_tui/` is the only step required to
+deploy any future change.
+
+### Files changed
+
+| Path | Change |
+|---|---|
+| `grade-tui` | Replaced binary copy with relative symlink → `rust_tui/target/release/rust_tui` |
+
+### Out of scope
+
+- The `rust_tui/Cargo.toml` build configuration — no changes needed.
+- Any changes to `app.rs` or `ui.rs` — §10 already contains the scroll fix; this
+  spec only ensures the fix is deployed via the shortcut binary.
+- The CLAUDE.md instruction "run from project root" — a symlink does not affect CWD.
+
+### End-to-end verification
+
+1. Run `rm grade-tui && ln -s rust_tui/target/release/rust_tui grade-tui` from the
+   project root.
+2. Confirm: `ls -la grade-tui` shows `grade-tui -> rust_tui/target/release/rust_tui`.
+3. Run `./grade-tui` from project root, load a course with ≥20 students.
+4. **Tab [1] — Summary:** press Down/j repeatedly past the initial viewport. Students
+   that were previously cut off scroll into view; the top rows scroll off. No row is
+   permanently frozen or missing.
+5. **Tab [2] — Raw Details:** select a category, focus the right panel (→). Press Down
+   past the last visible row. The cursor row stays visible at the bottom of the
+   viewport; overflow student rows scroll into view. The 'Student' info panel updates
+   correctly throughout.
+6. Press Up/k — the list scrolls back toward the top without gaps or jumps.
+7. **No regression:** tab-switch resets the position to row 0 (correct); editing a
+   cell still preserves position after reload (§9 behaviour).
+
+---
+
+## 12 — Restore cursor row highlight in Tab [1] Summary
+
+### Context
+
+§10 removed the cursor row highlight from Tab [1] under the assumption that the
+tab was "read-only with no row selection." In practice this made Tab [1] feel broken:
+pressing Up/Down had no visual feedback. The user wants the same highlight behaviour
+as Tab [2].
+
+### Root cause / what to change
+
+In `draw_summary_tab` (`rust_tui/src/ui.rs`), the per-row style block currently is:
+
+```rust
+let mut row_style = Style::default();
+if r_idx % 2 == 1 {
+    row_style = row_style.bg(theme.alt_row);
+}
+```
+
+The `if r_idx == app.cursor_row` branch was removed in §10 and must be restored.
+
+### Fix
+
+Replace that block with:
+
+```rust
+let mut row_style = Style::default();
+if r_idx == app.cursor_row {
+    row_style = row_style.bg(theme.highlight);
+} else if r_idx % 2 == 1 {
+    row_style = row_style.bg(theme.alt_row);
+}
+```
+
+This is identical to the original code that existed before §10 and matches the
+highlight style used in Tab [2].
+
+### Why this works with `render_stateful_widget`
+
+The highlight style is baked into each `Row`'s style at build time (using the
+absolute `r_idx`). The `render_stateful_widget` call with
+`TableState::default().with_offset(scroll_row_offset)` renders rows starting from
+`scroll_row_offset`, so the row whose `r_idx == cursor_row` appears at the correct
+visual position inside the viewport — same mechanism Tab [2] already uses.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `rust_tui/src/ui.rs` | `draw_summary_tab`: restore `if r_idx == app.cursor_row` highlight block |
+
+### Out of scope
+
+- Any change to Tab [2] — it already has the correct highlight.
+- Adding a Student info panel to Tab [1] — not requested.
+- Making Tab [1] editable — it remains read-only (no edit key handler).
+
+### End-to-end verification
+
+1. Build: `cargo build --release` inside `rust_tui/`.
+2. Run `./grade-tui` from project root, load a course.
+3. Switch to Tab [1] (Summary).
+4. Press Down/j: the **first row is highlighted** at launch; the highlight moves to
+   the next row on each key press.
+5. Press Down past the last visible row: the viewport scrolls and the cursor stays
+   visible at the bottom (§10 scroll behaviour preserved).
+6. Press Up/k: the highlight moves back up; the viewport scrolls back toward the top.
+7. **Alternating rows:** non-highlighted rows still alternate between default and
+   `alt_row` background — the highlight overrides only the cursor row.
+8. **Tab switch:** switching to Tab [2] and back resets cursor to row 0 with
+   highlight on the first row.
+
+---
+
+## 13 — Row number column in Tab [1] and Tab [2]
+
+### Summary
+
+Add a `#` column as the leftmost column in both the Summary tab (Tab [1]) and the
+Raw Details right panel (Tab [2]). Each cell shows the student's 1-based absolute
+position in the list (student at index 0 → "1", index 1 → "2", …). The number is
+fixed to the student, not to the viewport position, so scrolling does not reset it.
+Style: `theme.inactive_tab` (dim) to visually separate reference numbers from data.
+
+### Column properties
+
+| Property | Value |
+|---|---|
+| Header | `#` (two-line header: `"#\n"` to match `height(2)`) |
+| Values | `r_idx + 1` (1-based, absolute) |
+| Style | `Style::default().fg(theme.inactive_tab)` |
+| Width | `format!("{}", total_students).len().max(1) as u16 + 1` |
+| Min width | 3 (covers `#` header + students up to 99) |
+| Position | Leftmost column, before Student ID |
+| Navigation | Visual only — `cursor_col` and edit logic unchanged |
+
+Width examples: 25 students → `len("25")=2 + 1 = 3`; 100 students → `4`.
+
+---
+
+### `rust_tui/src/ui.rs` — `draw_summary_tab`
+
+#### 1. Compute column width (after `app.table_visible_rows` line)
+
+```rust
+let num_col_width = format!("{}", data.student_grades.len()).len().max(1) as u16 + 1;
+```
+
+#### 2. Header — prepend `#` cell
+
+The existing code builds `header_cells` via `.map()` on `data.summary_columns`. Change
+to collect into a `Vec` and prepend:
+
+```rust
+let num_header = Cell::from("#\n")
+    .style(Style::default().fg(theme.inactive_tab).add_modifier(Modifier::BOLD));
+let data_header_cells = data.summary_columns.iter().map(|h| { /* unchanged */ });
+let header_cells: Vec<Cell> = std::iter::once(num_header)
+    .chain(data_header_cells)
+    .collect();
+```
+
+#### 3. Rows — prepend `#` cell per row
+
+Inside the `.enumerate().map(|(r_idx, record)| { … })` closure:
+
+```rust
+let num_cell = Cell::from(format!("{}", r_idx + 1))
+    .style(Style::default().fg(theme.inactive_tab));
+// build existing `cells` iterator as before ...
+let all_cells: Vec<Cell> = std::iter::once(num_cell).chain(cells).collect();
+// ...
+Row::new(all_cells).style(row_style).height(1)
+```
+
+#### 4. Update dynamic width calculation
+
+The current fixed-width constants assume columns: StudentID (12) + Name + Grade (7).
+The `#` column adds `num_col_width` to the fixed total and one more spacing unit.
+
+```rust
+// Before:
+let spacings = n_cols.saturating_sub(1);
+let fixed = 12usize + name_col_width as usize + 7;
+
+// After (total rendered columns = n_cols + 1):
+let spacings = n_cols; // (n_cols + 1) columns → n_cols spacings
+let fixed = num_col_width as usize + 12usize + name_col_width as usize + 7;
+```
+
+#### 5. Widths vec — insert `#` width first
+
+```rust
+let mut widths = vec![Constraint::Length(num_col_width)]; // # column
+for col_name in &data.summary_columns {
+    // existing Student ID / Name / Grade / score_col_width logic unchanged
+}
+```
+
+---
+
+### `rust_tui/src/ui.rs` — `draw_sub_column_view`
+
+#### 1. Compute column width (after `app.table_visible_rows` line)
+
+```rust
+let num_col_width = format!("{}", data.raw_scores.len()).len().max(1) as u16 + 1;
+```
+
+#### 2. Header — prepend `#` cell
+
+Locate the `header_cells` vec construction (the lines building
+`Cell::from("Student ID\n")` and `Cell::from("Name\n")`). Prepend:
+
+```rust
+let mut header_cells = vec![
+    Cell::from("#\n").style(Style::default().fg(theme.inactive_tab).add_modifier(Modifier::BOLD)),
+    // existing Student ID and Name header cells follow unchanged
+];
+```
+
+#### 3. Rows — prepend `#` cell per row
+
+Inside the row-building loop, before the existing `cells` vec is built:
+
+```rust
+let num_cell = Cell::from(format!("{}", r_idx + 1))
+    .style(Style::default().fg(theme.inactive_tab));
+// prepend to the row's cells vec
+let mut cells = vec![num_cell, /* existing StudentID cell */, /* existing Name cell */, ...];
+```
+
+In practice: build the `num_cell` first, then `.chain()` or `insert(0, ...)` into the
+existing cells construction — whichever fits the local pattern cleanly.
+
+#### 4. Widths vec — insert `#` width first
+
+```rust
+let mut widths = vec![
+    Constraint::Length(num_col_width), // # column (new)
+    Constraint::Length(12),            // Student ID (unchanged)
+    Constraint::Length(name_col_width), // Name (unchanged)
+];
+// sub-col widths and Total follow unchanged
+```
+
+---
+
+### What does NOT change
+
+- `app.rs` — no state changes; `cursor_col` indexing is unchanged (col 0 = Student ID).
+- `draw_student_popup` (L2) — not reachable via normal navigation (§8); no change.
+- Tab [3] Distribution, Tab [4] Roundup — not requested.
+- Column cursor navigation in Tab [2] — `cursor_col == 0` still means Student ID,
+  `cursor_col == 1` still means Name. The `#` column is never a cursor target.
+- Edit key handling — unchanged; editing still uses `cursor_col` relative to the data.
+
+---
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `rust_tui/src/ui.rs` | `draw_summary_tab`: compute `num_col_width`; prepend `#` header + row cell; adjust `fixed`/`spacings`; insert `#` constraint in `widths` |
+| `rust_tui/src/ui.rs` | `draw_sub_column_view`: compute `num_col_width`; prepend `#` header + row cell; insert `#` constraint in `widths` |
+
+---
+
+### End-to-end verification
+
+1. Build: `cargo build --release` inside `rust_tui/`.
+2. Run `./grade-tui`, load a course with ≥10 students.
+3. **Tab [1] — Summary:**
+   - A `#` column appears as the leftmost column with a dim color.
+   - First student shows `1`, second `2`, etc.
+   - Scroll down: row numbers continue from where the visible rows start
+     (e.g., if scrolled to show students 6–20, the numbers shown are 6–20, not 1–15).
+   - The remaining score columns still fill the available width (no layout overflow).
+4. **Tab [2] — Raw Details:**
+   - Select any category, focus the right panel.
+   - A `#` column appears leftmost with a dim color.
+   - Row numbers match Tab [1] for the same students.
+   - Navigating with Up/Down does not move the cursor into the `#` column.
+   - Editing (pressing Enter on a data cell) still works correctly.
+5. **Column widths:** for a course with ≥100 students, the `#` column is 4 characters
+   wide; for <100 students, 3 characters wide.
+6. **No layout overflow:** the table fits within the terminal width (score columns
+   shrink to accommodate the new `#` column).
+
+---
+
+## 14 — Scroll position indicator `[N/Total]` in the block title
+
+### Summary
+
+Display a dynamic `[18/48]` indicator on the **right side of the top border** of the
+table block in Tab [1] (Summary) and Tab [2] (Raw Details right panel). The number
+updates on every cursor move. Color: `theme.key_accent` (yellow/gold), bold.
+
+- `N` = `app.cursor_row + 1` (1-based, absolute, same value as the `#` column)
+- `Total` = total number of students in the course
+
+### How ratatui 0.30 supports this
+
+`block::Title` was removed in ratatui 0.30. Right-aligned block titles are now created
+by passing a `Line` with `.right_aligned()` to `.title_top()`. Both the left-side
+`.title(text)` and a right-side `.title_top(line.right_aligned())` can coexist on the
+same block border — ratatui renders them at their respective edges.
+
+No new imports are required: `Line`, `Span`, `Style`, and `Alignment` are already
+imported in `ui.rs`.
+
+### Changes — `rust_tui/src/ui.rs` only
+
+#### `draw_summary_tab`
+
+Append `.title_top(...)` to the existing block builder chain:
+
+```rust
+let block = Block::default()
+    .borders(Borders::ALL)
+    .border_type(BorderType::Rounded)
+    .border_style(Style::default().fg(theme.border))
+    .title(" 📋 Course Grades Summary ")
+    .title_style(Style::default().fg(theme.info).bold())
+    .title_top(
+        Line::from(Span::styled(
+            format!(" [{}/{}] ", app.cursor_row + 1, data.student_grades.len()),
+            Style::default().fg(theme.key_accent).bold(),
+        ))
+        .right_aligned(),
+    );
+```
+
+#### `draw_sub_column_view`
+
+The block is built from a dynamic `title_text` string. Append `.title_top(...)`:
+
+```rust
+let block = Block::default()
+    .borders(Borders::ALL)
+    .border_type(BorderType::Rounded)
+    .border_style(Style::default().fg(border_color))
+    .title(title_text)
+    .title_style(Style::default().fg(border_color).bold())
+    .title_top(
+        Line::from(Span::styled(
+            format!(" [{}/{}] ", app.cursor_row + 1, data.raw_scores.len()),
+            Style::default().fg(theme.key_accent).bold(),
+        ))
+        .right_aligned(),
+    );
+```
+
+### What does NOT change
+
+- `app.rs` — no state changes; the indicator reads existing `cursor_row`.
+- Tab [3] Distribution, Tab [4] Roundup — not requested.
+- The footer legend bar — no changes.
+- The `#` row-number column (§13) — the indicator duplicates the current row's `#`
+  value as a quick glance without needing to look at the leftmost column.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `rust_tui/src/ui.rs` | `draw_summary_tab`: add `.title_top(right-aligned position span)` to block |
+| `rust_tui/src/ui.rs` | `draw_sub_column_view`: same addition to its block |
+
+### End-to-end verification
+
+1. Build: `cargo build --release` inside `rust_tui/`.
+2. Run `./grade-tui`, load a course with ≥20 students.
+3. **Tab [1] — Summary:**
+   - The block's top-right corner shows `[1/N]` on launch.
+   - Press Down: indicator changes to `[2/N]`, `[3/N]`, … in real time.
+   - Scroll past viewport: indicator continues incrementing (e.g. `[18/48]`).
+   - Press Up: indicator decrements.
+   - The left-side title (" 📋 Course Grades Summary ") is unaffected.
+4. **Tab [2] — Raw Details:**
+   - Select a category, focus the right panel.
+   - The right panel block's top-right corner shows `[1/N]`.
+   - Navigate up/down: indicator updates to match the cursor row.
+   - The indicator is visible regardless of whether the left or right panel is focused.
+5. **Color:** the indicator text is yellow/gold (`theme.key_accent`), distinct from the
+   block's border color and from the left-side title color.
+6. **Consistency with `#` column:** when the cursor is on row `k`, the `#` cell of
+   that row shows `k` and the indicator shows `[k/N]`.
+
