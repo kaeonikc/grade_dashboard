@@ -210,10 +210,12 @@ impl App {
     }
 
     pub fn save_attendance_score(&mut self) {
-        let options = ["P", "L", "EA", "A"];
+        let options = ["P", "L", "X", "A", ""];
         let val = options[self.attendance_index].to_string();
 
-        if val == self.editing_original_value {
+        // Always proceed when Clear ("") is selected — writing "" to an already-blank
+        // cell is harmless, and skipping it would silently no-op for blank cells.
+        if !val.is_empty() && val == self.editing_original_value {
             return;
         }
 
@@ -362,8 +364,10 @@ impl App {
 
             let is_attendance = cat.to_lowercase().contains("attendance");
             if is_attendance {
-                let options = ["P", "L", "EA", "A"];
-                let current_idx = options.iter().position(|&o| o == raw_val.as_str()).unwrap_or(0);
+                let options = ["P", "L", "X", "A", ""];
+                let lookup = if raw_val == "EA" { "X" } else { raw_val.as_str() };
+                // Unknown/empty values default to Clear (index 4)
+                let current_idx = options.iter().position(|&o| o == lookup).unwrap_or(4);
                 self.attendance_index = current_idx;
                 self.editing_attendance = true;
             } else {
@@ -460,6 +464,8 @@ impl App {
                         self.sync_raw_category();
                         self.cursor_row = 0;
                         self.scroll_row_offset = 0;
+                        self.cursor_col = 0;
+                        self.scroll_col_offset = 0;
                     }
                     return;
                 }
@@ -492,6 +498,8 @@ impl App {
                         self.sync_raw_category();
                         self.cursor_row = 0;
                         self.scroll_row_offset = 0;
+                        self.cursor_col = 0;
+                        self.scroll_col_offset = 0;
                     }
                     return;
                 }
@@ -515,6 +523,35 @@ impl App {
                 }
             }
         }
+    }
+
+    pub fn move_half_page_down(&mut self) {
+        if self.state != AppState::Dashboard { return; }
+        if self.active_tab == 1 && !self.raw_right_focused { return; }
+        let max_rows = match &self.course_data {
+            Some(data) => match self.active_tab {
+                0 => data.student_grades.len(),
+                1 => data.raw_scores.len(),
+                3 => data.roundup_summary.improved_students.len(),
+                _ => 0,
+            },
+            None => 0,
+        };
+        if max_rows == 0 { return; }
+        let half = (self.table_visible_rows / 2).max(1);
+        self.cursor_row = (self.cursor_row + half).min(max_rows - 1);
+        let max_scroll = max_rows.saturating_sub(self.table_visible_rows);
+        self.scroll_row_offset = (self.scroll_row_offset + half).min(max_scroll);
+        self.adjust_scroll_row();
+    }
+
+    pub fn move_half_page_up(&mut self) {
+        if self.state != AppState::Dashboard { return; }
+        if self.active_tab == 1 && !self.raw_right_focused { return; }
+        let half = (self.table_visible_rows / 2).max(1);
+        self.cursor_row = self.cursor_row.saturating_sub(half);
+        self.scroll_row_offset = self.scroll_row_offset.saturating_sub(half);
+        self.adjust_scroll_row();
     }
 
     pub fn move_left(&mut self) {
@@ -614,10 +651,8 @@ impl App {
             };
             // Frozen cols: StudentID (12) + Name (≈32) + 3 spacing = 47
             let scrollable_width = right_inner.saturating_sub(47);
-            // col width (attendance uses column_spacing=0, so no extra spacing)
-            let col_width: usize = if is_attendance {
-                3 + format!("{}", sub_col_count).len() // matches sub_col_width = max_digits + 3
-            } else { 13 };
+            // col width: sub_col_width(2) + column_spacing(1)
+            let col_width: usize = if is_attendance { 3 } else { 13 };
             let visible_scrollable_cols = (scrollable_width / col_width).max(1);
 
             if self.cursor_col < self.scroll_col_offset {
@@ -768,9 +803,36 @@ impl App {
                             self.attendance_index = self.attendance_index.saturating_sub(1);
                         }
                         crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j') => {
-                            if self.attendance_index < 3 {
+                            if self.attendance_index < 4 {
                                 self.attendance_index += 1;
                             }
+                        }
+                        // One-key quick-pick: immediately jump to option and save
+                        crossterm::event::KeyCode::Char('p') | crossterm::event::KeyCode::Char('P') => {
+                            self.attendance_index = 0;
+                            self.save_attendance_score();
+                            self.editing_attendance = false;
+                        }
+                        crossterm::event::KeyCode::Char('l') | crossterm::event::KeyCode::Char('L') => {
+                            self.attendance_index = 1;
+                            self.save_attendance_score();
+                            self.editing_attendance = false;
+                        }
+                        crossterm::event::KeyCode::Char('x') | crossterm::event::KeyCode::Char('X') => {
+                            self.attendance_index = 2;
+                            self.save_attendance_score();
+                            self.editing_attendance = false;
+                        }
+                        crossterm::event::KeyCode::Char('a') | crossterm::event::KeyCode::Char('A') => {
+                            self.attendance_index = 3;
+                            self.save_attendance_score();
+                            self.editing_attendance = false;
+                        }
+                        crossterm::event::KeyCode::Char('c') | crossterm::event::KeyCode::Char('C')
+                        | crossterm::event::KeyCode::Delete | crossterm::event::KeyCode::Backspace => {
+                            self.attendance_index = 4;
+                            self.save_attendance_score();
+                            self.editing_attendance = false;
                         }
                         _ => {}
                     }
@@ -801,15 +863,46 @@ impl App {
                     return;
                 }
 
+                // Half-page jump (Ctrl+D / Ctrl+U)
+                if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                    match key.code {
+                        crossterm::event::KeyCode::Char('d') => { self.move_half_page_down(); return; }
+                        crossterm::event::KeyCode::Char('u') => { self.move_half_page_up(); return; }
+                        _ => {}
+                    }
+                }
+
                 // Standard navigation
                 match key.code {
                     crossterm::event::KeyCode::Char('q') => {
                         // Exit handled in main loop
                     }
-                    crossterm::event::KeyCode::Char('c') | crossterm::event::KeyCode::Char('C') => {
+                    crossterm::event::KeyCode::Char('c') | crossterm::event::KeyCode::Char('C')
+                    | crossterm::event::KeyCode::Delete | crossterm::event::KeyCode::Backspace => {
                         if self.state == AppState::Dashboard {
-                            self.use_weighted = !self.use_weighted;
-                            self.load_course_data();
+                            let is_att = self.raw_selected_category
+                                .as_deref()
+                                .map(|cat| cat.to_lowercase().contains("attendance"))
+                                .unwrap_or(false);
+                            let on_att_cell = self.active_tab == 1
+                                && is_att
+                                && self.cursor_col >= 2
+                                && !self.loading;
+                            if on_att_cell {
+                                // Enter right-panel focus if not already there
+                                if !self.raw_right_focused {
+                                    self.raw_right_focused = true;
+                                    self.cursor_col = 2;
+                                    self.scroll_col_offset = 2;
+                                }
+                                self.start_editing_cell();
+                                self.attendance_index = 4; // Clear
+                                self.save_attendance_score();
+                                self.editing_attendance = false;
+                            } else if matches!(key.code, crossterm::event::KeyCode::Char('c') | crossterm::event::KeyCode::Char('C')) {
+                                self.use_weighted = !self.use_weighted;
+                                self.load_course_data();
+                            }
                         }
                     }
                     crossterm::event::KeyCode::Char('e') | crossterm::event::KeyCode::Char('E') => {

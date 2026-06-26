@@ -641,8 +641,7 @@ fn score_value(v: &serde_json::Value) -> f64 {
     match v {
         serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0),
         serde_json::Value::String(s) => match s.trim().to_uppercase().as_str() {
-            "P"  => 1.0,
-            "EA" => 1.0,
+            "P" | "EA" | "X" => 1.0,
             "L"  => 0.8,
             "A"  => 0.0,
             other => other.parse::<f64>().unwrap_or(0.0),
@@ -670,12 +669,44 @@ fn att_cell_style(val: &str, is_cursor: bool, theme: &crate::style::Theme) -> St
     if is_cursor {
         return Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
     }
-    match val.trim() {
-        "P"  => Style::default().fg(theme.bg).bg(theme.success).add_modifier(Modifier::BOLD),
-        "A"  => Style::default().fg(theme.bg).bg(theme.grade_f).add_modifier(Modifier::BOLD),
-        "EA" => Style::default().fg(theme.bg).bg(theme.key_accent).add_modifier(Modifier::BOLD),
-        "L"  => Style::default().fg(theme.bg).bg(theme.warning).add_modifier(Modifier::BOLD),
-        _    => Style::default().fg(theme.fg),
+    match val.trim().to_uppercase().as_str() {
+        "P"        => Style::default().fg(theme.success).add_modifier(Modifier::BOLD),
+        "A"        => Style::default().fg(theme.grade_f).add_modifier(Modifier::BOLD),
+        "EA" | "X" => Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD),
+        "L"        => Style::default().fg(theme.warning).add_modifier(Modifier::BOLD),
+        _          => Style::default().fg(theme.fg),
+    }
+}
+
+fn att_symbol(val: &str) -> &'static str {
+    match val.trim().to_uppercase().as_str() {
+        "P"        => "🅟",
+        "L"        => "🅛",
+        "A"        => "🅐",
+        "EA" | "X" => "🅧",
+        _          => " ",
+    }
+}
+
+fn circled_number(n: usize) -> String {
+    match n {
+        0 => "\u{24EA}".to_string(), // ⓪
+        1..=20 => {
+            const CHARS: [char; 20] = [
+                '\u{2460}','\u{2461}','\u{2462}','\u{2463}','\u{2464}',
+                '\u{2465}','\u{2466}','\u{2467}','\u{2468}','\u{2469}',
+                '\u{246A}','\u{246B}','\u{246C}','\u{246D}','\u{246E}',
+                '\u{246F}','\u{2470}','\u{2471}','\u{2472}','\u{2473}',
+            ];
+            CHARS[n - 1].to_string()
+        }
+        21..=50 => {
+            // U+3251 (㉑) through U+32BF (㊿) — East Asian wide (2 cells)
+            char::from_u32('\u{3251}' as u32 + (n - 21) as u32)
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| n.to_string())
+        }
+        _ => n.to_string(),
     }
 }
 
@@ -699,11 +730,8 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
     let sub_cols = data.data_mapping.get(&cat).cloned().unwrap_or_default();
     let show_total = true;
     let is_attendance = cat.to_lowercase().contains("attendance");
-    let max_att_digits = format!("{}", sub_cols.len()).len();
-    // | + space(s) + number + space(s): enough for "| 10 |" style with equal widths
-    let sub_col_width: u16 = if is_attendance {
-        (max_att_digits + 3) as u16
-    } else { 12 };
+    // 3 visual cells: emoji (2-wide) + 1 space, or circled-number (1-wide) + 2 spaces
+    let sub_col_width: u16 = if is_attendance { 2 } else { 12 };
 
     // Compute name alignment from actual data (display widths so Thai combining vowels are 0-width)
     let max_first_display = data.raw_scores.iter()
@@ -755,8 +783,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
     ];
     for (sc_index, sc) in visible_sub.iter().enumerate() {
         let header_text = if is_attendance {
-            // Center the column number inside the cell (inner width = col_width - 1 pipe char)
-            format!("|{:^inner$}\n", scroll_offset + sc_index + 1, inner = max_att_digits + 2)
+            format!("{}\n", circled_number(scroll_offset + sc_index + 1))
         } else {
             let max_text = if let Some(max_s) = data.max_scores.get(sc) {
                 format!("\n({:.0} pts)", max_s)
@@ -777,9 +804,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
         } else {
             sub_cols.iter().filter_map(|sc| data.max_scores.get(sc)).sum()
         };
-        let total_header = if is_attendance {
-            format!("| Total\n({:.0} pts)", total_max)
-        } else if total_max > 0.0 {
+        let total_header = if total_max > 0.0 {
             format!("Total\n({:.0} pts)", total_max)
         } else {
             "Total\n(pts)".to_string()
@@ -831,7 +856,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
             let abs_col = frozen_count + scroll_offset + sc_offset;
             let is_cursor = app.raw_right_focused && r_idx == app.cursor_row && abs_col == app.cursor_col;
             let display_text = if is_attendance {
-                format!("{:^width$}", text, width = sub_col_width as usize)
+                att_symbol(&text).to_string()
             } else {
                 text.clone()
             };
@@ -854,11 +879,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
             if app.raw_right_focused && r_idx == app.cursor_row && app.cursor_col == sub_cols.len() + 2 {
                 total_style = Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
             }
-            let total_text = if is_attendance {
-                format!("| {:.1}", total)
-            } else {
-                format!("{:.1}", total)
-            };
+            let total_text = format!("{:.1}", total);
             cells.push(Cell::from(total_text).style(total_style));
         }
 
@@ -887,7 +908,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
     let table = Table::new(rows, widths)
         .header(header)
         .block(block)
-        .column_spacing(if is_attendance { 0 } else { 1 });
+        .column_spacing(1);
 
     let mut table_state = TableState::default().with_offset(app.scroll_row_offset);
     f.render_stateful_widget(table, area, &mut table_state);
@@ -929,10 +950,7 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
         .title_style(Style::default().fg(category_color(&cat, &theme)).bold());
 
     let is_attendance_popup = cat.to_lowercase().contains("attendance");
-    let max_att_digits_popup = format!("{}", sub_cols.len()).len();
-    let sub_col_width_popup: u16 = if is_attendance_popup {
-        (max_att_digits_popup + 3) as u16
-    } else { 12 };
+    let sub_col_width_popup: u16 = if is_attendance_popup { 2 } else { 12 };
 
     let max_first_display_popup = data.raw_scores.iter()
         .filter_map(|r| r.get("Name").and_then(|v| v.as_str()))
@@ -959,7 +977,7 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
     ];
     for (sc_index, sc) in visible_sub.iter().enumerate() {
         let header_text = if is_attendance_popup {
-            format!("|{:^inner$}\n", scroll_offset + sc_index + 1, inner = max_att_digits_popup + 2)
+            format!("{}\n", circled_number(scroll_offset + sc_index + 1))
         } else {
             let max_text = if let Some(max_s) = data.max_scores.get(sc) {
                 format!("\n({:.0} pts)", max_s)
@@ -979,9 +997,7 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
         } else {
             sub_cols.iter().filter_map(|sc| data.max_scores.get(sc)).sum()
         };
-        let total_header = if is_attendance_popup {
-            format!("| Total\n({:.0} pts)", total_max)
-        } else if total_max > 0.0 {
+        let total_header = if total_max > 0.0 {
             format!("Total\n({:.0} pts)", total_max)
         } else {
             "Total\n(pts)".to_string()
@@ -1010,7 +1026,7 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
         let abs_col = frozen_count + scroll_offset + sc_offset;
         let is_cursor = abs_col == app.cursor_col;
         let display_text = if is_attendance_popup {
-            format!("{:^width$}", text, width = sub_col_width_popup as usize)
+            att_symbol(&text).to_string()
         } else {
             text.clone()
         };
@@ -1029,13 +1045,8 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
             .filter_map(|sc| record.get(sc))
             .map(|v| score_value(v))
             .sum();
-        let total_text = if is_attendance_popup {
-            format!("| {:.1}", total)
-        } else {
-            format!("{:.1}", total)
-        };
         cells.push(
-            Cell::from(total_text)
+            Cell::from(format!("{:.1}", total))
                 .style(Style::default().fg(theme.success).add_modifier(Modifier::BOLD))
         );
     }
@@ -1053,7 +1064,7 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
     let table = Table::new(vec![row], widths)
         .header(header)
         .block(block)
-        .column_spacing(if is_attendance_popup { 0 } else { 1 });
+        .column_spacing(1);
 
     f.render_widget(table, area);
 }
@@ -1508,7 +1519,7 @@ fn calculate_instant_score_and_grade(
     };
 
     let new_val_parsed = match new_value_str.trim().to_uppercase().as_str() {
-        "P" | "EA" => Some(1.0),
+        "P" | "EA" | "X" => Some(1.0),
         "L" => Some(0.8),
         "A" => Some(0.0),
         "" => Some(0.0),
@@ -1523,7 +1534,7 @@ fn calculate_instant_score_and_grade(
             match v {
                 serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0),
                 serde_json::Value::String(s) => match s.trim().to_uppercase().as_str() {
-                    "P" | "EA" => 1.0,
+                    "P" | "EA" | "X" => 1.0,
                     "L" => 0.8,
                     "A" => 0.0,
                     other => other.parse::<f64>().unwrap_or(0.0),
@@ -1565,7 +1576,7 @@ fn calculate_instant_score_and_grade(
                 } else if let Some(v) = record.get(col) {
                     match v {
                         serde_json::Value::String(s) => match s.trim().to_uppercase().as_str() {
-                            "P" | "EA" => 1.0,
+                            "P" | "EA" | "X" => 1.0,
                             "L" => 0.8,
                             "A" => 0.0,
                             _ => 0.0,
@@ -1831,7 +1842,7 @@ fn draw_settings_overlay(f: &mut Frame, app: &mut App) {
 
 fn draw_attendance_picker(f: &mut Frame, app: &mut App) {
     let theme = app.theme;
-    let area = centered_rect(30, 40, f.area());
+    let area = centered_rect(36, 48, f.area());
     f.render_widget(Clear, area);
 
     let col_name = app.editing_column.clone();
@@ -1849,30 +1860,39 @@ fn draw_attendance_picker(f: &mut Frame, app: &mut App) {
         .title(title)
         .title_style(Style::default().fg(theme.key_accent).bold());
 
-    let options = [("P", "Present"), ("L", "Late"), ("EA", "Excused Absence"), ("A", "Absent")];
-    let items: Vec<ListItem> = options.iter().enumerate().map(|(i, &(code, label))| {
+    let options: &[(&str, &str, Color)] = &[
+        ("P", "Present", theme.success),
+        ("L", "Late",    theme.warning),
+        ("X", "Excused", theme.key_accent),
+        ("A", "Absent",  theme.grade_f),
+        ("",  "Clear",   theme.inactive_tab),
+    ];
+    let mut items: Vec<ListItem> = options.iter().enumerate().map(|(i, &(code, label, opt_color))| {
         let selected = i == app.attendance_index;
         let bullet = if selected { "●" } else { "○" };
-        let bullet_color = match code {
-            "P"  => theme.success,
-            "L"  => theme.warning,
-            "EA" => theme.key_accent,
-            "A"  => theme.grade_f,
-            _    => theme.fg,
-        };
-        let bullet_style = Style::default().fg(bullet_color).add_modifier(Modifier::BOLD);
-        let text_style = if selected {
-            Style::default().fg(bullet_color).add_modifier(Modifier::BOLD)
+        let tag = if code.is_empty() {
+            String::new()
         } else {
-            Style::default().fg(theme.fg)
+            format!("  [{}]", code)
         };
         let line = Line::from(vec![
             Span::raw("  "),
-            Span::styled(bullet, bullet_style),
-            Span::styled(format!(" {:<2}  {}  ", code, label), text_style),
+            Span::styled(format!("{} {}{}", bullet, label, tag),
+                if selected {
+                    Style::default().fg(opt_color).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme.fg)
+                }),
+            Span::raw("  "),
         ]);
         ListItem::new(line)
     }).collect();
+
+    // Key-hint row at the bottom of the list
+    items.push(ListItem::new(Line::from(Span::styled(
+        "  P L X A / C  ·  ↑↓ nav  ·  Enter  ·  Esc  ",
+        Style::default().fg(theme.inactive_tab),
+    ))));
 
     let list = List::new(items).block(block);
     f.render_widget(list, area);
