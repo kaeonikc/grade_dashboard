@@ -26,7 +26,7 @@ def validate_scores(df: pd.DataFrame, config: dict, max_scores: dict) -> list[st
     # Check for scores exceeding max score
     for category, columns in data_mapping.items():
         if category == 'attendance':
-            valid_codes = {'P', 'A', 'L', 'EA', '', 'nan'}
+            valid_codes = {'P', 'A', 'L', 'EA', 'X', '', 'nan'}
             for col in columns:
                 if col not in df.columns:
                     continue
@@ -39,7 +39,7 @@ def validate_scores(df: pd.DataFrame, config: dict, max_scores: dict) -> list[st
                     label = f"{student_id} ({name})" if name else student_id
                     warnings.append(
                         f"[{category}] Column '{col}': student {label} "
-                        f"has invalid attendance code '{val}' (must be P, A, L, or EA)."
+                        f"has invalid attendance code '{val}' (must be P, A, L, EA, or X)."
                     )
             continue
 
@@ -119,7 +119,7 @@ def calculate_final_grades(df: pd.DataFrame, config: dict, max_scores: dict, use
         
         if category == 'attendance':
             # Map P/L/EA/A to numeric values
-            mapping = {'P': 1.0, 'L': 0.8, 'EA': 1.0, 'A': 0.0}
+            mapping = {'P': 1.0, 'L': 0.8, 'EA': 1.0, 'X': 1.0, 'A': 0.0}
             
             numeric_category_df = category_df.copy()
             for col in valid_cols:

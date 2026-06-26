@@ -247,7 +247,7 @@ def _update_xlsx_attendance(xlsx_path, student_id, target_col_orig_name, val_to_
     if not row_idx:
         return False
         
-    ws.cell(row=row_idx, column=col_idx, value=val_to_set)
+    ws.cell(row=row_idx, column=col_idx).value = val_to_set
     wb.save(xlsx_path)
     return True
 
@@ -379,7 +379,7 @@ def update_student_score(course_path, student_id, col_name, value):
                 return {"status": "error", "message": f"Student ID '{student_id}' not found in XLSX sheet."}
                 
             # Write cell and save
-            ws.cell(row=row_idx, column=col_idx, value=val_to_set)
+            ws.cell(row=row_idx, column=col_idx).value = val_to_set
             wb.save(target_file)
             return {"status": "success", "message": f"Updated {col_name} to {value} for student {student_id} in XLSX {target_file.name}."}
             
