@@ -9,8 +9,10 @@ if str(project_root) not in sys.path:
 
 import json
 import math
+import re
 import yaml
 import pandas as pd
+from datetime import datetime, timedelta
 
 from src.data_loader import load_config, load_course_data, parse_pts, parse_config_col
 from src.calculators import calculate_final_grades, validate_scores, assign_letter_grade
@@ -79,18 +81,84 @@ def get_courses():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+_THAI_DAY = {'จ.': 0, 'อ.': 1, 'พ.': 2, 'พฤ.': 3, 'ศ.': 4, 'ส.': 5, 'อา.': 6}
+
+def _compute_attendance_labels(config: dict, attendance_cols: list) -> dict:
+    short_cols = sorted(
+        [c for c in attendance_cols if re.match(r'^a\d+$', c)],
+        key=lambda c: int(c[1:])
+    )
+    if not short_cols:
+        return {}
+    term_start = config.get('term_start_date', '') or ''
+    term_start = term_start.strip()
+    if not term_start:
+        return {}
+    day_str = config.get('class_schedule', {}).get('day', '')
+    target_wd = _THAI_DAY.get(day_str)
+    if target_wd is None:
+        return {}
+    try:
+        start = datetime.strptime(term_start, '%Y-%m-%d')
+    except ValueError:
+        return {}
+    days_ahead = (target_wd - start.weekday()) % 7
+    first_class = start + timedelta(days=days_ahead)
+
+    n = len(short_cols)
+    weekly = [first_class + timedelta(weeks=i) for i in range(n)]
+
+    extra = []
+    for d_str in config.get('attendance_extra_dates', []):
+        try:
+            extra.append(datetime.strptime(d_str, '%Y-%m-%d'))
+        except ValueError:
+            pass
+
+    pool = sorted(set(weekly + extra))[:n]
+
+    labels = {}
+    for col, d in zip(short_cols, pool):
+        labels[col] = f"{d.day} {d.strftime('%b')} {d.year}"
+    return labels
+
+def _fill_default_max_scores(config: dict, max_scores: dict) -> None:
+    """
+    For any data_mapping column without an explicit max score, derive it from the
+    category weight: target_total = weight * 100, distributed equally among unspecified
+    columns after subtracting the sum of already-specified ones.
+    """
+    weights = config.get('weights', {})
+    data_mapping = config.get('data_mapping', {})
+    for category, cols in data_mapping.items():
+        if category == 'attendance':
+            continue
+        weight = float(weights.get(category, 0.0))
+        if weight <= 0.0 or not cols:
+            continue
+        target_total = weight * 100.0
+        specified_sum = sum(max_scores[c] for c in cols if c in max_scores)
+        unspecified = [c for c in cols if c not in max_scores]
+        if unspecified:
+            remaining = max(target_total - specified_sum, 0.0)
+            per_col = remaining / len(unspecified)
+            for col in unspecified:
+                max_scores[col] = per_col
+
+
 def get_course_data(course_path, use_weighted=True):
     try:
         path = Path(course_path)
         config = load_config(path)
         raw_df, max_scores = load_course_data(path)
-        
+
         if raw_df.empty:
             return {
                 "status": "error",
                 "message": f"No student data found in {path / 'data'}"
             }
-            
+
+        _fill_default_max_scores(config, max_scores)
         warnings = validate_scores(raw_df, config, max_scores)
         final_df = calculate_final_grades(raw_df, config, max_scores, use_weighted)
         
@@ -190,6 +258,10 @@ def get_course_data(course_path, use_weighted=True):
         # Convert max_scores to floats for serialization
         clean_max_scores = {col: float(val) for col, val in max_scores.items()}
 
+        # Compute human-readable date labels for short attendance columns (a1, a2, …)
+        attendance_cols = config.get('data_mapping', {}).get('attendance', []) or []
+        attendance_labels = _compute_attendance_labels(config, attendance_cols)
+
         return {
             "status": "success",
             "course_id": str(config.get("course_id", "")),
@@ -206,7 +278,8 @@ def get_course_data(course_path, use_weighted=True):
             "raw_scores": raw_scores,
             "grade_distribution": distribution,
             "roundup_summary": roundup_summary,
-            "rules": config.get("rules", {})
+            "rules": config.get("rules", {}),
+            "attendance_labels": attendance_labels,
         }
     except Exception as e:
         import traceback
