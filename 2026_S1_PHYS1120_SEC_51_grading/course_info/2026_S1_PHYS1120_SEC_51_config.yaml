@@ -24,7 +24,7 @@ data_mapping:
   - hw1
   - hw2
   midterm:
-  - midterm_score
+  - midterm_exam
   final:
   - final_exam
 grade_boundaries:

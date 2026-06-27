@@ -279,10 +279,12 @@ fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
         );
 
     // Prepare table headers
+    let sep_cell_header = || Cell::from("│\n").style(Style::default().fg(theme.border).add_modifier(Modifier::DIM));
     let num_header = Cell::from("#\n")
         .style(Style::default().fg(theme.inactive_tab).add_modifier(Modifier::BOLD));
-    let data_header_cells = data.summary_columns.iter().map(|h| {
-        if h.ends_with("_pct") {
+    let mut header_cells: Vec<Cell> = vec![num_header];
+    for h in &data.summary_columns {
+        let cell = if h.ends_with("_pct") {
             let cat = h.trim_end_matches("_pct");
             let cat_lower = cat.to_lowercase();
             let weight_pts = data.weights.get(cat).copied().unwrap_or(0.0) * 100.0;
@@ -305,16 +307,23 @@ fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
         } else if h == "Grade" {
             Cell::from("Grade\n")
                 .style(Style::default().fg(theme.success).add_modifier(Modifier::BOLD))
+        } else if h == "Student ID" {
+            Cell::from("ID\n")
+                .style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD))
         } else {
             Cell::from(format!("{}\n", h))
                 .style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD))
+        };
+        header_cells.push(cell);
+        if h == "Name" {
+            header_cells.push(sep_cell_header());
         }
-    });
-    let header_cells: Vec<Cell> = std::iter::once(num_header).chain(data_header_cells).collect();
+    }
 
     let header = Row::new(header_cells).height(2).bottom_margin(1).style(Style::default().bg(theme.alt_row));
 
     // Prepare rows
+    let sep_cell_data = || Cell::from("│").style(Style::default().fg(theme.border).add_modifier(Modifier::DIM));
     let rows: Vec<Row> = data
         .student_grades
         .iter()
@@ -322,8 +331,9 @@ fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
         .map(|(r_idx, record)| {
             let num_cell = Cell::from(format!("{}", r_idx + 1))
                 .style(Style::default().fg(theme.inactive_tab));
-            let data_cells = data.summary_columns.iter().map(|col_name| {
-                let cell_val = record.get(col_name).unwrap_or(&serde_json::Value::Null);
+            let mut cells: Vec<Cell> = vec![num_cell];
+            for col_name in &data.summary_columns {
+                let cell_val = record.get(col_name.as_str()).unwrap_or(&serde_json::Value::Null);
                 let text = match cell_val {
                     serde_json::Value::Null => "".to_string(),
                     serde_json::Value::Number(n) => format!("{:.1}", n.as_f64().unwrap_or(0.0)),
@@ -336,33 +346,22 @@ fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
                     }
                     _ => cell_val.to_string(),
                 };
-                
+
                 let mut cell_style = Style::default().fg(theme.fg);
-                
+
                 if col_name == "Student ID" {
                     cell_style = cell_style.fg(theme.info);
                 } else if col_name == "Final Score" {
                     cell_style = cell_style.fg(theme.key_accent).bold();
                 } else if col_name == "Grade" {
-                    let grade_color = if text.starts_with("A") {
-                        theme.grade_a
-                    } else if text.starts_with("B") {
-                        theme.grade_b
-                    } else if text.starts_with("C") {
-                        theme.grade_c
-                    } else if text.starts_with("D") {
-                        theme.grade_d
-                    } else if text == "F" {
-                        theme.grade_f
-                    } else {
-                        theme.info
-                    };
-                    cell_style = cell_style.fg(grade_color).add_modifier(Modifier::BOLD);
+                    cell_style = cell_style.fg(grade_color_for(&text, &theme)).add_modifier(Modifier::BOLD);
                 }
 
-                Cell::from(text).style(cell_style)
-            });
-            let cells: Vec<Cell> = std::iter::once(num_cell).chain(data_cells).collect();
+                cells.push(Cell::from(text).style(cell_style));
+                if col_name == "Name" {
+                    cells.push(sep_cell_data());
+                }
+            }
 
             let mut row_style = Style::default();
             if r_idx == app.cursor_row {
@@ -395,8 +394,8 @@ fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let inner_width = area.width.saturating_sub(2) as usize; // subtract block borders
     let n_cols = data.summary_columns.len();
     let n_other_cols = n_cols.saturating_sub(3); // all cols except StudentID, Name, Grade
-    let spacings = n_cols;                        // column_spacing(1) × (n_cols+1 total cols − 1)
-    let fixed = num_col_width as usize + 12usize + name_col_width as usize + 7;
+    let spacings = n_cols + 1;                    // column_spacing(1) × (n_cols+2 total cols − 1); +1 for separator
+    let fixed = num_col_width as usize + 9usize + name_col_width as usize + 7 + 1; // +1 for separator col
     let score_col_width = if n_other_cols > 0 && inner_width > fixed + spacings {
         ((inner_width - fixed - spacings) / n_other_cols).max(6) as u16
     } else {
@@ -406,9 +405,10 @@ fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let mut widths = vec![Constraint::Length(num_col_width)];
     for col_name in &data.summary_columns {
         if col_name == "Student ID" {
-            widths.push(Constraint::Length(12));
+            widths.push(Constraint::Length(9));
         } else if col_name == "Name" {
             widths.push(Constraint::Length(name_col_width));
+            widths.push(Constraint::Length(1)); // separator
         } else if col_name == "Grade" {
             widths.push(Constraint::Length(7));
         } else {
@@ -437,24 +437,59 @@ fn draw_raw_left_panel(f: &mut Frame, app: &mut App, area: Rect) {
         .title(" Categories ")
         .title_style(Style::default().fg(theme.info).bold());
 
+    let raw_category_index = app.raw_category_index;
+    let raw_right_focused = app.raw_right_focused;
+    let data_opt = app.course_data.as_ref();
+
     let items: Vec<ListItem> = cats
         .iter()
         .enumerate()
         .map(|(i, cat)| {
-            let is_highlighted = i == app.raw_category_index;
-            let style = if is_highlighted && !app.raw_right_focused {
-                Style::default()
-                    .fg(theme.bg)
-                    .bg(theme.active_tab)
-                    .add_modifier(Modifier::BOLD)
+            let is_highlighted = i == raw_category_index;
+
+            let pts_tag = data_opt.map(|data| {
+                let cols = data.data_mapping.get(cat.as_str()).cloned().unwrap_or_default();
+                let raw_max: f64 = if cols.is_empty() {
+                    data.weights.get(cat.as_str()).copied().unwrap_or(0.0) * 100.0
+                } else {
+                    cols.iter()
+                        .map(|c| data.max_scores.get(c).copied().unwrap_or(1.0))
+                        .sum()
+                };
+                let pts_str = if raw_max.fract() == 0.0 {
+                    format!("{}", raw_max as u32)
+                } else {
+                    format!("{:.1}", raw_max)
+                };
+                format!("[{} pts]", pts_str)
+            });
+
+            let (name_style, pts_style) = if is_highlighted && !raw_right_focused {
+                (
+                    Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme.bg).bg(theme.active_tab),
+                )
             } else if is_highlighted {
-                Style::default()
-                    .fg(category_color(cat, &theme))
-                    .add_modifier(Modifier::BOLD)
+                (
+                    Style::default().fg(category_color(cat, &theme)).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme.info),
+                )
             } else {
-                Style::default().fg(theme.fg)
+                (
+                    Style::default().fg(theme.fg),
+                    Style::default().fg(theme.inactive_tab),
+                )
             };
-            ListItem::new(format!("  {}", cat)).style(style)
+
+            let name_part = format!("  {:<13}", cat);
+            if let Some(tag) = pts_tag {
+                ListItem::new(Line::from(vec![
+                    Span::styled(name_part, name_style),
+                    Span::styled(tag, pts_style),
+                ]))
+            } else {
+                ListItem::new(Line::from(Span::styled(format!("  {}", cat), name_style)))
+            }
         })
         .collect();
 
@@ -520,13 +555,7 @@ fn draw_student_info_panel(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .unwrap_or_else(|| ("—".into(), "—".into()));
 
-    let grade_color = match grade_str.trim() {
-        g if g.starts_with("A") => theme.grade_a,
-        g if g.starts_with("B") => theme.grade_b,
-        g if g.starts_with("C") => theme.grade_c,
-        g if g.starts_with("D") => theme.grade_d,
-        _ => theme.grade_f,
-    };
+    let grade_color = grade_color_for(grade_str.trim(), &theme);
 
     // Build current-cell line
     let cat = app.raw_selected_category.as_deref().unwrap_or("");
@@ -558,11 +587,14 @@ fn draw_student_info_panel(f: &mut Frame, app: &mut App, area: Rect) {
                         _ => v.to_string(),
                     })
                     .unwrap_or_else(|| "—".into());
-                // Truncate col name to fit wider panel
-                let short_name = if col_name.chars().count() > 16 {
-                    format!("{}…", &col_name.chars().take(15).collect::<String>())
+                let display_name = data.attendance_labels
+                    .get(col_name)
+                    .cloned()
+                    .unwrap_or_else(|| col_name.clone());
+                let short_name = if display_name.chars().count() > 16 {
+                    format!("{}…", &display_name.chars().take(15).collect::<String>())
                 } else {
-                    col_name.clone()
+                    display_name
                 };
                 Some(Line::from(vec![
                     Span::styled(
@@ -731,7 +763,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
     let show_total = true;
     let is_attendance = cat.to_lowercase().contains("attendance");
     // 3 visual cells: emoji (2-wide) + 1 space, or circled-number (1-wide) + 2 spaces
-    let sub_col_width: u16 = if is_attendance { 2 } else { 12 };
+
 
     // Compute name alignment from actual data (display widths so Thai combining vowels are 0-width)
     let max_first_display = data.raw_scores.iter()
@@ -744,8 +776,8 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
         .map(|n| { let mut it = n.split_whitespace(); it.next(); UnicodeWidthStr::width(it.collect::<Vec<_>>().join(" ").as_str()) })
         .max()
         .unwrap_or(8);
-    // +4: minimum gap of 4 spaces after the longest first name
-    let alignment_target = max_first_display + 4;
+    // +2: minimum gap of 2 spaces after the longest first name
+    let alignment_target = max_first_display + 2;
     let name_col_width = (alignment_target + max_surname_display + 2).max(20) as u16;
 
     let border_color = if app.raw_right_focused { category_color(&cat, &theme) } else { theme.border };
@@ -774,12 +806,17 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
     let scroll_offset = app.scroll_col_offset.saturating_sub(frozen_count);
     let scroll_end = std::cmp::min(scroll_offset + sub_cols.len(), sub_cols.len());
     let visible_sub: &[String] = &sub_cols[scroll_offset..scroll_end];
+    let sub_col_widths: Vec<u16> = visible_sub.iter().map(|sc| {
+        if is_attendance { 2u16 } else { (sc.len() + 2).max(12) as u16 }
+    }).collect();
 
     // Header
+    let sep_style = Style::default().fg(theme.border).add_modifier(Modifier::DIM);
     let mut header_cells = vec![
         Cell::from("#\n").style(Style::default().fg(theme.inactive_tab).add_modifier(Modifier::BOLD)),
-        Cell::from("Student ID\n").style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD)),
+        Cell::from("ID\n").style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD)),
         Cell::from("Name\n").style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD)),
+        Cell::from("│\n").style(sep_style),
     ];
     for (sc_index, sc) in visible_sub.iter().enumerate() {
         let header_text = if is_attendance {
@@ -843,6 +880,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
             name_style = Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
         }
         cells.push(Cell::from(name).style(name_style));
+        cells.push(Cell::from("│").style(sep_style));
 
         for (sc_offset, sc) in visible_sub.iter().enumerate() {
             let cell_val = record.get(sc).unwrap_or(&serde_json::Value::Null);
@@ -879,7 +917,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
             if app.raw_right_focused && r_idx == app.cursor_row && app.cursor_col == sub_cols.len() + 2 {
                 total_style = Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
             }
-            let total_text = format!("{:.1}", total);
+            let total_text = format!("{:.1}", total + 0.0);
             cells.push(Cell::from(total_text).style(total_style));
         }
 
@@ -895,11 +933,12 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
     // Widths
     let mut widths = vec![
         Constraint::Length(num_col_width),
-        Constraint::Length(12),
+        Constraint::Length(9),
         Constraint::Length(name_col_width),
+        Constraint::Length(1), // separator
     ];
-    for _ in visible_sub {
-        widths.push(Constraint::Length(sub_col_width));
+    for &w in &sub_col_widths {
+        widths.push(Constraint::Length(w));
     }
     if show_total {
         widths.push(Constraint::Length(8));
@@ -950,7 +989,7 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
         .title_style(Style::default().fg(category_color(&cat, &theme)).bold());
 
     let is_attendance_popup = cat.to_lowercase().contains("attendance");
-    let sub_col_width_popup: u16 = if is_attendance_popup { 2 } else { 12 };
+
 
     let max_first_display_popup = data.raw_scores.iter()
         .filter_map(|r| r.get("Name").and_then(|v| v.as_str()))
@@ -962,18 +1001,23 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
         .map(|n| { let mut it = n.split_whitespace(); it.next(); UnicodeWidthStr::width(it.collect::<Vec<_>>().join(" ").as_str()) })
         .max()
         .unwrap_or(8);
-    let alignment_target_popup = max_first_display_popup + 4;
+    let alignment_target_popup = max_first_display_popup + 2;
     let name_col_width_popup = (alignment_target_popup + max_surname_display_popup + 2).max(20) as u16;
 
     let frozen_count = 2usize;
     let scroll_offset = app.scroll_col_offset.saturating_sub(frozen_count);
     let scroll_end = std::cmp::min(scroll_offset + sub_cols.len(), sub_cols.len());
     let visible_sub: Vec<String> = sub_cols[scroll_offset..scroll_end].to_vec();
+    let sub_col_widths_popup: Vec<u16> = visible_sub.iter().map(|sc| {
+        if is_attendance_popup { 2u16 } else { (sc.len() + 2).max(12) as u16 }
+    }).collect();
 
     // Header
+    let sep_style_popup = Style::default().fg(theme.border).add_modifier(Modifier::DIM);
     let mut header_cells = vec![
-        Cell::from("Student ID\n").style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD)),
+        Cell::from("ID\n").style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD)),
         Cell::from("Name\n").style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD)),
+        Cell::from("│\n").style(sep_style_popup),
     ];
     for (sc_index, sc) in visible_sub.iter().enumerate() {
         let header_text = if is_attendance_popup {
@@ -1013,6 +1057,7 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
     let mut cells = vec![];
     cells.push(Cell::from(sid.clone()).style(Style::default().fg(theme.info)));
     cells.push(Cell::from(format_thai_name(&name, alignment_target_popup)).style(Style::default().fg(theme.fg)));
+    cells.push(Cell::from("│").style(sep_style_popup));
 
     for (sc_offset, sc) in visible_sub.iter().enumerate() {
         let cell_val = record.get(sc).unwrap_or(&serde_json::Value::Null);
@@ -1046,16 +1091,16 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
             .map(|v| score_value(v))
             .sum();
         cells.push(
-            Cell::from(format!("{:.1}", total))
+            Cell::from(format!("{:.1}", total + 0.0))
                 .style(Style::default().fg(theme.success).add_modifier(Modifier::BOLD))
         );
     }
 
     let row = Row::new(cells).style(Style::default().bg(theme.highlight)).height(1);
 
-    let mut widths = vec![Constraint::Length(12), Constraint::Length(name_col_width_popup)];
-    for _ in &visible_sub {
-        widths.push(Constraint::Length(sub_col_width_popup));
+    let mut widths = vec![Constraint::Length(9), Constraint::Length(name_col_width_popup), Constraint::Length(1)];
+    for &w in &sub_col_widths_popup {
+        widths.push(Constraint::Length(w));
     }
     if show_total {
         widths.push(Constraint::Length(8));
@@ -1127,23 +1172,22 @@ fn draw_distribution_tab(f: &mut Frame, app: &App, area: Rect) {
         Line::from(""),
     ];
 
-    for (g, val) in &data.grade_boundaries {
-        let g_color = if g.starts_with("A") {
-            theme.grade_a
-        } else if g.starts_with("B") {
-            theme.grade_b
-        } else if g.starts_with("C") {
-            theme.grade_c
-        } else if g.starts_with("D") {
-            theme.grade_d
-        } else {
-            theme.grade_f
-        };
+    let mut sorted_bounds: Vec<(&String, &f64)> = data.grade_boundaries.iter().collect();
+    sorted_bounds.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
+    for (g, val) in &sorted_bounds {
         metrics_lines.push(Line::from(vec![
             Span::raw("   Grade "),
-            Span::styled(g.clone(), Style::default().fg(g_color).bold()),
+            Span::styled((*g).clone(), Style::default().fg(grade_color_for(g, &theme)).bold()),
             Span::raw(" : ≥ "),
             Span::styled(format!("{:.1}", val), Style::default().fg(theme.fg)),
+        ]));
+    }
+    if let Some((_, min_val)) = sorted_bounds.last() {
+        metrics_lines.push(Line::from(vec![
+            Span::raw("   Grade "),
+            Span::styled("F", Style::default().fg(grade_color_for("F", &theme)).bold()),
+            Span::raw(" : < "),
+            Span::styled(format!("{:.1}", min_val), Style::default().fg(theme.fg)),
         ]));
     }
 
@@ -1155,12 +1199,14 @@ fn draw_distribution_tab(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(metrics_p, chunks[0]);
 
     // Right Panel: Unicode Bar Chart
-    // Sort from F to A (F at top, A at bottom matches spec)
-    let mut grade_keys: Vec<String> = data.grade_boundaries.keys().cloned().collect();
+    // Sort by threshold descending (A first, F last)
+    let mut grade_key_pairs: Vec<(String, f64)> = data.grade_boundaries
+        .iter()
+        .map(|(k, v)| (k.clone(), *v))
+        .collect();
+    grade_key_pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let mut grade_keys: Vec<String> = grade_key_pairs.into_iter().map(|(k, _)| k).collect();
     grade_keys.push("F".to_string());
-    
-    // Sort keys: Let's reverse alphanumeric so F is first, then D, C, B, A
-    grade_keys.sort();
     
     // Find maximum count for scaling bars
     let mut max_count = 0;
@@ -1194,17 +1240,7 @@ fn draw_distribution_tab(f: &mut Frame, app: &App, area: Rect) {
         let bar_filled = "█".repeat(bar_len);
         let bar_empty = "░".repeat(max_bar_length - bar_len);
         
-        let g_color = if g.starts_with("A") {
-            theme.grade_a
-        } else if g.starts_with("B") {
-            theme.grade_b
-        } else if g.starts_with("C") {
-            theme.grade_c
-        } else if g.starts_with("D") {
-            theme.grade_d
-        } else {
-            theme.grade_f
-        };
+        let g_color = grade_color_for(g, &theme);
 
         let bar_line = Line::from(vec![
             Span::raw("   "),
@@ -1286,29 +1322,8 @@ fn draw_roundup_tab(f: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .enumerate()
         .map(|(r_idx, stud)| {
-            let orig_g_color = if stud.original_grade.starts_with("A") {
-                theme.grade_a
-            } else if stud.original_grade.starts_with("B") {
-                theme.grade_b
-            } else if stud.original_grade.starts_with("C") {
-                theme.grade_c
-            } else if stud.original_grade.starts_with("D") {
-                theme.grade_d
-            } else {
-                theme.grade_f
-            };
-            
-            let new_g_color = if stud.grade.starts_with("A") {
-                theme.grade_a
-            } else if stud.grade.starts_with("B") {
-                theme.grade_b
-            } else if stud.grade.starts_with("C") {
-                theme.grade_c
-            } else if stud.grade.starts_with("D") {
-                theme.grade_d
-            } else {
-                theme.grade_f
-            };
+            let orig_g_color = grade_color_for(&stud.original_grade, &theme);
+            let new_g_color = grade_color_for(&stud.grade, &theme);
 
             let cells = vec![
                 Cell::from(stud.student_id.clone()).fg(theme.info),
@@ -1719,14 +1734,7 @@ fn draw_edit_overlay(f: &mut Frame, app: &mut App) {
         }
     }
 
-    // Semantic grade coloring (easily notified colors)
-    let grade_color = match grade.trim().to_uppercase().as_str() {
-        "A" | "A+" | "A-" | "PASSED" | "P" => theme.success, // Green
-        "B" | "B+" | "B-" => theme.purple,                  // Purple
-        "C" | "C+" | "C-" => theme.key_accent,              // Yellow
-        "D" | "D+" | "D-" => theme.warning,                 // Orange
-        _ => theme.border_focus,                            // Red/Pink
-    };
+    let grade_color = grade_color_for(grade.trim(), &theme);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1933,5 +1941,18 @@ fn format_thai_name(name: &str, target_first_name_width: usize) -> String {
         format!("{}{}{}", first_name, " ".repeat(padding), surname)
     } else {
         name.to_string()
+    }
+}
+
+fn grade_color_for(grade: &str, theme: &crate::style::Theme) -> ratatui::style::Color {
+    match grade.trim() {
+        g if g.starts_with("A") => theme.grade_a,
+        "B+"                    => theme.grade_bplus,
+        g if g.starts_with("B") => theme.grade_b,
+        "C+"                    => theme.grade_cplus,
+        g if g.starts_with("C") => theme.grade_c,
+        "D+"                    => theme.grade_dplus,
+        g if g.starts_with("D") => theme.grade_d,
+        _                       => theme.grade_f,
     }
 }

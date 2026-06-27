@@ -18,10 +18,13 @@ pub struct Theme {
     pub purple: Color,                    // Monokai Pro signature Purple (Index 141)
     pub alt_row: Color,
     pub title: Color,
-    // Grade specific colors (Monokai Pro signatures)
+    // Per-grade colors: A, B+, B, C+, C, D+, D, F
     pub grade_a: Color,
+    pub grade_bplus: Color,
     pub grade_b: Color,
+    pub grade_cplus: Color,
     pub grade_c: Color,
+    pub grade_dplus: Color,
     pub grade_d: Color,
     pub grade_f: Color,
 }
@@ -43,12 +46,15 @@ pub const MONOKAI_PRO: Theme = Theme {
     alt_row: Color::Indexed(234),         // Alternating zebra row (#1c1c1c)
     title: Color::Indexed(197),           // Monokai Pro Red/Pink
 
-    // Grade specific mapping (matching Monokai Pro syntax highlighter tokens)
-    grade_a: Color::Indexed(114),         // Green
-    grade_b: Color::Indexed(141),         // Purple (better Monokai flavor)
-    grade_c: Color::Indexed(221),         // Yellow
-    grade_d: Color::Indexed(208),         // Orange
-    grade_f: Color::Indexed(197),         // Red/Pink
+    // Per-grade heat-map palette (Blue → Red)
+    grade_a:     Color::Indexed(33),      // Blue          (#0087ff)
+    grade_bplus: Color::Indexed(37),      // Blue-Green    (#00afaf)
+    grade_b:     Color::Indexed(82),      // Green         (#5fd700)
+    grade_cplus: Color::Indexed(154),     // Green-Yellow  (#afd700)
+    grade_c:     Color::Indexed(226),     // Yellow        (#ffff00)
+    grade_dplus: Color::Indexed(214),     // Yellow-Orange (#ffaf00)
+    grade_d:     Color::Indexed(208),     // Orange        (#ff8700)
+    grade_f:     Color::Indexed(160),     // Darker-Red    (#d70000)
 };
 
 fn parse_json_color(val: &serde_json::Value) -> Option<Color> {
@@ -91,7 +97,7 @@ pub fn load_theme() -> Theme {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()));
-    
+
     let mut paths = vec![];
     if let Some(d) = exe_dir {
         paths.push(d.join("theme.json"));
@@ -107,7 +113,6 @@ pub fn load_theme() -> Theme {
             if let Ok(content) = std::fs::read_to_string(&path) {
                 if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&content) {
                     if let Some(obj) = json_val.as_object() {
-                        // Apply custom theme colors if they exist
                         if let Some(val) = obj.get("bg").and_then(parse_json_color) { theme.bg = val; }
                         if let Some(val) = obj.get("fg").and_then(parse_json_color) { theme.fg = val; }
                         if let Some(val) = obj.get("panel_bg").and_then(parse_json_color) { theme.panel_bg = val; }
@@ -123,14 +128,17 @@ pub fn load_theme() -> Theme {
                         if let Some(val) = obj.get("purple").and_then(parse_json_color) { theme.purple = val; }
                         if let Some(val) = obj.get("alt_row").and_then(parse_json_color) { theme.alt_row = val; }
                         if let Some(val) = obj.get("title").and_then(parse_json_color) { theme.title = val; }
-                        
-                        if let Some(val) = obj.get("grade_a").and_then(parse_json_color) { theme.grade_a = val; }
-                        if let Some(val) = obj.get("grade_b").and_then(parse_json_color) { theme.grade_b = val; }
-                        if let Some(val) = obj.get("grade_c").and_then(parse_json_color) { theme.grade_c = val; }
-                        if let Some(val) = obj.get("grade_d").and_then(parse_json_color) { theme.grade_d = val; }
-                        if let Some(val) = obj.get("grade_f").and_then(parse_json_color) { theme.grade_f = val; }
-                        
-                        break; // Loaded successfully, stop searching
+
+                        if let Some(val) = obj.get("grade_a").and_then(parse_json_color)     { theme.grade_a = val; }
+                        if let Some(val) = obj.get("grade_bplus").and_then(parse_json_color) { theme.grade_bplus = val; }
+                        if let Some(val) = obj.get("grade_b").and_then(parse_json_color)     { theme.grade_b = val; }
+                        if let Some(val) = obj.get("grade_cplus").and_then(parse_json_color) { theme.grade_cplus = val; }
+                        if let Some(val) = obj.get("grade_c").and_then(parse_json_color)     { theme.grade_c = val; }
+                        if let Some(val) = obj.get("grade_dplus").and_then(parse_json_color) { theme.grade_dplus = val; }
+                        if let Some(val) = obj.get("grade_d").and_then(parse_json_color)     { theme.grade_d = val; }
+                        if let Some(val) = obj.get("grade_f").and_then(parse_json_color)     { theme.grade_f = val; }
+
+                        break;
                     }
                 }
             }

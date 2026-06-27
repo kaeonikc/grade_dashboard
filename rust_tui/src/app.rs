@@ -649,8 +649,8 @@ impl App {
             } else {
                 (self.width as usize).saturating_sub(35)
             };
-            // Frozen cols: StudentID (12) + Name (≈32) + 3 spacing = 47
-            let scrollable_width = right_inner.saturating_sub(47);
+            // Frozen cols: # (2) + ID (9) + Name (≈32) + sep (1) + 4 spacing gaps = 48
+            let scrollable_width = right_inner.saturating_sub(48);
             // col width: sub_col_width(2) + column_spacing(1)
             let col_width: usize = if is_attendance { 3 } else { 13 };
             let visible_scrollable_cols = (scrollable_width / col_width).max(1);
@@ -950,6 +950,42 @@ impl App {
                             self.raw_category_index = 0;
                             self.raw_right_focused = false;
                             self.sync_raw_category();
+                        }
+                    }
+                    crossterm::event::KeyCode::Char('[') => {
+                        if self.active_tab == 1
+                            && !self.editing
+                            && !self.editing_weights
+                            && !self.editing_boundaries
+                            && self.raw_selected_student.is_none()
+                            && self.raw_category_index > 0
+                        {
+                            self.raw_category_index -= 1;
+                            self.sync_raw_category();
+                            self.cursor_row = 0;
+                            self.scroll_row_offset = 0;
+                            let col_start = if self.raw_right_focused { 2 } else { 0 };
+                            self.cursor_col = col_start;
+                            self.scroll_col_offset = col_start;
+                        }
+                    }
+                    crossterm::event::KeyCode::Char(']') => {
+                        if self.active_tab == 1
+                            && !self.editing
+                            && !self.editing_weights
+                            && !self.editing_boundaries
+                            && self.raw_selected_student.is_none()
+                        {
+                            let cat_count = self.get_categories().len();
+                            if self.raw_category_index + 1 < cat_count {
+                                self.raw_category_index += 1;
+                                self.sync_raw_category();
+                                self.cursor_row = 0;
+                                self.scroll_row_offset = 0;
+                                let col_start = if self.raw_right_focused { 2 } else { 0 };
+                                self.cursor_col = col_start;
+                                self.scroll_col_offset = col_start;
+                            }
                         }
                     }
                     crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k') => {

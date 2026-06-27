@@ -69,6 +69,7 @@ pub struct CourseData {
     pub grade_distribution: HashMap<String, GradeStats>,
     pub roundup_summary: RoundupSummary,
     pub rules: Option<HashMap<String, serde_json::Value>>,
+    pub attendance_labels: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
