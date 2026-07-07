@@ -44,6 +44,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_edit_overlay(f, app);
     } else if app.editing_attendance {
         draw_attendance_picker(f, app);
+    } else if app.editing_bulk_fill {
+        if app.bulk_fill_is_attendance {
+            draw_bulk_fill_attendance_picker(f, app);
+        } else {
+            draw_bulk_fill_overlay(f, app);
+        }
     } else if app.editing_weights || app.editing_boundaries {
         draw_settings_overlay(f, app);
     }
@@ -1413,6 +1419,28 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                         Span::styled(" [Esc] ", Style::default().fg(theme.grade_f).bold()),
                         Span::raw("Cancel"),
                     ]
+                } else if app.editing_bulk_fill {
+                    if app.bulk_fill_is_attendance {
+                        vec![
+                            Span::raw(" Fill Column (Attendance): "),
+                            Span::styled(" [▲/▼] ", Style::default().fg(theme.active_tab).bold()),
+                            Span::raw("Navigate  "),
+                            Span::styled(" [Enter] ", Style::default().fg(theme.success).bold()),
+                            Span::raw("Fill All  "),
+                            Span::styled(" [Esc] ", Style::default().fg(theme.grade_f).bold()),
+                            Span::raw("Cancel"),
+                        ]
+                    } else {
+                        vec![
+                            Span::raw(" Fill Column: "),
+                            Span::styled(" [Type Value] ", Style::default().fg(theme.active_tab).bold()),
+                            Span::raw("  "),
+                            Span::styled(" [Enter] ", Style::default().fg(theme.success).bold()),
+                            Span::raw("Fill All  "),
+                            Span::styled(" [Esc] ", Style::default().fg(theme.grade_f).bold()),
+                            Span::raw("Cancel"),
+                        ]
+                    }
                 } else if app.editing_weights || app.editing_boundaries {
                     vec![
                         Span::raw(" Editing Configurations: "),
@@ -1451,6 +1479,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                             leg.push(Span::raw("Move  "));
                             leg.push(Span::styled(" [Enter] ", Style::default().fg(theme.success).bold()));
                             leg.push(Span::raw("Open Student  "));
+                            leg.push(Span::styled(" [f] ", Style::default().fg(theme.title).bold()));
+                            leg.push(Span::raw("Fill Column  "));
                             leg.push(Span::styled(" [←/Esc] ", Style::default().fg(theme.warning).bold()));
                             leg.push(Span::raw("Back to Categories  "));
                         } else {
@@ -1899,6 +1929,122 @@ fn draw_attendance_picker(f: &mut Frame, app: &mut App) {
     // Key-hint row at the bottom of the list
     items.push(ListItem::new(Line::from(Span::styled(
         "  P L X A / C  ·  ↑↓ nav  ·  Enter  ·  Esc  ",
+        Style::default().fg(theme.inactive_tab),
+    ))));
+
+    let list = List::new(items).block(block);
+    f.render_widget(list, area);
+}
+
+fn draw_bulk_fill_overlay(f: &mut Frame, app: &mut App) {
+    let theme = app.theme;
+    let area = centered_rect(45, 25, f.area());
+    f.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme.warning))
+        .style(Style::default().bg(theme.panel_bg))
+        .title(format!(
+            " Fill Column: {}  ({} students) ",
+            app.bulk_fill_column, app.bulk_fill_student_count
+        ))
+        .title_style(Style::default().fg(theme.key_accent).bold());
+
+    f.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // top margin
+            Constraint::Length(1), // warning line
+            Constraint::Length(3), // input box
+            Constraint::Length(3), // button/footer
+        ])
+        .split(area);
+
+    let warning = Paragraph::new(Line::from(Span::styled(
+        " ⚠️ This overwrites every student's current value for this column ",
+        Style::default().fg(theme.warning),
+    )));
+    f.render_widget(warning, chunks[1]);
+
+    if let Some(ref mut ta) = app.bulk_fill_textarea {
+        ta.set_block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme.purple))
+                .title(" New Value (applies to all rows) ")
+                .title_style(Style::default().fg(theme.purple).bold())
+        );
+        let input_area = Rect {
+            x: chunks[2].x + 1,
+            width: chunks[2].width.saturating_sub(2),
+            ..chunks[2]
+        };
+        f.render_widget(ta.widget(), input_area);
+    }
+
+    let button_block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(theme.border));
+    let button_text = " [Enter] ▶ Fill All Students    [Esc] Cancel ";
+    let button_p = Paragraph::new(button_text)
+        .block(button_block)
+        .style(Style::default().fg(theme.success).bold())
+        .alignment(Alignment::Center);
+    f.render_widget(button_p, chunks[3]);
+}
+
+fn draw_bulk_fill_attendance_picker(f: &mut Frame, app: &mut App) {
+    let theme = app.theme;
+    let area = centered_rect(36, 46, f.area());
+    f.render_widget(Clear, area);
+
+    let title = format!(
+        " Fill Column: {}  ({} students) ",
+        app.bulk_fill_column, app.bulk_fill_student_count
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme.warning))
+        .style(Style::default().bg(theme.panel_bg))
+        .title(title)
+        .title_style(Style::default().fg(theme.key_accent).bold());
+
+    let options: &[(&str, &str, Color)] = &[
+        ("P", "Present", theme.success),
+        ("L", "Late",    theme.warning),
+        ("X", "Excused", theme.key_accent),
+        ("A", "Absent",  theme.grade_f),
+        ("",  "Clear",   theme.inactive_tab),
+    ];
+    let mut items: Vec<ListItem> = options.iter().enumerate().map(|(i, &(code, label, opt_color))| {
+        let selected = i == app.bulk_fill_attendance_index;
+        let bullet = if selected { "●" } else { "○" };
+        let tag = if code.is_empty() {
+            String::new()
+        } else {
+            format!("  [{}]", code)
+        };
+        let line = Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("{} {}{}", bullet, label, tag),
+                if selected {
+                    Style::default().fg(opt_color).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme.fg)
+                }),
+            Span::raw("  "),
+        ]);
+        ListItem::new(line)
+    }).collect();
+
+    items.push(ListItem::new(Line::from(Span::styled(
+        " ⚠ overwrites every student  ·  P L X A / C  ·  ↑↓ nav  ·  Enter  ·  Esc  ",
         Style::default().fg(theme.inactive_tab),
     ))));
 

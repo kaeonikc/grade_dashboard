@@ -110,6 +110,30 @@ pub async fn update_score(course_path: &str, student_id: &str, col_name: &str, v
     Ok(res)
 }
 
+pub async fn bulk_update_score(course_path: &str, col_name: &str, value: &str) -> Result<GenericResponse, String> {
+    let api_path = resolve_tui_api_path();
+    let output = Command::new("python3")
+        .arg(&api_path)
+        .arg("bulk-update-score")
+        .arg(course_path)
+        .arg(col_name)
+        .arg(value)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| format!("Failed to spawn python3: {}", e))?;
+
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    let res: GenericResponse = serde_json::from_str(&stdout_str)
+        .map_err(|e| format!("JSON parse error: {}\nOutput was: {}", e, stdout_str))?;
+
+    if res.status == "error" {
+        return Err(res.message);
+    }
+    Ok(res)
+}
+
 pub async fn update_config(course_path: &str, weights: &str, boundaries: &str) -> Result<GenericResponse, String> {
     let api_path = resolve_tui_api_path();
     let output = Command::new("python3")

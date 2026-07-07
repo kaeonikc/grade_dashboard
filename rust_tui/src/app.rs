@@ -18,6 +18,7 @@ pub enum AppEvent {
     CoursesLoaded(Result<Vec<Course>, String>),
     CourseDataLoaded(Result<CourseData, String>),
     ScoreUpdated(Result<(), String>),
+    BulkScoreUpdated(Result<String, String>),
     ConfigUpdated(Result<(), String>),
     ReportsExported(Result<String, String>),
 }
@@ -76,6 +77,14 @@ pub struct App {
     pub raw_selected_category: Option<String>,
     pub raw_selected_student: Option<usize>,
 
+    // Bulk column-fill editing state (Raw Details, L1 sub-column view)
+    pub editing_bulk_fill: bool,
+    pub bulk_fill_textarea: Option<tui_textarea::TextArea<'static>>,
+    pub bulk_fill_column: String,
+    pub bulk_fill_student_count: usize,
+    pub bulk_fill_is_attendance: bool,
+    pub bulk_fill_attendance_index: usize,
+
     // Attendance picker state
     pub editing_attendance: bool,
     pub attendance_index: usize,
@@ -124,6 +133,12 @@ impl App {
             raw_right_focused: false,
             raw_selected_category: None,
             raw_selected_student: None,
+            editing_bulk_fill: false,
+            bulk_fill_textarea: None,
+            bulk_fill_column: String::new(),
+            bulk_fill_student_count: 0,
+            bulk_fill_is_attendance: false,
+            bulk_fill_attendance_index: 0,
             editing_attendance: false,
             attendance_index: 0,
             preserve_nav_on_reload: false,
@@ -389,6 +404,80 @@ impl App {
                 self.edit_textarea = Some(ta);
             }
         }
+    }
+
+    pub fn start_bulk_fill(&mut self) {
+        if self.editing || self.editing_bulk_fill || self.loading {
+            return;
+        }
+        if self.active_tab != 1 || !self.raw_right_focused || self.raw_selected_student.is_some() {
+            return;
+        }
+        let data = match &self.course_data {
+            Some(d) => d,
+            None => return,
+        };
+        let cat = match &self.raw_selected_category {
+            Some(c) => c.clone(),
+            None => return,
+        };
+        let sub_cols = data.data_mapping.get(&cat).cloned().unwrap_or_default();
+        if self.cursor_col < 2 || self.cursor_col - 2 >= sub_cols.len() {
+            // Not on an editable sub-column (ID/Name/Total) — no-op
+            return;
+        }
+        let col_name = sub_cols[self.cursor_col - 2].clone();
+        let is_attendance = cat.to_lowercase().contains("attendance");
+
+        self.bulk_fill_column = col_name;
+        self.bulk_fill_student_count = data.raw_scores.len();
+        self.editing_bulk_fill = true;
+        self.bulk_fill_is_attendance = is_attendance;
+
+        if is_attendance {
+            self.bulk_fill_attendance_index = 0;
+            self.bulk_fill_textarea = None;
+        } else {
+            let mut ta = tui_textarea::TextArea::new(vec![String::new()]);
+            ta.set_cursor_line_style(ratatui::style::Style::default().bg(self.theme.highlight));
+            ta.set_style(
+                ratatui::style::Style::default()
+                    .fg(self.theme.info)
+                    .bg(self.theme.panel_bg)
+            );
+            self.bulk_fill_textarea = Some(ta);
+        }
+    }
+
+    pub fn save_bulk_fill(&mut self) {
+        let val = match &self.bulk_fill_textarea {
+            Some(ta) => ta.lines()[0].trim().to_string(),
+            None => return,
+        };
+        self.dispatch_bulk_fill(val);
+    }
+
+    pub fn save_bulk_fill_attendance(&mut self) {
+        let options = ["P", "L", "X", "A", ""];
+        let val = options[self.bulk_fill_attendance_index].to_string();
+        self.dispatch_bulk_fill(val);
+    }
+
+    fn dispatch_bulk_fill(&mut self, val: String) {
+        self.loading = true;
+        self.loading_msg = format!("Filling '{}' = {} for all students...", self.bulk_fill_column, val);
+        self.editing_bulk_fill = false;
+        self.bulk_fill_textarea = None;
+
+        let path = self.selected_course_path.clone();
+        let col = self.bulk_fill_column.clone();
+        let tx = self.tx.clone();
+
+        tokio::spawn(async move {
+            let res = crate::bridge::bulk_update_score(&path, &col, &val).await;
+            let event = AppEvent::BulkScoreUpdated(res.map(|r| r.message));
+            let _ = tx.send(event).await;
+        });
     }
 
     pub fn start_editing_weights(&mut self) {
@@ -744,6 +833,20 @@ impl App {
                     }
                 }
             }
+            AppEvent::BulkScoreUpdated(res) => {
+                self.loading = false;
+                match res {
+                    Ok(msg) => {
+                        self.info_msg = Some(msg);
+                        self.info_msg_ticks = 0;
+                        self.preserve_nav_on_reload = true;
+                        self.load_course_data();
+                    }
+                    Err(e) => {
+                        self.error = Some(format!("Failed to fill column: {}", e));
+                    }
+                }
+            }
             AppEvent::ConfigUpdated(res) => {
                 self.loading = false;
                 match res {
@@ -781,6 +884,63 @@ impl App {
                             crossterm::event::KeyCode::Esc => {
                                 self.editing = false;
                                 self.edit_textarea = None;
+                            }
+                            _ => {
+                                ta.input(key);
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                if self.editing_bulk_fill {
+                    if self.bulk_fill_is_attendance {
+                        match key.code {
+                            crossterm::event::KeyCode::Esc => {
+                                self.editing_bulk_fill = false;
+                            }
+                            crossterm::event::KeyCode::Enter => {
+                                self.save_bulk_fill_attendance();
+                            }
+                            crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k') => {
+                                self.bulk_fill_attendance_index = self.bulk_fill_attendance_index.saturating_sub(1);
+                            }
+                            crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j') => {
+                                if self.bulk_fill_attendance_index < 4 {
+                                    self.bulk_fill_attendance_index += 1;
+                                }
+                            }
+                            crossterm::event::KeyCode::Char('p') | crossterm::event::KeyCode::Char('P') => {
+                                self.bulk_fill_attendance_index = 0;
+                                self.save_bulk_fill_attendance();
+                            }
+                            crossterm::event::KeyCode::Char('l') | crossterm::event::KeyCode::Char('L') => {
+                                self.bulk_fill_attendance_index = 1;
+                                self.save_bulk_fill_attendance();
+                            }
+                            crossterm::event::KeyCode::Char('x') | crossterm::event::KeyCode::Char('X') => {
+                                self.bulk_fill_attendance_index = 2;
+                                self.save_bulk_fill_attendance();
+                            }
+                            crossterm::event::KeyCode::Char('a') | crossterm::event::KeyCode::Char('A') => {
+                                self.bulk_fill_attendance_index = 3;
+                                self.save_bulk_fill_attendance();
+                            }
+                            crossterm::event::KeyCode::Char('c') | crossterm::event::KeyCode::Char('C')
+                            | crossterm::event::KeyCode::Delete | crossterm::event::KeyCode::Backspace => {
+                                self.bulk_fill_attendance_index = 4;
+                                self.save_bulk_fill_attendance();
+                            }
+                            _ => {}
+                        }
+                    } else if let Some(ref mut ta) = self.bulk_fill_textarea {
+                        match key.code {
+                            crossterm::event::KeyCode::Enter => {
+                                self.save_bulk_fill();
+                            }
+                            crossterm::event::KeyCode::Esc => {
+                                self.editing_bulk_fill = false;
+                                self.bulk_fill_textarea = None;
                             }
                             _ => {
                                 ta.input(key);
@@ -918,6 +1078,11 @@ impl App {
                     crossterm::event::KeyCode::Char('b') | crossterm::event::KeyCode::Char('B') => {
                         if self.state == AppState::Dashboard {
                             self.start_editing_boundaries();
+                        }
+                    }
+                    crossterm::event::KeyCode::Char('f') | crossterm::event::KeyCode::Char('F') => {
+                        if self.state == AppState::Dashboard {
+                            self.start_bulk_fill();
                         }
                     }
                     crossterm::event::KeyCode::Tab => {

@@ -460,6 +460,165 @@ def update_student_score(course_path, student_id, col_name, value):
         import traceback
         return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
 
+def _update_xlsx_attendance_bulk(xlsx_path, target_col_orig_name, val_to_set):
+    import openpyxl
+    wb = openpyxl.load_workbook(xlsx_path)
+    ws = wb.active
+
+    header_row = 1
+    col_idx = None
+    student_id_col_idx = None
+
+    for c in range(1, ws.max_column + 1):
+        val = ws.cell(row=header_row, column=c).value
+        if val:
+            val_str = str(val).strip()
+            if val_str == target_col_orig_name:
+                col_idx = c
+            if val_str == "Student ID":
+                student_id_col_idx = c
+
+    if not col_idx or not student_id_col_idx:
+        return False
+
+    updated = 0
+    for r in range(2, ws.max_row + 1):
+        sid_val = ws.cell(row=r, column=student_id_col_idx).value
+        if sid_val and str(sid_val).strip():
+            ws.cell(row=r, column=col_idx).value = val_to_set
+            updated += 1
+
+    if updated == 0:
+        return False
+
+    wb.save(xlsx_path)
+    return True
+
+def update_column_score(course_path, col_name, value):
+    try:
+        path = Path(course_path)
+        data_dir = path / "data"
+        if not data_dir.is_dir():
+            return {"status": "error", "message": f"Data directory not found in {course_path}"}
+
+        # Try to convert value to appropriate type (float or int if numeric)
+        trimmed_val = str(value).strip()
+        val_to_set = trimmed_val
+        if trimmed_val == "":
+            val_to_set = None
+        else:
+            try:
+                if "." in trimmed_val:
+                    val_to_set = float(trimmed_val)
+                else:
+                    val_to_set = int(trimmed_val)
+            except ValueError:
+                # Keep as string (e.g. attendance codes P, A, L, EA)
+                val_to_set = trimmed_val
+
+        # Find which file contains the column
+        target_file = None
+        is_xlsx = False
+        target_col_orig_name = None
+
+        for file in data_dir.iterdir():
+            if file.is_file() and file.suffix in ['.csv', '.xlsx']:
+                if file.suffix == '.csv':
+                    try:
+                        df = pd.read_csv(file, nrows=0)
+                        df.columns = df.columns.astype(str).str.strip()
+                        for col in df.columns:
+                            clean_col, _ = parse_pts(col)
+                            if clean_col == col_name or col == col_name:
+                                target_file = file
+                                target_col_orig_name = col
+                                is_xlsx = False
+                                break
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        df = pd.read_excel(file, nrows=0)
+                        df.columns = df.columns.astype(str).str.strip()
+                        for col in df.columns:
+                            clean_col, _ = parse_pts(col)
+                            if clean_col == col_name or col == col_name:
+                                target_file = file
+                                target_col_orig_name = col
+                                is_xlsx = True
+                                break
+                    except Exception:
+                        pass
+            if target_file:
+                break
+
+        if not target_file:
+            return {"status": "error", "message": f"Column '{col_name}' not found in any score sheets."}
+
+        if not is_xlsx:
+            # Update CSV file
+            df = pd.read_csv(target_file)
+            df.columns = df.columns.astype(str).str.strip()
+            df['Student ID'] = df['Student ID'].astype(str).str.strip()
+
+            mask = df['Student ID'].str.len() > 0
+            student_count = int(mask.sum())
+
+            if target_col_orig_name in df.columns:
+                df[target_col_orig_name] = df[target_col_orig_name].astype(object)
+            df.loc[mask, target_col_orig_name] = val_to_set
+
+            # Save back
+            df.to_csv(target_file, index=False)
+
+            msg = f"Filled '{col_name}' = {value} for {student_count} students in {target_file.name}."
+            if target_file.name.endswith("attendance.csv"):
+                xlsx_path = target_file.with_suffix(".xlsx")
+                if xlsx_path.exists():
+                    ok = _update_xlsx_attendance_bulk(xlsx_path, target_col_orig_name, val_to_set)
+                    if ok:
+                        msg += " (also updated Excel spreadsheet)"
+                    else:
+                        msg += " (failed to update Excel spreadsheet)"
+            return {"status": "success", "message": msg}
+        else:
+            # Update XLSX file using openpyxl to preserve formulas/formats
+            import openpyxl
+            wb = openpyxl.load_workbook(target_file)
+            ws = wb.active
+
+            header_row = 1
+            col_idx = None
+            student_id_col_idx = None
+
+            for c in range(1, ws.max_column + 1):
+                val = ws.cell(row=header_row, column=c).value
+                if val:
+                    val_str = str(val).strip()
+                    if val_str == target_col_orig_name:
+                        col_idx = c
+                    if val_str == "Student ID":
+                        student_id_col_idx = c
+
+            if not col_idx:
+                return {"status": "error", "message": f"Column '{target_col_orig_name}' header not found in XLSX sheet."}
+            if not student_id_col_idx:
+                return {"status": "error", "message": "'Student ID' column header not found in XLSX sheet."}
+
+            updated = 0
+            for r in range(2, ws.max_row + 1):
+                sid_val = ws.cell(row=r, column=student_id_col_idx).value
+                if sid_val and str(sid_val).strip():
+                    ws.cell(row=r, column=col_idx).value = val_to_set
+                    updated += 1
+
+            wb.save(target_file)
+            return {"status": "success", "message": f"Filled '{col_name}' = {value} for {updated} students in XLSX {target_file.name}."}
+
+    except Exception as e:
+        import traceback
+        return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
+
 def update_course_config(course_path, weights_dict=None, boundaries_dict=None):
     try:
         path = Path(course_path)
@@ -539,6 +698,14 @@ if __name__ == "__main__":
         col_name = sys.argv[4]
         value = sys.argv[5]
         print(json.dumps(update_student_score(course_path, student_id, col_name, value)))
+    elif cmd == "bulk-update-score":
+        if len(sys.argv) < 5:
+            print(json.dumps({"status": "error", "message": "Missing arguments (path, col, val)"}))
+            sys.exit(1)
+        course_path = sys.argv[2]
+        col_name = sys.argv[3]
+        value = sys.argv[4]
+        print(json.dumps(update_column_score(course_path, col_name, value)))
     elif cmd == "update-config":
         if len(sys.argv) < 5:
             print(json.dumps({"status": "error", "message": "Missing arguments (path, weights_json, boundaries_json)"}))

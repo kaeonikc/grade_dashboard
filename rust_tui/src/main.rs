@@ -86,8 +86,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(event) = rx.recv().await {
             // Check for exit
             if let AppEvent::Key(key) = event {
-                // If 'q' is pressed and we aren't editing a cell, weight, or boundary: exit!
-                if key.code == KeyCode::Char('q') && !app.editing && !app.editing_weights && !app.editing_boundaries {
+                // If 'q' is pressed and we aren't editing a cell, weight, boundary, or bulk-filling: exit!
+                if key.code == KeyCode::Char('q') && !app.editing && !app.editing_weights && !app.editing_boundaries && !app.editing_bulk_fill {
                     break;
                 }
                 
