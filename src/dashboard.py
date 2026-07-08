@@ -221,7 +221,7 @@ def show_grade_distribution(final_df: pd.DataFrame, config: dict) -> None:
     console.print()
 
 
-def export_reports(final_df: pd.DataFrame, course_path: Path, config: dict, max_scores: dict, use_weighted: bool) -> None:
+def export_reports(final_df: pd.DataFrame, course_path: Path, config: dict, max_scores: dict, use_weighted: bool) -> Path:
     weights = config.get("weights", {})
     data_mapping = config.get("data_mapping", {})
     rename = {k: v.replace("\n", " ") for k, v in _col_headers(final_df, max_scores, config, use_weighted).items()}
@@ -254,7 +254,7 @@ def export_reports(final_df: pd.DataFrame, course_path: Path, config: dict, max_
         copy_df = pd.concat(copy_parts, axis=1)
         copy_df.to_csv(report_dir / "copy_friendly_scores.csv", index=False)
 
-    console.print(f"[green]✓ Reports saved to {report_dir}[/green]")
+    return report_dir
 
 def update_database_totals(course_path: Path, final_df: pd.DataFrame, data_mapping: dict, max_scores: dict):
     data_dir = course_path / "data"
@@ -354,7 +354,8 @@ def run() -> None:
             show_grade_distribution(final_df, config)
 
             if Confirm.ask("Export final report to CSV?", default=False):
-                export_reports(final_df, course_path, config, max_scores, use_weighted)
+                report_dir = export_reports(final_df, course_path, config, max_scores, use_weighted)
+                console.print(f"[green]✓ Reports saved to {report_dir}[/green]")
 
         if not Confirm.ask("\nView another course?", default=False):
             break

@@ -146,6 +146,183 @@ def _fill_default_max_scores(config: dict, max_scores: dict) -> None:
                 max_scores[col] = per_col
 
 
+_ATTENDANCE_MAP = {'P': 1.0, 'L': 0.8, 'EA': 1.0, 'X': 1.0, 'A': 0.0}
+
+
+def _compute_analytics(final_df: pd.DataFrame, config: dict, max_scores: dict) -> dict:
+    """
+    Computes the payload for the Analytics tab. Row order (and therefore each
+    student's positional `raw_index`) matches the `student_grades`/`raw_scores`
+    arrays built later in get_course_data, since both are derived from the same
+    already-sorted final_df in iteration order.
+    """
+    df = final_df.reset_index(drop=True)
+    weights = config.get("weights", {})
+    data_mapping = config.get("data_mapping", {})
+    n = len(df)
+
+    final_scores = pd.to_numeric(df.get("Final Score", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
+    grades = df.get("Grade", pd.Series(dtype=str)).astype(str)
+
+    # ---- Overview ----
+    passing_count = int((grades != "F").sum()) if n else 0
+    overview = {
+        "mean": round(float(final_scores.mean()), 2) if n else 0.0,
+        "median": round(float(final_scores.median()), 2) if n else 0.0,
+        "std_dev": round(float(final_scores.std(ddof=1)), 2) if n > 1 else 0.0,
+        "pass_rate": round(float(passing_count / n * 100), 2) if n else 0.0,
+        "passing_count": passing_count,
+        "total_count": n,
+    }
+
+    # ---- Histogram (Final Score, fixed 0-100 scale, 10 bins) ----
+    histogram = []
+    if n:
+        histogram = [
+            {"label": f"{i * 10}-{i * 10 + 9}" if i < 9 else "90-100", "count": 0}
+            for i in range(10)
+        ]
+        for score in final_scores:
+            idx = min(9, max(0, int(score // 10)))
+            histogram[idx]["count"] += 1
+
+    # ---- Box plot (Final Score, 1.5*IQR outlier rule) ----
+    if n:
+        q1 = float(final_scores.quantile(0.25))
+        q2 = float(final_scores.quantile(0.5))
+        q3 = float(final_scores.quantile(0.75))
+        iqr = q3 - q1
+        lower_fence, upper_fence = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+        mean = float(final_scores.mean())
+
+        non_outliers = final_scores[(final_scores >= lower_fence) & (final_scores <= upper_fence)]
+        whisker_low = float(non_outliers.min()) if not non_outliers.empty else float(final_scores.min())
+        whisker_high = float(non_outliers.max()) if not non_outliers.empty else float(final_scores.max())
+
+        diff_ratio = ((mean - q2) / iqr) if iqr > 0 else 0.0
+        if abs(diff_ratio) < 0.05:
+            skew_label = "roughly symmetric"
+        elif diff_ratio > 0:
+            skew_label = "right-skewed (mean > median)"
+        else:
+            skew_label = "left-skewed (mean < median)"
+
+        outliers = []
+        for i in range(n):
+            score = float(final_scores.iloc[i])
+            if score < lower_fence or score > upper_fence:
+                outliers.append({
+                    "student_id": str(df.at[i, "Student ID"]),
+                    "name": str(df.at[i, "Name"]),
+                    "final_score": score,
+                    "raw_index": i,
+                })
+        outliers.sort(key=lambda o: o["final_score"])
+
+        box_plot = {
+            "min": float(final_scores.min()), "q1": q1, "median": q2, "q3": q3,
+            "max": float(final_scores.max()), "mean": round(mean, 2),
+            "whisker_low": whisker_low, "whisker_high": whisker_high,
+            "skew_label": skew_label, "outliers": outliers,
+        }
+    else:
+        box_plot = {
+            "min": 0.0, "q1": 0.0, "median": 0.0, "q3": 0.0, "max": 0.0, "mean": 0.0,
+            "whisker_low": 0.0, "whisker_high": 0.0, "skew_label": "roughly symmetric",
+            "outliers": [],
+        }
+
+    # ---- Progress over time (class-average per item, in item order) ----
+    progress = []
+    for category in weights.keys():
+        cols = [c for c in data_mapping.get(category, []) if c in df.columns]
+        if not cols:
+            continue
+        items = []
+        if category == "attendance":
+            for col in cols:
+                vals = df[col].astype(str).str.strip().map(_ATTENDANCE_MAP)
+                avg_pct = float(vals.mean(skipna=True) * 100) if vals.notna().any() else 0.0
+                items.append({"label": col, "avg_pct": round(avg_pct, 2)})
+        else:
+            for col in cols:
+                col_max = max_scores.get(col, 100.0)
+                vals = pd.to_numeric(df[col], errors="coerce")
+                avg_pct = float(vals.mean(skipna=True) / col_max * 100) if col_max > 0 and vals.notna().any() else 0.0
+                items.append({"label": col, "avg_pct": round(avg_pct, 2)})
+        progress.append({"category": category, "items": items})
+
+    # ---- Item difficulty & discrimination (categories with >=2 non-attendance items) ----
+    item_analysis = []
+    for category in weights.keys():
+        if category == "attendance":
+            continue
+        cols = [c for c in data_mapping.get(category, []) if c in df.columns]
+        if len(cols) < 2:
+            continue
+        cat_pct = pd.to_numeric(df.get(f"{category}_pct", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
+        for col in cols:
+            col_max = max_scores.get(col, 100.0)
+            vals = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+            difficulty = float(vals.mean() / col_max * 100) if col_max > 0 else 0.0
+            item_share = (vals / col_max * 100) if col_max > 0 else vals * 0.0
+            corrected_total = cat_pct - item_share
+            discrimination = vals.corr(corrected_total)
+            discrimination = float(discrimination) if pd.notna(discrimination) else 0.0
+            if difficulty >= 80:
+                label = "Easy"
+            elif difficulty >= 30:
+                label = "Medium"
+            else:
+                label = "Hard"
+            item_analysis.append({
+                "category": category, "item": col, "max_score": float(col_max),
+                "difficulty": round(difficulty, 2), "difficulty_label": label,
+                "discrimination": round(discrimination, 3), "n": int(len(vals)),
+            })
+
+    # ---- Correlation matrix (category _pct columns) ----
+    pct_cols = [f"{cat}_pct" for cat in weights.keys() if f"{cat}_pct" in df.columns]
+    correlation = {"categories": [], "matrix": []}
+    if pct_cols:
+        corr_df = df[pct_cols].apply(pd.to_numeric, errors="coerce").corr().fillna(0.0)
+        correlation["categories"] = [c[:-len("_pct")] for c in pct_cols]
+        correlation["matrix"] = [[round(float(v), 3) for v in row] for row in corr_df.values]
+
+    # ---- At-risk students (below Q1 and/or failing) ----
+    at_risk = []
+    if n:
+        q1_final = float(final_scores.quantile(0.25))
+        for i in range(n):
+            score = float(final_scores.iloc[i])
+            grade = str(df.at[i, "Grade"])
+            reasons = []
+            if score < q1_final:
+                reasons.append("Below Q1")
+            if grade == "F":
+                reasons.append("Failing")
+            if reasons:
+                at_risk.append({
+                    "raw_index": i,
+                    "student_id": str(df.at[i, "Student ID"]),
+                    "name": str(df.at[i, "Name"]),
+                    "final_score": score,
+                    "grade": grade,
+                    "reasons": reasons,
+                })
+        at_risk.sort(key=lambda r: r["final_score"])
+
+    return {
+        "overview": overview,
+        "histogram": histogram,
+        "box_plot": box_plot,
+        "progress": progress,
+        "item_analysis": item_analysis,
+        "correlation": correlation,
+        "at_risk": at_risk,
+    }
+
+
 def get_course_data(course_path, use_weighted=True):
     try:
         path = Path(course_path)
@@ -262,6 +439,8 @@ def get_course_data(course_path, use_weighted=True):
         attendance_cols = config.get('data_mapping', {}).get('attendance', []) or []
         attendance_labels = _compute_attendance_labels(config, attendance_cols)
 
+        analytics = _compute_analytics(final_df, config, max_scores)
+
         return {
             "status": "success",
             "course_id": str(config.get("course_id", "")),
@@ -280,6 +459,7 @@ def get_course_data(course_path, use_weighted=True):
             "roundup_summary": roundup_summary,
             "rules": config.get("rules", {}),
             "attendance_labels": attendance_labels,
+            "analytics": analytics,
         }
     except Exception as e:
         import traceback

@@ -5,6 +5,7 @@ import shutil
 import yaml
 import pandas as pd
 import datetime
+import random
 import re
 from pathlib import Path
 from rich.prompt import Confirm
@@ -1088,6 +1089,192 @@ def undo_course():
         print(f"  ⏪ Restored {original_name} from backup")
     print("✅ Undo completed successfully!")
 
+def mock_course():
+    """
+    Generates a complete, self-contained mock course under courses/0_mock_grading/
+    with a config, student roster, score data, and attendance sheet, seeded
+    deterministically so grade-tui and the dashboard can be exercised end-to-end
+    without needing real student data. Always wipes and regenerates that one
+    hardcoded, unmistakably-fake directory.
+    """
+    base_dir = Path("courses") / "0_mock_grading"
+    if base_dir.exists():
+        shutil.rmtree(base_dir)
+
+    course_info_dir = base_dir / "course_info"
+    data_dir = base_dir / "data"
+    reports_dir = base_dir / "reports"
+    course_info_dir.mkdir(parents=True)
+    data_dir.mkdir(parents=True)
+    reports_dir.mkdir(parents=True)
+
+    rng = random.Random(42)
+
+    # --- Config ---
+    config_path = course_info_dir / "0_mock_config.yaml"
+    config_path.write_text("""course_id: "MOCK"
+course_name: "ฟิสิกส์ทั่วไป (ข้อมูลจำลอง)"
+term: "0"
+sec_num: "00"
+teacher: "อาจารย์ตัวอย่าง"
+credits: "3(3-0-6)"
+university: "มหาวิทยาลัยตัวอย่าง"
+campus: "วิทยาเขตตัวอย่าง"
+program: "ปริญญาตรี (ข้อมูลจำลอง)"
+class_schedule:
+  day: "พ."
+  time: "09:00-12:00"
+  classroom: "MOCK-101"
+exam_schedule: "M 15 Mar 2027 09:00-11:00, F 17 May 2027 09:00-12:00"
+term_start_date: "2027-01-11"
+
+weights:
+  attendance: 0.1
+  homework: 0.2
+  midterm: 0.3
+  final: 0.4
+
+data_mapping:
+  homework: ["hw1 (10pts)", "hw2 (10pts)", "hw3 (10pts)"]
+  midterm: ["midterm_exam (30pts)"]
+  final: ["final_exam (40pts)"]
+
+rules:
+  drop_lowest_homework: true
+
+grade_boundaries:
+  A: 80
+  B+: 75
+  B: 70
+  C+: 65
+  C: 60
+  D+: 55
+  D: 50
+""", encoding="utf-8")
+
+    # --- Student roster ---
+    FIRST_NAMES = [
+        "Alice", "Bob", "Charlie", "Diana", "Ethan", "Fiona", "George", "Hannah",
+        "Ian", "Julia", "Kevin", "Laura", "Michael", "Nora", "Oscar", "Paula",
+        "Quentin", "Rachel", "Steven", "Tina",
+    ]
+    LAST_NAMES = [
+        "Smith", "Jones", "Brown", "Prince", "Taylor", "Anderson", "Clark", "Lewis",
+        "Walker", "Young", "King", "Wright", "Scott", "Green", "Baker", "Adams",
+        "Nelson", "Carter", "Mitchell", "Perez",
+    ]
+    name_pool = [f"{fn} {ln}" for fn in FIRST_NAMES for ln in LAST_NAMES]
+    rng.shuffle(name_pool)
+
+    num_students = 30
+    num_sessions = 15
+    student_names = name_pool[:num_students]
+    student_ids = [f"69200{i + 1:03d}" for i in range(num_students)]
+    class_groups = ["MOCK.SEC.1" if i % 2 == 0 else "MOCK.SEC.2" for i in range(num_students)]
+
+    student_registry = pd.DataFrame({
+        "Student ID": student_ids,
+        "Name": student_names,
+        "Class Group": class_groups,
+    })
+    student_registry.to_csv(course_info_dir / "0_mock_student_info.csv", index=False)
+
+    # --- Deterministic edge-case index selection ---
+    at_risk_idxs = set(rng.sample(range(num_students), 4))
+    remaining = [i for i in range(num_students) if i not in at_risk_idxs]
+    hw2_overmax_idx = rng.choice(remaining)
+    midterm_overmax_idx = rng.choice(remaining)
+    hw3_blank_idxs = set(rng.sample(remaining, 3))
+    final_blank_idxs = set(rng.sample(remaining, 2))
+    attendance_invalid_idxs = rng.sample(remaining, 2)
+
+    def clipped_gauss(mu, sigma):
+        return max(0.0, min(1.0, rng.gauss(mu, sigma)))
+
+    # --- Homework scores (hw1, hw2, hw3; 10pts each; drop_lowest_homework exercises this) ---
+    hw_max = 10.0
+    hw_rows = []
+    for i in range(num_students):
+        scale = 0.3 if i in at_risk_idxs else 1.0
+        scores = [round(clipped_gauss(0.75, 0.15) * hw_max * scale, 1) for _ in range(3)]
+        if i == hw2_overmax_idx:
+            scores[1] = 12.0  # deliberately exceeds the 10pt max
+        if i in hw3_blank_idxs:
+            scores[2] = None  # deliberately ungraded/missing
+        row_total = round(sum(s for s in scores if s is not None), 1)
+        hw_rows.append({
+            "Student ID": student_ids[i],
+            "Name": student_names[i],
+            "hw1 (10pts)": scores[0],
+            "hw2 (10pts)": scores[1],
+            "hw3 (10pts)": scores[2],
+            "total (30pts)": row_total,
+        })
+    pd.DataFrame(hw_rows).to_csv(data_dir / "homework.csv", index=False)
+
+    # --- Midterm scores (30pts) ---
+    midterm_max = 30.0
+    mid_rows = []
+    for i in range(num_students):
+        scale = 0.3 if i in at_risk_idxs else 1.0
+        score = round(clipped_gauss(0.70, 0.18) * midterm_max * scale, 1)
+        if i == midterm_overmax_idx:
+            score = 35.0  # deliberately exceeds the 30pt max
+        mid_rows.append({
+            "Student ID": student_ids[i],
+            "Name": student_names[i],
+            "midterm_exam (30pts)": score,
+            "total (30pts)": score,
+        })
+    pd.DataFrame(mid_rows).to_csv(data_dir / "midterm.csv", index=False)
+
+    # --- Final scores (40pts) ---
+    final_max = 40.0
+    final_rows = []
+    for i in range(num_students):
+        scale = 0.3 if i in at_risk_idxs else 1.0
+        score = round(clipped_gauss(0.72, 0.16) * final_max * scale, 1)
+        if i in final_blank_idxs:
+            score = None  # deliberately not-yet-graded
+        final_rows.append({
+            "Student ID": student_ids[i],
+            "Name": student_names[i],
+            "final_exam (40pts)": score,
+            "total (40pts)": score if score is not None else 0.0,
+        })
+    pd.DataFrame(final_rows).to_csv(data_dir / "final.csv", index=False)
+
+    # --- Attendance sheet ---
+    class_cols = calculate_class_dates(
+        "2027-01-11", "พ.",
+        "M 15 Mar 2027 09:00-11:00, F 17 May 2027 09:00-12:00",
+        num_sessions,
+    )
+
+    att_codes = ["P", "L", "A", "EA"]
+    att_weights = [75, 10, 10, 5]
+    att_rows = []
+    for i in range(num_students):
+        row = {"Student ID": student_ids[i], "Name": student_names[i]}
+        for c in class_cols:
+            row[c] = rng.choices(att_codes, weights=att_weights, k=1)[0]
+        att_rows.append(row)
+    for i in attendance_invalid_idxs:
+        session = rng.choice(class_cols)
+        att_rows[i][session] = "Z"  # deliberately invalid attendance code
+
+    att_path = data_dir / "0_mock_attendance.xlsx"
+    # Seed a raw prefilled workbook, then reuse the real production helper to
+    # merge those values in and apply the standard styling/validation/formulas.
+    pd.DataFrame(att_rows).to_excel(att_path, index=False)
+    save_attendance_excel(att_path, student_registry, class_cols)
+    sync_attendance_xlsx_to_csv(att_path, att_path.with_suffix(".csv"))
+
+    print(f"✅ Successfully generated mock course at: {base_dir}")
+    print(f"✅ {num_students} students, {num_sessions} attendance sessions.")
+    print("✅ Seeded edge cases: over-max scores, missing scores, invalid attendance codes, at-risk students.")
+
+
 def run_dashboard():
     from src.dashboard import run
     run()
@@ -1116,6 +1303,9 @@ if __name__ == "__main__":
     # Undo command
     parser_undo = subparsers.add_parser("undo", help="Undo the last update by restoring backup files")
 
+    # Mock command
+    parser_mock = subparsers.add_parser("mock", help="Generate a complete mock course (courses/0_mock_grading) for testing grade-tui")
+
     # Dashboard command
     parser_dashboard = subparsers.add_parser("dashboard", help="Launch the grade dashboard")
 
@@ -1135,6 +1325,8 @@ if __name__ == "__main__":
             update_course(config_file=args.config_file)
     elif args.command == "undo":
         undo_course()
+    elif args.command == "mock":
+        mock_course()
     elif args.command == "dashboard":
         run_dashboard()
     else:

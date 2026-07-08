@@ -3,6 +3,15 @@ use tokio::sync::mpsc::Sender;
 use std::collections::HashMap;
 // theme
 
+pub const ANALYTICS_CATEGORIES: [&str; 5] = [
+    "Overview",
+    "Progress Over Time",
+    "Item Analysis",
+    "Correlation Matrix",
+    "At-Risk Students",
+];
+const AT_RISK_CATEGORY_INDEX: usize = 4;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppState {
     CourseSelect,
@@ -34,7 +43,7 @@ pub struct App {
     // Dashboard data
     pub selected_course_path: String,
     pub course_data: Option<CourseData>,
-    pub active_tab: usize, // 0: Summary, 1: Raw Details, 2: Distribution, 3: Roundup
+    pub active_tab: usize, // 0: Summary, 1: Raw Details, 2: Analytics, 3: Roundup
     pub use_weighted: bool,
     
     // Global UI state
@@ -76,6 +85,11 @@ pub struct App {
     pub raw_right_focused: bool,
     pub raw_selected_category: Option<String>,
     pub raw_selected_student: Option<usize>,
+
+    // Analytics tab drill-down state (raw_selected_student/raw_selected_category are
+    // reused to open the existing student popup in read-only mode from At-Risk Students)
+    pub analytics_category_index: usize,
+    pub analytics_right_focused: bool,
 
     // Bulk column-fill editing state (Raw Details, L1 sub-column view)
     pub editing_bulk_fill: bool,
@@ -133,6 +147,8 @@ impl App {
             raw_right_focused: false,
             raw_selected_category: None,
             raw_selected_student: None,
+            analytics_category_index: 0,
+            analytics_right_focused: false,
             editing_bulk_fill: false,
             bulk_fill_textarea: None,
             bulk_fill_column: String::new(),
@@ -167,6 +183,39 @@ impl App {
             .filter(|c| c.ends_with("_pct"))
             .map(|c| c.trim_end_matches("_pct").to_string())
             .collect()
+    }
+
+    /// Opens the existing (Raw Details) student popup for the At-Risk row under
+    /// `cursor_row`, defaulting to that student's weakest category so the most
+    /// relevant breakdown is shown first. Read-only: score editing stays scoped
+    /// to the Raw Details tab.
+    pub fn open_at_risk_student_popup(&mut self) {
+        let data = match &self.course_data {
+            Some(d) => d,
+            None => return,
+        };
+        let at_risk = &data.analytics.at_risk;
+        if self.cursor_row >= at_risk.len() {
+            return;
+        }
+        let raw_idx = at_risk[self.cursor_row].raw_index;
+        if raw_idx >= data.student_grades.len() {
+            return;
+        }
+        let record = &data.student_grades[raw_idx];
+        let mut weakest: Option<(String, f64)> = None;
+        for (k, v) in record.iter() {
+            if let Some(cat) = k.strip_suffix("_pct") {
+                if let Some(val) = v.as_f64() {
+                    let better = weakest.as_ref().map(|(_, wv)| val < *wv).unwrap_or(true);
+                    if better {
+                        weakest = Some((cat.to_string(), val));
+                    }
+                }
+            }
+        }
+        self.raw_selected_category = weakest.map(|(c, _)| c);
+        self.raw_selected_student = Some(raw_idx);
     }
 
     pub fn load_courses(&mut self) {
@@ -547,6 +596,9 @@ impl App {
                 if self.active_tab == 1 && self.raw_selected_student.is_some() {
                     return;
                 }
+                if self.active_tab == 2 && self.raw_selected_student.is_some() {
+                    return;
+                }
                 if self.active_tab == 1 && !self.raw_right_focused {
                     if self.raw_category_index > 0 {
                         self.raw_category_index -= 1;
@@ -555,6 +607,14 @@ impl App {
                         self.scroll_row_offset = 0;
                         self.cursor_col = 0;
                         self.scroll_col_offset = 0;
+                    }
+                    return;
+                }
+                if self.active_tab == 2 && !self.analytics_right_focused {
+                    if self.analytics_category_index > 0 {
+                        self.analytics_category_index -= 1;
+                        self.cursor_row = 0;
+                        self.scroll_row_offset = 0;
                     }
                     return;
                 }
@@ -580,6 +640,9 @@ impl App {
                 if self.active_tab == 1 && self.raw_selected_student.is_some() {
                     return;
                 }
+                if self.active_tab == 2 && self.raw_selected_student.is_some() {
+                    return;
+                }
                 if self.active_tab == 1 && !self.raw_right_focused {
                     let cat_count = self.get_categories().len();
                     if self.raw_category_index + 1 < cat_count {
@@ -592,12 +655,22 @@ impl App {
                     }
                     return;
                 }
+                if self.active_tab == 2 && !self.analytics_right_focused {
+                    if self.analytics_category_index + 1 < ANALYTICS_CATEGORIES.len() {
+                        self.analytics_category_index += 1;
+                        self.cursor_row = 0;
+                        self.scroll_row_offset = 0;
+                    }
+                    return;
+                }
                 let max_rows = match &self.course_data {
                     Some(data) => {
                         if self.active_tab == 0 {
                             data.student_grades.len()
                         } else if self.active_tab == 1 {
                             data.raw_scores.len()
+                        } else if self.active_tab == 2 {
+                            data.analytics.at_risk.len()
                         } else if self.active_tab == 3 {
                             data.roundup_summary.improved_students.len()
                         } else {
@@ -617,10 +690,12 @@ impl App {
     pub fn move_half_page_down(&mut self) {
         if self.state != AppState::Dashboard { return; }
         if self.active_tab == 1 && !self.raw_right_focused { return; }
+        if self.active_tab == 2 && !self.analytics_right_focused { return; }
         let max_rows = match &self.course_data {
             Some(data) => match self.active_tab {
                 0 => data.student_grades.len(),
                 1 => data.raw_scores.len(),
+                2 => data.analytics.at_risk.len(),
                 3 => data.roundup_summary.improved_students.len(),
                 _ => 0,
             },
@@ -637,6 +712,7 @@ impl App {
     pub fn move_half_page_up(&mut self) {
         if self.state != AppState::Dashboard { return; }
         if self.active_tab == 1 && !self.raw_right_focused { return; }
+        if self.active_tab == 2 && !self.analytics_right_focused { return; }
         let half = (self.table_visible_rows / 2).max(1);
         self.cursor_row = self.cursor_row.saturating_sub(half);
         self.scroll_row_offset = self.scroll_row_offset.saturating_sub(half);
@@ -657,6 +733,14 @@ impl App {
                 }
                 return;
             }
+            if self.active_tab == 2 {
+                if self.analytics_right_focused && self.raw_selected_student.is_none() {
+                    self.analytics_right_focused = false;
+                    self.cursor_row = 0;
+                    self.scroll_row_offset = 0;
+                }
+                return;
+            }
             if self.cursor_col > 0 {
                 self.cursor_col -= 1;
                 self.adjust_scroll_col();
@@ -666,6 +750,17 @@ impl App {
 
     pub fn move_right(&mut self) {
         if self.state == AppState::Dashboard && !self.editing && !self.editing_weights && !self.editing_boundaries {
+            if self.active_tab == 2 {
+                if !self.analytics_right_focused
+                    && self.analytics_category_index == AT_RISK_CATEGORY_INDEX
+                    && self.raw_selected_student.is_none()
+                {
+                    self.analytics_right_focused = true;
+                    self.cursor_row = 0;
+                    self.scroll_row_offset = 0;
+                }
+                return;
+            }
             if self.active_tab == 1 {
                 if !self.raw_right_focused {
                     // Left panel → focus right panel
@@ -811,6 +906,8 @@ impl App {
                             self.raw_selected_student = None;
                             self.raw_category_index = 0;
                             self.raw_right_focused = false;
+                            self.analytics_category_index = 0;
+                            self.analytics_right_focused = false;
                             self.sync_raw_category();
                         }
                     }
@@ -1096,6 +1193,8 @@ impl App {
                             self.raw_selected_student = None;
                             self.raw_category_index = 0;
                             self.raw_right_focused = false;
+                            self.analytics_category_index = 0;
+                            self.analytics_right_focused = false;
                             self.sync_raw_category();
                         }
                     }
@@ -1114,6 +1213,8 @@ impl App {
                             self.raw_selected_student = None;
                             self.raw_category_index = 0;
                             self.raw_right_focused = false;
+                            self.analytics_category_index = 0;
+                            self.analytics_right_focused = false;
                             self.sync_raw_category();
                         }
                     }
@@ -1182,6 +1283,20 @@ impl App {
                                     self.course_data = None;
                                     self.load_courses();
                                 }
+                            } else if self.active_tab == 2 {
+                                if self.raw_selected_student.is_some() {
+                                    // Student popup → back to At-Risk table
+                                    self.raw_selected_student = None;
+                                    self.raw_selected_category = None;
+                                } else if self.analytics_right_focused {
+                                    // At-Risk table → back to category list
+                                    self.analytics_right_focused = false;
+                                } else {
+                                    // Category list → CourseSelect
+                                    self.state = AppState::CourseSelect;
+                                    self.course_data = None;
+                                    self.load_courses();
+                                }
                             } else {
                                 self.state = AppState::CourseSelect;
                                 self.course_data = None;
@@ -1215,6 +1330,22 @@ impl App {
                                     self.raw_right_focused = true;
                                     self.cursor_col = 2;
                                     self.scroll_col_offset = 2;
+                                }
+                            } else if self.active_tab == 2 {
+                                if self.raw_selected_student.is_some() {
+                                    self.info_msg = Some("Switch to Raw Details to edit scores".to_string());
+                                    self.info_msg_ticks = 0;
+                                } else if self.analytics_right_focused
+                                    && self.analytics_category_index == AT_RISK_CATEGORY_INDEX
+                                {
+                                    self.open_at_risk_student_popup();
+                                } else if !self.analytics_right_focused
+                                    && self.analytics_category_index == AT_RISK_CATEGORY_INDEX
+                                {
+                                    // Category list, on At-Risk Students → focus its table
+                                    self.analytics_right_focused = true;
+                                    self.cursor_row = 0;
+                                    self.scroll_row_offset = 0;
                                 }
                             } else {
                                 self.start_editing_cell();

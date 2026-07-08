@@ -11,8 +11,11 @@ pub fn resolve_tui_api_path() -> PathBuf {
             return path;
         }
     }
-    // 2. Check relative to executable directory
+    // 2. Check relative to executable directory. current_exe() does not reliably
+    // resolve symlinks (e.g. a `grade-tui` shim on PATH pointing at this binary),
+    // so canonicalize it ourselves to land on the binary's real location.
     if let Ok(exe_path) = std::env::current_exe() {
+        let exe_path = exe_path.canonicalize().unwrap_or(exe_path);
         if let Some(exe_dir) = exe_path.parent() {
             let mut current = exe_dir.to_path_buf();
             for _ in 0..5 {
@@ -28,12 +31,8 @@ pub fn resolve_tui_api_path() -> PathBuf {
             }
         }
     }
-    // 3. Absolute fallback to compiled workspace path
-    let absolute_path = PathBuf::from("/Users/chakkritk/myUniverse/workflow/10_Dev_Studio/Projects/grade_dashboard/src/tui_api.py");
-    if absolute_path.exists() {
-        return absolute_path;
-    }
-    // 4. Fallback
+    // 3. Last-resort relative guess (only correct if CWD happens to be the project root;
+    // the caller will get a clear "no such file" error from python3 otherwise).
     PathBuf::from("src/tui_api.py")
 }
 

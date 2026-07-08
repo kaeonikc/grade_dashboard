@@ -2,10 +2,10 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{Bar, BarChart, Block, BorderType, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, TableState, Wrap},
     Frame,
 };
-use crate::app::{App, AppState};
+use crate::app::{App, AppState, ANALYTICS_CATEGORIES};
 use unicode_width::UnicodeWidthStr;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -200,7 +200,7 @@ fn draw_dashboard(f: &mut Frame, app: &mut App, area: Rect) {
         .split(area);
 
     // Draw Tab Navigation Bar — 4 individual bordered boxes
-    let tab_labels = [" [1] Summary ", " [2] Raw Details ", " [3] Distribution ", " [4] Roundup "];
+    let tab_labels = [" [1] Summary ", " [2] Raw Details ", " [3] Analytics ", " [4] Roundup "];
     let tab_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -234,7 +234,7 @@ fn draw_dashboard(f: &mut Frame, app: &mut App, area: Rect) {
     match app.active_tab {
         0 => draw_summary_tab(f, app, chunks[1]),
         1 => draw_raw_details_tab(f, app, chunks[1]),
-        2 => draw_distribution_tab(f, app, chunks[1]),
+        2 => draw_analytics_tab(f, app, chunks[1]),
         3 => draw_roundup_tab(f, app, chunks[1]),
         _ => {}
     }
@@ -984,13 +984,19 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
     let sub_cols = data.data_mapping.get(&cat).cloned().unwrap_or_default();
     let show_total = true;
 
+    let (tab_label, hint) = if app.active_tab == 2 {
+        ("Analytics", "(Esc: back)")
+    } else {
+        ("Raw Details", "(Enter: edit  Esc: back)")
+    };
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(category_color(&cat, &theme)))
         .title(format!(
-            " 📋 Raw Details  ›  {}  ›  {}  ({})  (Enter: edit  Esc: back) ",
-            cat, name, sid
+            " 📋 {}  ›  {}  ›  {}  ({})  {} ",
+            tab_label, cat, name, sid, hint
         ))
         .title_style(Style::default().fg(category_color(&cat, &theme)).bold());
 
@@ -1120,7 +1126,335 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(table, area);
 }
 
-fn draw_distribution_tab(f: &mut Frame, app: &App, area: Rect) {
+fn draw_analytics_tab(f: &mut Frame, app: &mut App, area: Rect) {
+    if app.raw_selected_student.is_some() {
+        draw_student_popup(f, app, area);
+        return;
+    }
+
+    let h_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(33), Constraint::Min(40)])
+        .split(area);
+
+    let n_bounds = app.course_data.as_ref()
+        .map(|d| d.grade_boundaries.len() + 1) // +1 for the synthetic "F" row
+        .unwrap_or(8) as u16;
+    let boundaries_height = n_bounds + 5; // borders(2) + blank + header + blank
+    let left_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(10), Constraint::Length(boundaries_height)])
+        .split(h_chunks[0]);
+
+    draw_analytics_left_panel(f, app, left_chunks[0]);
+    draw_analytics_boundaries_panel(f, app, left_chunks[1]);
+
+    match app.analytics_category_index {
+        0 => draw_analytics_summary(f, app, h_chunks[1]),
+        1 => draw_analytics_progress(f, app, h_chunks[1]),
+        2 => draw_analytics_item_analysis(f, app, h_chunks[1]),
+        3 => draw_analytics_correlation(f, app, h_chunks[1]),
+        4 => draw_analytics_at_risk(f, app, h_chunks[1]),
+        _ => {}
+    }
+}
+
+fn draw_analytics_summary(f: &mut Frame, app: &mut App, area: Rect) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+    let top = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(rows[0]);
+    let bottom = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(rows[1]);
+
+    draw_analytics_overview(f, app, top[0]);
+    draw_analytics_grade_distribution(f, app, top[1]);
+    draw_analytics_histogram(f, app, bottom[0]);
+    draw_analytics_box_plot(f, app, bottom[1]);
+}
+
+fn draw_analytics_left_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme;
+    let border_color = if !app.analytics_right_focused { theme.border_focus } else { theme.border };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .title(" Categories ")
+        .title_style(Style::default().fg(theme.info).bold());
+
+    let idx = app.analytics_category_index;
+    let right_focused = app.analytics_right_focused;
+
+    let items: Vec<ListItem> = ANALYTICS_CATEGORIES
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let is_highlighted = i == idx;
+            let style = if is_highlighted && !right_focused {
+                Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD)
+            } else if is_highlighted {
+                Style::default().fg(theme.active_tab).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.fg)
+            };
+            ListItem::new(Line::from(Span::styled(format!("  {}", name), style)))
+        })
+        .collect();
+
+    let list = List::new(items).block(block);
+    f.render_widget(list, area);
+}
+
+fn draw_analytics_overview(f: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme;
+    let data = match &app.course_data {
+        Some(d) => d,
+        None => return,
+    };
+    let ov = &data.analytics.overview;
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border))
+        .title(" 📈 Overview ")
+        .title_style(Style::default().fg(theme.info).bold());
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled("  ⚡ CLASS-WIDE STATISTICS", Style::default().fg(theme.title).bold())),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("   Total Enrolled : "),
+            Span::styled(format!("{} students", ov.total_count), Style::default().fg(theme.info).bold()),
+        ]),
+        Line::from(vec![
+            Span::raw("   Mean           : "),
+            Span::styled(format!("{:.2} pts", ov.mean), Style::default().fg(theme.key_accent).bold()),
+        ]),
+        Line::from(vec![
+            Span::raw("   Median         : "),
+            Span::styled(format!("{:.2} pts", ov.median), Style::default().fg(theme.key_accent).bold()),
+        ]),
+        Line::from(vec![
+            Span::raw("   Std. Deviation : "),
+            Span::styled(format!("{:.2} pts", ov.std_dev), Style::default().fg(theme.key_accent).bold()),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("   Pass Rate      : "),
+            Span::styled(format!("{:.1}%", ov.pass_rate), Style::default().fg(theme.success).bold()),
+            Span::raw(format!("  ({}/{} passing)", ov.passing_count, ov.total_count)),
+        ]),
+    ];
+
+    let p = Paragraph::new(lines).block(block);
+    f.render_widget(p, area);
+}
+
+fn draw_analytics_histogram(f: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme;
+    let data = match &app.course_data {
+        Some(d) => d,
+        None => return,
+    };
+    let bins = &data.analytics.histogram;
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border))
+        .title(" 📊 Final Score Histogram ")
+        .title_style(Style::default().fg(theme.info).bold());
+
+    if bins.is_empty() {
+        let p = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled("   No data available.", Style::default().fg(theme.inactive_tab))),
+        ])
+        .block(block);
+        f.render_widget(p, area);
+        return;
+    }
+
+    // Render the block first, then draw the chart into a horizontally-centered sub-area
+    // that is only ~70% of the inner width, so bars leave a visible margin instead of
+    // stretching edge-to-edge in the (now smaller) quadrant.
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let chart_width = ((inner.width as f64) * 0.7) as u16;
+    let chart_area = Rect {
+        x: inner.x + (inner.width.saturating_sub(chart_width)) / 2,
+        y: inner.y,
+        width: chart_width,
+        height: inner.height,
+    };
+
+    // Auto-fit bar width/gap to the (already narrowed) chart area so all bins render
+    // without clipping.
+    let inner_width = chart_area.width;
+    let n = bins.len() as u16;
+    let bar_gap: u16 = if inner_width > n * 2 { 1 } else { 0 };
+    let bar_width = ((inner_width.saturating_sub(n.saturating_sub(1) * bar_gap)) / n).max(1);
+
+    let bars: Vec<Bar> = bins
+        .iter()
+        .map(|bin| {
+            let short_label = bin.label.split('-').next().unwrap_or(&bin.label).to_string();
+            Bar::default()
+                .value(bin.count as u64)
+                .label(Line::from(short_label))
+                .style(Style::default().fg(theme.key_accent))
+                .value_style(
+                    Style::default()
+                        .fg(theme.bg)
+                        .bg(theme.key_accent)
+                        .add_modifier(Modifier::BOLD),
+                )
+        })
+        .collect();
+
+    let chart = BarChart::vertical(bars)
+        .bar_width(bar_width)
+        .bar_gap(bar_gap)
+        .label_style(Style::default().fg(theme.info));
+
+    f.render_widget(chart, chart_area);
+}
+
+fn draw_analytics_box_plot(f: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme;
+    let data = match &app.course_data {
+        Some(d) => d,
+        None => return,
+    };
+    let bp = &data.analytics.box_plot;
+
+    let whisker_style = Style::default().fg(theme.key_accent);
+    let box_style = Style::default().fg(theme.key_accent).bold();
+    let median_style = Style::default().fg(theme.success).bold();
+    let mean_style = Style::default().fg(theme.purple).bold();
+    let outlier_style = Style::default().fg(theme.warning).bold();
+    let outlier_dot_style = Style::default().fg(theme.warning).bold();
+    let dim_box = Color::Rgb(59, 50, 22);
+    let dim_median = Color::Rgb(34, 54, 34);
+    let dim_mean = Color::Rgb(44, 34, 64);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border))
+        .title(" 📦 Box Plot ")
+        .title_style(Style::default().fg(theme.info).bold());
+
+    let inner = block.inner(area);
+    // Horizontal orientation: a terminal cell is roughly twice as tall as wide, so this gets
+    // far more resolution (columns) than the vertical layout ever could (rows) — collisions
+    // that needed a whole nudge/connector system there are rare enough here to not need one.
+    let width = inner.width.saturating_sub(2).max(10) as usize;
+    let last = width.saturating_sub(1);
+    let pos = |v: f64| -> usize {
+        ((v.clamp(0.0, 100.0) / 100.0) * last as f64).round() as usize
+    };
+    let (p_wlo, p_q1, p_med, p_mean, p_q3, p_whi) = (
+        pos(bp.whisker_low), pos(bp.q1), pos(bp.median), pos(bp.mean), pos(bp.q3), pos(bp.whisker_high),
+    );
+
+    // Chart line: whisker stems, a real background-filled box (not just an outline), caps,
+    // median/mean ticks, and outlier dots beyond the whiskers.
+    let mut spans: Vec<Span<'static>> = (0..width).map(|_| Span::raw(" ")).collect();
+    let (lo, hi) = (p_wlo.min(p_q1), p_wlo.max(p_q1).min(last));
+    if lo <= hi { for i in lo..=hi { spans[i] = Span::styled("─", whisker_style); } }
+    let (lo2, hi2) = (p_q3.min(p_whi), p_q3.max(p_whi).min(last));
+    if lo2 <= hi2 { for i in lo2..=hi2 { spans[i] = Span::styled("─", whisker_style); } }
+    let (blo, bhi) = (p_q1.min(p_q3), p_q1.max(p_q3).min(last));
+    for i in blo..=bhi { spans[i] = Span::styled("█", box_style.bg(dim_box)); }
+    if p_wlo < width { spans[p_wlo] = Span::styled("├", whisker_style); }
+    if p_whi < width { spans[p_whi] = Span::styled("┤", whisker_style); }
+    if p_mean < width { spans[p_mean] = Span::styled("┃", mean_style.bg(dim_mean)); }
+    if p_med < width { spans[p_med] = Span::styled("┃", median_style.bg(dim_median)); } // median wins on a tie
+    for o in &bp.outliers {
+        let c = pos(o.final_score);
+        if c < width { spans[c] = Span::styled("∙", outlier_dot_style); }
+    }
+
+    let mut tick_chars: Vec<char> = vec![' '; width];
+    for (label, val) in [("0", 0.0), ("25", 25.0), ("50", 50.0), ("75", 75.0), ("100", 100.0)] {
+        let p = pos(val);
+        let start = if p + label.len() > width { width.saturating_sub(label.len()) } else { p };
+        for (j, c) in label.chars().enumerate() {
+            if start + j < width { tick_chars[start + j] = c; }
+        }
+    }
+    let tick_line: String = tick_chars.into_iter().collect();
+
+    let mut lines: Vec<Line> = vec![
+        Line::from(vec![
+            Span::raw(" Min: "), Span::styled(format!("{:.1}", bp.min), Style::default().fg(theme.info).bold()),
+            Span::raw("   Q1: "), Span::styled(format!("{:.1}", bp.q1), box_style),
+            Span::raw("   Median: "), Span::styled(format!("{:.1}", bp.median), median_style),
+            Span::raw("   Q3: "), Span::styled(format!("{:.1}", bp.q3), box_style),
+            Span::raw("   Max: "), Span::styled(format!("{:.1}", bp.max), Style::default().fg(theme.info).bold()),
+        ]),
+        Line::from(vec![
+            Span::raw(" Mean: "), Span::styled(format!("{:.1}", bp.mean), mean_style),
+            Span::raw("   IQR: "), Span::styled(format!("{:.1}", bp.q3 - bp.q1), box_style),
+            Span::raw("   "),
+            Span::styled(bp.skew_label.split(" (").next().unwrap_or(&bp.skew_label).to_string(), Style::default().fg(theme.warning)),
+        ]),
+        Line::from(""),
+        Line::from({ let mut v = vec![Span::raw(" ")]; v.extend(spans); v }),
+        Line::from(Span::styled(format!(" {}", tick_line), Style::default().fg(theme.inactive_tab))),
+        Line::from(Span::styled("─".repeat(inner.width as usize), Style::default().fg(theme.border))),
+    ];
+
+    if bp.outliers.is_empty() {
+        lines.push(Line::from(Span::styled(" No outliers (beyond 1.5×IQR).", Style::default().fg(theme.inactive_tab))));
+    } else {
+        lines.push(Line::from(Span::styled(
+            format!(" ⚡ Outliers ({}), sorted ascending", bp.outliers.len()),
+            Style::default().fg(theme.title).bold(),
+        )));
+
+        let remaining = (inner.height as usize).saturating_sub(lines.len());
+        let total = bp.outliers.len();
+        let (show_n, more) = if total <= remaining {
+            (total, 0)
+        } else {
+            let show_n = remaining.saturating_sub(1);
+            (show_n, total - show_n)
+        };
+
+        for o in bp.outliers.iter().take(show_n) {
+            lines.push(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(o.student_id.clone(), Style::default().fg(theme.info)),
+                Span::raw(" "),
+                Span::styled(format_thai_name(&o.name, 20), Style::default().fg(theme.fg)),
+                Span::raw(" "),
+                Span::styled(format!("{:.1}", o.final_score), outlier_style),
+            ]));
+        }
+        if more > 0 {
+            lines.push(Line::from(Span::styled(
+                format!(" + {} more (see Analytics → At-Risk tab)", more),
+                Style::default().fg(theme.inactive_tab),
+            )));
+        }
+    }
+
+    let p = Paragraph::new(lines).block(block);
+    f.render_widget(p, area);
+}
+
+fn draw_analytics_grade_distribution(f: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme;
     let data = match &app.course_data {
         Some(d) => d,
@@ -1131,81 +1465,9 @@ fn draw_distribution_tab(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme.border))
-        .title(" 📊 Letter Grade Distributions ")
+        .title(" 📊 Letter Grade Distribution ")
         .title_style(Style::default().fg(theme.info).bold());
 
-    // Split area into metrics block and ASCII bar chart block
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-        .split(area);
-
-    // Left Panel: Total Metrics
-    let mut total_students = 0;
-    let mut sum_scores = 0.0;
-    let mut max_score = 0.0;
-
-    for student in &data.student_grades {
-        total_students += 1;
-        if let Some(val) = student.get("Final Score") {
-            let val_num = val.as_f64().unwrap_or(0.0);
-            sum_scores += val_num;
-            if val_num > max_score {
-                max_score = val_num;
-            }
-        }
-    }
-    let avg_score = if total_students > 0 { sum_scores / total_students as f64 } else { 0.0 };
-
-    let mut metrics_lines = vec![
-        Line::from(""),
-        Line::from(Span::styled("  ⚡ STATISTICAL METRICS", Style::default().fg(theme.title).bold())),
-        Line::from(""),
-        Line::from(vec![
-            Span::raw("   Total Enrolled : "),
-            Span::styled(format!("{} students", total_students), Style::default().fg(theme.info).bold()),
-        ]),
-        Line::from(vec![
-            Span::raw("   Average Score  : "),
-            Span::styled(format!("{:.2} pts", avg_score), Style::default().fg(theme.key_accent).bold()),
-        ]),
-        Line::from(vec![
-            Span::raw("   Highest Score  : "),
-            Span::styled(format!("{:.2} pts", max_score), Style::default().fg(theme.success).bold()),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  ⚡ BOUNDARIES LIST", Style::default().fg(theme.title).bold())),
-        Line::from(""),
-    ];
-
-    let mut sorted_bounds: Vec<(&String, &f64)> = data.grade_boundaries.iter().collect();
-    sorted_bounds.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
-    for (g, val) in &sorted_bounds {
-        metrics_lines.push(Line::from(vec![
-            Span::raw("   Grade "),
-            Span::styled((*g).clone(), Style::default().fg(grade_color_for(g, &theme)).bold()),
-            Span::raw(" : ≥ "),
-            Span::styled(format!("{:.1}", val), Style::default().fg(theme.fg)),
-        ]));
-    }
-    if let Some((_, min_val)) = sorted_bounds.last() {
-        metrics_lines.push(Line::from(vec![
-            Span::raw("   Grade "),
-            Span::styled("F", Style::default().fg(grade_color_for("F", &theme)).bold()),
-            Span::raw(" : < "),
-            Span::styled(format!("{:.1}", min_val), Style::default().fg(theme.fg)),
-        ]));
-    }
-
-    let metrics_block = Block::default()
-        .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(theme.border));
-    let metrics_p = Paragraph::new(metrics_lines)
-        .block(metrics_block);
-    f.render_widget(metrics_p, chunks[0]);
-
-    // Right Panel: Unicode Bar Chart
-    // Sort by threshold descending (A first, F last)
     let mut grade_key_pairs: Vec<(String, f64)> = data.grade_boundaries
         .iter()
         .map(|(k, v)| (k.clone(), *v))
@@ -1213,8 +1475,7 @@ fn draw_distribution_tab(f: &mut Frame, app: &App, area: Rect) {
     grade_key_pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     let mut grade_keys: Vec<String> = grade_key_pairs.into_iter().map(|(k, _)| k).collect();
     grade_keys.push("F".to_string());
-    
-    // Find maximum count for scaling bars
+
     let mut max_count = 0;
     for g in &grade_keys {
         if let Some(stats) = data.grade_distribution.get(g) {
@@ -1230,27 +1491,40 @@ fn draw_distribution_tab(f: &mut Frame, app: &App, area: Rect) {
         Line::from(""),
     ];
 
-    for g in &grade_keys {
+    // Bars stretch to fill all the space left over after the fixed-width prefix
+    // ("  A │ ") and suffix ("  NN students (NN.N%)"), with a one-line gap between grades —
+    // but only if the panel is tall enough for every grade to stay visible with that gap.
+    // Never sacrifice visibility for spacing: below that threshold, pack tight instead.
+    let prefix_len = 6usize;
+    let suffix_len = 24usize;
+    let inner = block.inner(area);
+    let inner_width = inner.width as usize;
+    let avail = inner_width.saturating_sub(prefix_len + suffix_len);
+    let max_bar_length = avail.max(5);
+
+    let header_rows = 3usize;
+    let rows_with_gap = header_rows + grade_keys.len() * 2 - 1;
+    let use_gap = (inner.height as usize) >= rows_with_gap;
+
+    for (i, g) in grade_keys.iter().enumerate() {
         let stats = data.grade_distribution.get(g);
         let count = stats.map(|s| s.count).unwrap_or(0);
         let pct = stats.map(|s| s.pct).unwrap_or(0.0);
 
-        // Scale bar to 35 character length
-        let max_bar_length = 35;
         let bar_len = if max_count > 0 {
             (count * max_bar_length) / max_count
         } else {
             0
         };
 
-        let bar_filled = "█".repeat(bar_len);
+        let bar_filled = "▇".repeat(bar_len);
         let bar_empty = "░".repeat(max_bar_length - bar_len);
-        
+
         let g_color = grade_color_for(g, &theme);
 
         let bar_line = Line::from(vec![
-            Span::raw("   "),
-            Span::styled(format!("{:>2}", g), Style::default().fg(g_color).bold()),
+            Span::raw(" "),
+            Span::styled(format!("{:<2}", g), Style::default().fg(g_color).bold()),
             Span::styled(" │ ", Style::default().fg(theme.border)),
             Span::styled(bar_filled, Style::default().fg(g_color)),
             Span::styled(bar_empty, Style::default().fg(theme.border)),
@@ -1259,15 +1533,295 @@ fn draw_distribution_tab(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(format!(" ({:>4.1}%)", pct), Style::default().fg(theme.info)),
         ]);
         lines.push(bar_line);
-        lines.push(Line::from(vec![
-            Span::raw("      "),
-            Span::styled("│", Style::default().fg(theme.border)),
-        ]));
+        if use_gap && i + 1 < grade_keys.len() {
+            lines.push(Line::from(""));
+        }
     }
 
     let chart_p = Paragraph::new(lines)
         .block(block);
-    f.render_widget(chart_p, chunks[1]);
+    f.render_widget(chart_p, area);
+}
+
+fn draw_analytics_boundaries_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme;
+    let data = match &app.course_data {
+        Some(d) => d,
+        None => return,
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border))
+        .title(" Boundaries ")
+        .title_style(Style::default().fg(theme.info).bold());
+
+    let mut sorted_bounds: Vec<(&String, &f64)> = data.grade_boundaries.iter().collect();
+    sorted_bounds.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled("  ⚡ BOUNDARIES LIST", Style::default().fg(theme.title).bold())),
+        Line::from(""),
+    ];
+    for (g, val) in &sorted_bounds {
+        lines.push(Line::from(vec![
+            Span::raw("   Grade "),
+            Span::styled((*g).clone(), Style::default().fg(grade_color_for(g, &theme)).bold()),
+            Span::raw(" : ≥ "),
+            Span::styled(format!("{:.1}", val), Style::default().fg(theme.fg)),
+        ]));
+    }
+    if let Some((_, min_val)) = sorted_bounds.last() {
+        lines.push(Line::from(vec![
+            Span::raw("   Grade "),
+            Span::styled("F", Style::default().fg(grade_color_for("F", &theme)).bold()),
+            Span::raw(" : < "),
+            Span::styled(format!("{:.1}", min_val), Style::default().fg(theme.fg)),
+        ]));
+    }
+
+    let p = Paragraph::new(lines).block(block);
+    f.render_widget(p, area);
+}
+
+fn draw_analytics_progress(f: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme;
+    let data = match &app.course_data {
+        Some(d) => d,
+        None => return,
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border))
+        .title(" 📈 Progress Over Time (by item order) ")
+        .title_style(Style::default().fg(theme.info).bold());
+
+    let bar_len_max = 20usize;
+    let mut lines = vec![Line::from("")];
+    for series in &data.analytics.progress {
+        let color = category_color(&series.category, &theme);
+        lines.push(Line::from(Span::styled(
+            format!("  ⚡ {}", series.category.to_uppercase()),
+            Style::default().fg(color).bold(),
+        )));
+        for item in &series.items {
+            let filled = ((item.avg_pct.clamp(0.0, 100.0) / 100.0) * bar_len_max as f64).round() as usize;
+            let bar_filled = "▇".repeat(filled);
+            let bar_empty = "░".repeat(bar_len_max - filled);
+            let label = data.attendance_labels.get(&item.label).cloned().unwrap_or_else(|| item.label.clone());
+            lines.push(Line::from(vec![
+                Span::styled(format!("   {:<14}", label), Style::default().fg(theme.fg)),
+                Span::styled(bar_filled, Style::default().fg(color)),
+                Span::styled(bar_empty, Style::default().fg(theme.border)),
+                Span::raw(format!("  {:>5.1}%", item.avg_pct)),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+    if data.analytics.progress.is_empty() {
+        lines.push(Line::from(Span::styled("   No data available.", Style::default().fg(theme.inactive_tab))));
+    }
+
+    let p = Paragraph::new(lines).block(block);
+    f.render_widget(p, area);
+}
+
+fn draw_analytics_item_analysis(f: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme;
+    let data = match &app.course_data {
+        Some(d) => d,
+        None => return,
+    };
+    let items = &data.analytics.item_analysis;
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border))
+        .title(" 🎯 Item Difficulty & Discrimination ")
+        .title_style(Style::default().fg(theme.info).bold());
+
+    if items.is_empty() {
+        let p = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled("   No categories with 2+ scored items to analyze.", Style::default().fg(theme.inactive_tab))),
+        ]).block(block);
+        f.render_widget(p, area);
+        return;
+    }
+
+    let header = Row::new(vec![
+        Cell::from("Category").style(Style::default().fg(theme.key_accent).bold()),
+        Cell::from("Item").style(Style::default().fg(theme.key_accent).bold()),
+        Cell::from("Difficulty").style(Style::default().fg(theme.key_accent).bold()),
+        Cell::from("Level").style(Style::default().fg(theme.key_accent).bold()),
+        Cell::from("Discrimination").style(Style::default().fg(theme.key_accent).bold()),
+        Cell::from("n").style(Style::default().fg(theme.key_accent).bold()),
+    ]).height(1).bottom_margin(1).style(Style::default().bg(theme.alt_row));
+
+    let rows: Vec<Row> = items.iter().enumerate().map(|(i, it)| {
+        let level_color = match it.difficulty_label.as_str() {
+            "Easy" => theme.success,
+            "Hard" => theme.grade_f,
+            _ => theme.warning,
+        };
+        let mut row_style = Style::default();
+        if i % 2 == 1 { row_style = row_style.bg(theme.alt_row); }
+        Row::new(vec![
+            Cell::from(it.category.clone()).fg(category_color(&it.category, &theme)),
+            Cell::from(it.item.clone()).fg(theme.fg),
+            Cell::from(format!("{:.1}%", it.difficulty)).fg(theme.key_accent),
+            Cell::from(it.difficulty_label.clone()).fg(level_color).add_modifier(Modifier::BOLD),
+            Cell::from(format!("{:.3}", it.discrimination)).fg(theme.info),
+            Cell::from(format!("{}", it.n)).fg(theme.inactive_tab),
+        ]).style(row_style).height(1)
+    }).collect();
+
+    let widths = vec![
+        Constraint::Length(14),
+        Constraint::Length(14),
+        Constraint::Length(12),
+        Constraint::Length(10),
+        Constraint::Length(15),
+        Constraint::Length(6),
+    ];
+
+    let table = Table::new(rows, widths).header(header).block(block).column_spacing(1);
+    f.render_widget(table, area);
+}
+
+fn corr_color(v: f64, theme: &crate::style::Theme) -> Color {
+    if v >= 0.99 {
+        theme.inactive_tab
+    } else if v >= 0.5 {
+        theme.success
+    } else if v >= 0.2 {
+        theme.info
+    } else if v <= -0.2 {
+        theme.grade_f
+    } else {
+        theme.fg
+    }
+}
+
+fn draw_analytics_correlation(f: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme;
+    let data = match &app.course_data {
+        Some(d) => d,
+        None => return,
+    };
+    let corr = &data.analytics.correlation;
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border))
+        .title(" 🔗 Correlation Matrix (category %) ")
+        .title_style(Style::default().fg(theme.info).bold());
+
+    if corr.categories.is_empty() {
+        let p = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled("   No category data to correlate.", Style::default().fg(theme.inactive_tab))),
+        ]).block(block);
+        f.render_widget(p, area);
+        return;
+    }
+
+    let mut header_cells = vec![Cell::from("")];
+    for cat in &corr.categories {
+        header_cells.push(Cell::from(cat.clone()).style(Style::default().fg(theme.key_accent).bold()));
+    }
+    let header = Row::new(header_cells).height(1).bottom_margin(1).style(Style::default().bg(theme.alt_row));
+
+    let rows: Vec<Row> = corr.categories.iter().enumerate().map(|(i, cat)| {
+        let mut cells = vec![Cell::from(cat.clone()).style(Style::default().fg(theme.key_accent).bold())];
+        for j in 0..corr.categories.len() {
+            let v = corr.matrix.get(i).and_then(|row| row.get(j)).copied().unwrap_or(0.0);
+            let color = corr_color(v, &theme);
+            cells.push(Cell::from(format!("{:.2}", v)).style(Style::default().fg(color)));
+        }
+        Row::new(cells).height(1)
+    }).collect();
+
+    let mut widths = vec![Constraint::Length(12)];
+    for _ in &corr.categories {
+        widths.push(Constraint::Length(8));
+    }
+
+    let table = Table::new(rows, widths).header(header).block(block).column_spacing(1);
+    f.render_widget(table, area);
+}
+
+fn draw_analytics_at_risk(f: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme;
+    let data = match &app.course_data {
+        Some(d) => d,
+        None => return,
+    };
+    let at_risk = &data.analytics.at_risk;
+
+    app.table_visible_rows = (area.height as usize).saturating_sub(4).max(1);
+
+    let border_color = if app.analytics_right_focused { theme.border_focus } else { theme.border };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .title(format!(" ⚠️  At-Risk Students ({}) ", at_risk.len()))
+        .title_style(Style::default().fg(theme.warning).bold());
+
+    if at_risk.is_empty() {
+        let p = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled("   No students currently at risk.", Style::default().fg(theme.success))),
+        ]).block(block);
+        f.render_widget(p, area);
+        return;
+    }
+
+    let header = Row::new(vec![
+        Cell::from("ID").style(Style::default().fg(theme.key_accent).bold()),
+        Cell::from("Name").style(Style::default().fg(theme.key_accent).bold()),
+        Cell::from("Final Score").style(Style::default().fg(theme.key_accent).bold()),
+        Cell::from("Grade").style(Style::default().fg(theme.key_accent).bold()),
+        Cell::from("Reason").style(Style::default().fg(theme.key_accent).bold()),
+    ]).height(1).bottom_margin(1).style(Style::default().bg(theme.alt_row));
+
+    let cursor_row = app.cursor_row;
+    let right_focused = app.analytics_right_focused;
+    let rows: Vec<Row> = at_risk.iter().enumerate().map(|(i, s)| {
+        let g_color = grade_color_for(&s.grade, &theme);
+        let mut row_style = Style::default();
+        if right_focused && i == cursor_row {
+            row_style = row_style.bg(theme.highlight);
+        } else if i % 2 == 1 {
+            row_style = row_style.bg(theme.alt_row);
+        }
+        Row::new(vec![
+            Cell::from(s.student_id.clone()).fg(theme.info),
+            Cell::from(format_thai_name(&s.name, 18)).fg(theme.fg),
+            Cell::from(format!("{:.1}", s.final_score)).fg(theme.key_accent).add_modifier(Modifier::BOLD),
+            Cell::from(s.grade.clone()).fg(g_color).add_modifier(Modifier::BOLD),
+            Cell::from(s.reasons.join(", ")).fg(theme.warning),
+        ]).style(row_style).height(1)
+    }).collect();
+
+    let widths = vec![
+        Constraint::Length(10),
+        Constraint::Length(30),
+        Constraint::Length(12),
+        Constraint::Length(7),
+        Constraint::Length(22),
+    ];
+
+    let table = Table::new(rows, widths).header(header).block(block).column_spacing(1);
+    let mut table_state = TableState::default().with_offset(app.scroll_row_offset);
+    f.render_stateful_widget(table, area, &mut table_state);
 }
 
 fn draw_roundup_tab(f: &mut Frame, app: &mut App, area: Rect) {
@@ -1489,6 +2043,29 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                             leg.push(Span::raw("Navigate  "));
                             leg.push(Span::styled(" [→/Enter] ", Style::default().fg(theme.success).bold()));
                             leg.push(Span::raw("Focus Table  "));
+                            leg.push(Span::styled(" [Esc] ", Style::default().fg(theme.warning).bold()));
+                            leg.push(Span::raw("Course Select  "));
+                        }
+                    }
+                    if app.active_tab == 2 {
+                        if app.raw_selected_student.is_some() {
+                            // Student popup opened from At-Risk Students (read-only)
+                            leg.push(Span::styled(" [Esc] ", Style::default().fg(theme.warning).bold()));
+                            leg.push(Span::raw("Back  "));
+                        } else if app.analytics_right_focused {
+                            // At-Risk Students table focused
+                            leg.push(Span::styled(" [▲/▼] ", Style::default().fg(theme.active_tab).bold()));
+                            leg.push(Span::raw("Move  "));
+                            leg.push(Span::styled(" [Enter] ", Style::default().fg(theme.success).bold()));
+                            leg.push(Span::raw("Open Student  "));
+                            leg.push(Span::styled(" [←/Esc] ", Style::default().fg(theme.warning).bold()));
+                            leg.push(Span::raw("Back to Categories  "));
+                        } else {
+                            // Category list focused
+                            leg.push(Span::styled(" [▲/▼] ", Style::default().fg(theme.active_tab).bold()));
+                            leg.push(Span::raw("Navigate  "));
+                            leg.push(Span::styled(" [→/Enter] ", Style::default().fg(theme.success).bold()));
+                            leg.push(Span::raw("Focus Table (At-Risk only)  "));
                             leg.push(Span::styled(" [Esc] ", Style::default().fg(theme.warning).bold()));
                             leg.push(Span::raw("Course Select  "));
                         }
