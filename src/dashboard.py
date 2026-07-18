@@ -15,7 +15,7 @@ from rich import box
 script_path = Path(__file__).resolve()
 sys.path.insert(0, str(script_path.parent.parent))
 
-from src.data_loader import load_config, load_course_data
+from src.data_loader import load_config, load_course_data, get_course_file_prefix
 from src.calculators import calculate_final_grades, validate_scores
 
 console = Console()
@@ -161,6 +161,11 @@ def _fmt(v) -> str:
     return str(v)
 
 
+def _fmt_pts(pts: float) -> str:
+    """Bare integer when whole, else 1 decimal — matches rust_tui's pts_str formatting."""
+    return str(int(pts)) if pts == int(pts) else f"{pts:.1f}"
+
+
 def _print_wide(renderable) -> None:
     """Render at full width (500 cols) and display in 'less -SR' for horizontal scrolling."""
     buf = io.StringIO()
@@ -223,36 +228,35 @@ def show_grade_distribution(final_df: pd.DataFrame, config: dict) -> None:
 
 def export_reports(final_df: pd.DataFrame, course_path: Path, config: dict, max_scores: dict, use_weighted: bool) -> Path:
     weights = config.get("weights", {})
-    data_mapping = config.get("data_mapping", {})
     rename = {k: v.replace("\n", " ") for k, v in _col_headers(final_df, max_scores, config, use_weighted).items()}
     display_df = final_df.rename(columns=rename)
 
     report_dir = course_path / "reports"
     report_dir.mkdir(exist_ok=True)
-    display_df.to_csv(report_dir / "final_grades.csv", index=False)
+    prefix = get_course_file_prefix(course_path)
+    display_df.to_csv(report_dir / f"{prefix}_final_grades.csv", index=False)
 
-    copy_parts = []
+    # Mirrors rust_tui's "For Submission" tab (tab [1]): Cumulative Scores / Midterm / Final
+    # blocks in that fixed order, each with its own ID column, separated by a blank spacer.
+    cw_weight = sum(w for c, w in weights.items() if c.lower() not in ["midterm", "final"])
+    blocks = []
     if "Coursework Total" in final_df.columns:
-        disp_name = rename.get("Coursework Total", "Coursework Total")
-        if disp_name in display_df.columns:
-            copy_parts.append(display_df[["Student ID", disp_name]].copy())
+        blocks.append(("Cumulative Scores", "Coursework Total", cw_weight * 100))
+    if "midterm_pct" in final_df.columns:
+        blocks.append(("Midterm", "midterm_pct", weights.get("midterm", 0) * 100))
+    if "final_pct" in final_df.columns:
+        blocks.append(("Final", "final_pct", weights.get("final", 0) * 100))
 
-    for exam in ["midterm", "final"]:
-        pct_col = f"{exam}_pct"
-        if pct_col in final_df.columns:
-            disp_name = rename.get(pct_col, pct_col)
-            if disp_name in display_df.columns:
-                part = display_df[["Student ID", disp_name]].copy()
-                mapped_name = data_mapping.get(exam, [exam])[0]
-                max_pts = weights.get(exam, 0) * 100
-                part.columns = ["Student ID", f"{mapped_name} ({max_pts:g}pts)"]
-                copy_parts.append(part)
-
-    if copy_parts:
-        for i in range(1, len(copy_parts)):
-            copy_parts[i] = copy_parts[i].drop(columns=["Student ID"])
+    if blocks:
+        copy_parts = []
+        for i, (label, key, pts) in enumerate(blocks):
+            if i > 0:
+                copy_parts.append(pd.DataFrame({"": [""] * len(final_df)}, index=final_df.index))
+            part = final_df[["Student ID", key]].copy()
+            part.columns = ["Student ID", f"{label} ({_fmt_pts(pts)} pts)"]
+            copy_parts.append(part)
         copy_df = pd.concat(copy_parts, axis=1)
-        copy_df.to_csv(report_dir / "copy_friendly_scores.csv", index=False)
+        copy_df.to_csv(report_dir / f"{prefix}_copy_friendly_scores.csv", index=False)
 
     return report_dir
 
@@ -260,12 +264,13 @@ def update_database_totals(course_path: Path, final_df: pd.DataFrame, data_mappi
     data_dir = course_path / "data"
     if not data_dir.is_dir():
         return
+    prefix = get_course_file_prefix(course_path)
     for category, columns in data_mapping.items():
         if category == 'attendance':
             csv_files = [f for f in data_dir.iterdir() if f.is_file() and f.name.endswith("attendance.csv")]
             csv_path = csv_files[0] if csv_files else None
         else:
-            csv_path = data_dir / f"{category}.csv"
+            csv_path = data_dir / f"{prefix}_{category}.csv"
             
         if csv_path and csv_path.exists():
             try:

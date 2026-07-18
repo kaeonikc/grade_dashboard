@@ -119,7 +119,7 @@ def _compute_attendance_labels(config: dict, attendance_cols: list) -> dict:
 
     labels = {}
     for col, d in zip(short_cols, pool):
-        labels[col] = f"{d.day} {d.strftime('%b')} {d.year}"
+        labels[col] = f"{d.day:>2} {d.strftime('%b')} {d.year}"
     return labels
 
 def _fill_default_max_scores(config: dict, max_scores: dict) -> None:
@@ -357,12 +357,16 @@ def get_course_data(course_path, use_weighted=True):
         if "Grade" in final_df.columns:
             summary_cols.append("Grade")
         
+        has_coursework_total = "Coursework Total" in final_df.columns
         student_grades = []
-        for _, row in final_df[summary_cols].iterrows():
+        for idx, row in final_df[summary_cols].iterrows():
             record = {}
             for col in summary_cols:
                 val = row[col]
                 record[col] = "" if pd.isna(val) else val
+            if has_coursework_total:
+                ct = final_df.at[idx, "Coursework Total"]
+                record["Coursework Total"] = "" if pd.isna(ct) else int(ct)
             student_grades.append(record)
             
         # Prepare list of raw scores

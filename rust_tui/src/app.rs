@@ -12,6 +12,8 @@ pub const ANALYTICS_CATEGORIES: [&str; 5] = [
 ];
 const AT_RISK_CATEGORY_INDEX: usize = 4;
 
+pub const SUMMARY_CATEGORIES: [&str; 2] = ["Summary Scores", "For Submission"];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppState {
     CourseSelect,
@@ -91,6 +93,10 @@ pub struct App {
     pub analytics_category_index: usize,
     pub analytics_right_focused: bool,
 
+    // Summary tab (Tab [1]) left-panel category state: Summary Scores / For Submission
+    pub summary_category_index: usize,
+    pub summary_right_focused: bool,
+
     // Bulk column-fill editing state (Raw Details, L1 sub-column view)
     pub editing_bulk_fill: bool,
     pub bulk_fill_textarea: Option<tui_textarea::TextArea<'static>>,
@@ -149,6 +155,8 @@ impl App {
             raw_selected_student: None,
             analytics_category_index: 0,
             analytics_right_focused: false,
+            summary_category_index: 0,
+            summary_right_focused: false,
             editing_bulk_fill: false,
             bulk_fill_textarea: None,
             bulk_fill_column: String::new(),
@@ -371,16 +379,6 @@ impl App {
             Some(d) => d,
             None => return,
         };
-
-        if self.active_tab == 0 {
-            // Summary columns: Student ID (0), Name (1), ... (read-only)
-            // Go TUI does not support editing derived summary columns (which are aggregates)
-            // But we can let them edit if it falls under raw score columns.
-            // Let's only allow editing in raw columns tab (tabRawDetails) to keep logic clean and robust.
-            self.info_msg = Some("To edit scores, please switch to the 'Raw Details' tab".to_string());
-            self.info_msg_ticks = 0;
-            return;
-        }
 
         if self.active_tab == 1 {
             // Raw Details Tab — only editable in sub-column view
@@ -618,6 +616,16 @@ impl App {
                     }
                     return;
                 }
+                if self.active_tab == 0 && !self.summary_right_focused {
+                    if self.summary_category_index > 0 {
+                        self.summary_category_index -= 1;
+                        self.cursor_row = 0;
+                        self.scroll_row_offset = 0;
+                        self.cursor_col = 0;
+                        self.scroll_col_offset = 0;
+                    }
+                    return;
+                }
                 if self.cursor_row > 0 {
                     self.cursor_row -= 1;
                     self.adjust_scroll_row();
@@ -660,6 +668,16 @@ impl App {
                         self.analytics_category_index += 1;
                         self.cursor_row = 0;
                         self.scroll_row_offset = 0;
+                    }
+                    return;
+                }
+                if self.active_tab == 0 && !self.summary_right_focused {
+                    if self.summary_category_index + 1 < SUMMARY_CATEGORIES.len() {
+                        self.summary_category_index += 1;
+                        self.cursor_row = 0;
+                        self.scroll_row_offset = 0;
+                        self.cursor_col = 0;
+                        self.scroll_col_offset = 0;
                     }
                     return;
                 }
@@ -721,6 +739,19 @@ impl App {
 
     pub fn move_left(&mut self) {
         if self.state == AppState::Dashboard && !self.editing && !self.editing_weights && !self.editing_boundaries {
+            if self.active_tab == 0 {
+                if self.summary_right_focused {
+                    if self.summary_category_index == 0 && self.cursor_col > 0 {
+                        self.cursor_col -= 1;
+                        self.adjust_scroll_col();
+                    } else {
+                        // Category 1 (For Submission) has no column cursor — ← always
+                        // returns focus to the left panel, matching category 0 at col 0.
+                        self.summary_right_focused = false;
+                    }
+                }
+                return;
+            }
             if self.active_tab == 1 {
                 if self.raw_right_focused {
                     if self.cursor_col > 0 {
@@ -741,15 +772,27 @@ impl App {
                 }
                 return;
             }
-            if self.cursor_col > 0 {
-                self.cursor_col -= 1;
-                self.adjust_scroll_col();
-            }
+            // Tabs 0-2 all return early above; nothing else has a column cursor.
         }
     }
 
     pub fn move_right(&mut self) {
         if self.state == AppState::Dashboard && !self.editing && !self.editing_weights && !self.editing_boundaries {
+            if self.active_tab == 0 {
+                if !self.summary_right_focused {
+                    self.summary_right_focused = true;
+                    self.cursor_col = 0;
+                    self.scroll_col_offset = 0;
+                } else if self.summary_category_index == 0 {
+                    let max_cols = self.course_data.as_ref().map(|d| d.summary_columns.len()).unwrap_or(0);
+                    if self.cursor_col + 1 < max_cols {
+                        self.cursor_col += 1;
+                        self.adjust_scroll_col();
+                    }
+                }
+                // Category 1 (For Submission) is row-only — → is a no-op once focused.
+                return;
+            }
             if self.active_tab == 2 {
                 if !self.analytics_right_focused
                     && self.analytics_category_index == AT_RISK_CATEGORY_INDEX
@@ -783,20 +826,7 @@ impl App {
                 }
                 return;
             }
-            let max_cols = match &self.course_data {
-                Some(data) => {
-                    if self.active_tab == 0 {
-                        data.summary_columns.len()
-                    } else {
-                        0
-                    }
-                }
-                None => 0,
-            };
-            if self.cursor_col + 1 < max_cols {
-                self.cursor_col += 1;
-                self.adjust_scroll_col();
-            }
+            // Tabs 0-2 all return early above; nothing else has a column cursor.
         }
     }
 
@@ -908,6 +938,8 @@ impl App {
                             self.raw_right_focused = false;
                             self.analytics_category_index = 0;
                             self.analytics_right_focused = false;
+                            self.summary_category_index = 0;
+                            self.summary_right_focused = false;
                             self.sync_raw_category();
                         }
                     }
@@ -1195,6 +1227,8 @@ impl App {
                             self.raw_right_focused = false;
                             self.analytics_category_index = 0;
                             self.analytics_right_focused = false;
+                            self.summary_category_index = 0;
+                            self.summary_right_focused = false;
                             self.sync_raw_category();
                         }
                     }
@@ -1215,6 +1249,8 @@ impl App {
                             self.raw_right_focused = false;
                             self.analytics_category_index = 0;
                             self.analytics_right_focused = false;
+                            self.summary_category_index = 0;
+                            self.summary_right_focused = false;
                             self.sync_raw_category();
                         }
                     }
@@ -1233,6 +1269,27 @@ impl App {
                             let col_start = if self.raw_right_focused { 2 } else { 0 };
                             self.cursor_col = col_start;
                             self.scroll_col_offset = col_start;
+                        } else if self.active_tab == 2
+                            && !self.editing
+                            && !self.editing_weights
+                            && !self.editing_boundaries
+                            && self.raw_selected_student.is_none()
+                            && self.analytics_category_index > 0
+                        {
+                            self.analytics_category_index -= 1;
+                            self.cursor_row = 0;
+                            self.scroll_row_offset = 0;
+                        } else if self.active_tab == 0
+                            && !self.editing
+                            && !self.editing_weights
+                            && !self.editing_boundaries
+                            && self.summary_category_index > 0
+                        {
+                            self.summary_category_index -= 1;
+                            self.cursor_row = 0;
+                            self.scroll_row_offset = 0;
+                            self.cursor_col = 0;
+                            self.scroll_col_offset = 0;
                         }
                     }
                     crossterm::event::KeyCode::Char(']') => {
@@ -1251,6 +1308,29 @@ impl App {
                                 let col_start = if self.raw_right_focused { 2 } else { 0 };
                                 self.cursor_col = col_start;
                                 self.scroll_col_offset = col_start;
+                            }
+                        } else if self.active_tab == 2
+                            && !self.editing
+                            && !self.editing_weights
+                            && !self.editing_boundaries
+                            && self.raw_selected_student.is_none()
+                        {
+                            if self.analytics_category_index + 1 < ANALYTICS_CATEGORIES.len() {
+                                self.analytics_category_index += 1;
+                                self.cursor_row = 0;
+                                self.scroll_row_offset = 0;
+                            }
+                        } else if self.active_tab == 0
+                            && !self.editing
+                            && !self.editing_weights
+                            && !self.editing_boundaries
+                        {
+                            if self.summary_category_index + 1 < SUMMARY_CATEGORIES.len() {
+                                self.summary_category_index += 1;
+                                self.cursor_row = 0;
+                                self.scroll_row_offset = 0;
+                                self.cursor_col = 0;
+                                self.scroll_col_offset = 0;
                             }
                         }
                     }
@@ -1293,6 +1373,16 @@ impl App {
                                     self.analytics_right_focused = false;
                                 } else {
                                     // Category list → CourseSelect
+                                    self.state = AppState::CourseSelect;
+                                    self.course_data = None;
+                                    self.load_courses();
+                                }
+                            } else if self.active_tab == 0 {
+                                if self.summary_right_focused {
+                                    // Right panel → back to left panel
+                                    self.summary_right_focused = false;
+                                } else {
+                                    // Left panel → CourseSelect
                                     self.state = AppState::CourseSelect;
                                     self.course_data = None;
                                     self.load_courses();
@@ -1347,6 +1437,14 @@ impl App {
                                     self.cursor_row = 0;
                                     self.scroll_row_offset = 0;
                                 }
+                            } else if self.active_tab == 0 {
+                                if !self.summary_right_focused {
+                                    // Left panel → focus right panel
+                                    self.summary_right_focused = true;
+                                    self.cursor_col = 0;
+                                    self.scroll_col_offset = 0;
+                                }
+                                // Right panel: read-only in both categories — no-op.
                             } else {
                                 self.start_editing_cell();
                             }

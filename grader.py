@@ -14,8 +14,60 @@ from rich.prompt import Confirm
 script_path = Path(__file__).resolve()
 sys.path.insert(0, str(script_path.parent))
 
-from src.data_loader import load_config, load_course_data, sync_attendance_xlsx_to_csv
+from src.data_loader import load_config, load_course_data, sync_attendance_xlsx_to_csv, get_course_file_prefix
 from src.calculators import calculate_final_grades
+
+_UNSAFE_PATH_CHARS = re.compile(r'[/\\:*?"<>|\x00-\x1f]')
+_WHITESPACE_RUN = re.compile(r'\s+')
+
+def sanitize_for_path(name: str) -> str:
+    """Make a course_name safe to embed in a folder/file name, preserving non-ASCII text."""
+    cleaned = _UNSAFE_PATH_CHARS.sub('', name or '')
+    cleaned = _WHITESPACE_RUN.sub('_', cleaned.strip())
+    return cleaned
+
+def find_course_dir(term_name: str, course_id: str, sec_num) -> Path:
+    """
+    Locate an existing course directory by matching term/course_id/sec_num inside its
+    config.yaml, rather than guessing the folder name (folders are named after
+    course_name, which can drift or be re-sanitized between spreadsheet re-uploads).
+    Mirrors src/dashboard.py:find_courses' directory discovery (cwd + cwd's immediate
+    subdirs + courses/*).
+    """
+    current_dir = Path(".")
+    courses_dir = current_dir / "courses"
+    candidates = [d for d in current_dir.iterdir() if d.is_dir()]
+    if courses_dir.is_dir():
+        candidates.extend([d for d in courses_dir.iterdir() if d.is_dir()])
+
+    matches = []
+    for d in candidates:
+        info_dir = d / "course_info"
+        if not info_dir.is_dir():
+            continue
+        config_files = [f for f in info_dir.iterdir() if f.is_file() and f.name.endswith("_config.yaml") and not f.name.endswith(".bak")]
+        for cfg_file in config_files:
+            try:
+                with open(cfg_file, 'r', encoding='utf-8') as f:
+                    cfg = yaml.safe_load(f) or {}
+            except Exception:
+                continue
+            if (str(cfg.get('term', '')) == str(term_name)
+                    and str(cfg.get('course_id', '')) == str(course_id)
+                    and str(cfg.get('sec_num', '')) == str(sec_num)):
+                matches.append(d.resolve())
+                break
+
+    matches = list(dict.fromkeys(matches))
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        print("❌ Error: Multiple course directories match this term/course_id/sec_num:")
+        for m in matches:
+            print(f"   - {m}")
+        print("Please remove or disambiguate the duplicates.")
+        sys.exit(1)
+    return None
 
 def create_merged_config(metadata: dict, output_path: Path):
     config_data = {
@@ -201,10 +253,14 @@ def save_attendance_excel(excel_path: Path, student_registry: pd.DataFrame, colu
                         if old_col in new_cols:
                             val = existing_df.loc[idx, old_col]
                             if pd.notna(val):
+                                if isinstance(val, str) and val.strip() == "EA":
+                                    val = "X"
                                 df_new.loc[target_idx, old_col] = val
                         else:
                             val = existing_df.loc[idx, old_col]
                             if pd.notna(val):
+                                if isinstance(val, str) and val.strip() == "EA":
+                                    val = "X"
                                 df_new.loc[target_idx, new_col] = val
 
     wb = openpyxl.Workbook()
@@ -225,7 +281,7 @@ def save_attendance_excel(excel_path: Path, student_registry: pd.DataFrame, colu
         end_col_letter = get_column_letter(len(columns) + 2)
         total_col_idx = len(columns) + 3
         for r in range(2, num_students + 2):
-            formula = f'=COUNTIF({start_col_letter}{r}:{end_col_letter}{r}, "P") + COUNTIF({start_col_letter}{r}:{end_col_letter}{r}, "L")*0.8 + COUNTIF({start_col_letter}{r}:{end_col_letter}{r}, "EA")'
+            formula = f'=COUNTIF({start_col_letter}{r}:{end_col_letter}{r}, "P") + COUNTIF({start_col_letter}{r}:{end_col_letter}{r}, "L")*0.8 + COUNTIF({start_col_letter}{r}:{end_col_letter}{r}, "X")'
             ws.cell(row=r, column=total_col_idx, value=formula)
         
     thin_border = Border(
@@ -275,10 +331,10 @@ def save_attendance_excel(excel_path: Path, student_registry: pd.DataFrame, colu
     total_col_letter = get_column_letter(len(headers))
     ws.column_dimensions[total_col_letter].width = 14
         
-    dv = DataValidation(type="list", formula1='"P,A,L,EA"', allow_blank=True)
-    dv.error ='Your entry is not in the list (P, A, L, EA)'
+    dv = DataValidation(type="list", formula1='"P,A,L,X"', allow_blank=True)
+    dv.error ='Your entry is not in the list (P, A, L, X)'
     dv.errorTitle = 'Invalid Entry'
-    dv.prompt = 'Please select from: P, A, L, EA'
+    dv.prompt = 'Please select from: P, A, L, X'
     dv.promptTitle = 'Select attendance'
     
     ws.add_data_validation(dv)
@@ -306,7 +362,7 @@ def save_attendance_excel(excel_path: Path, student_registry: pd.DataFrame, colu
         ws.conditional_formatting.add(cf_range, CellIsRule(operator='equal', formula=['"P"'], fill=green_fill, font=green_font))
         ws.conditional_formatting.add(cf_range, CellIsRule(operator='equal', formula=['"A"'], fill=red_fill, font=red_font))
         ws.conditional_formatting.add(cf_range, CellIsRule(operator='equal', formula=['"L"'], fill=orange_fill, font=orange_font))
-        ws.conditional_formatting.add(cf_range, CellIsRule(operator='equal', formula=['"EA"'], fill=yellow_fill, font=yellow_font))
+        ws.conditional_formatting.add(cf_range, CellIsRule(operator='equal', formula=['"X"'], fill=yellow_fill, font=yellow_font))
 
     excel_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(excel_path)
@@ -411,10 +467,16 @@ def init_course(course_name: str, term_name: str, course_id: str, input_file: st
         course_id = course_id if course_id else metadata.get('course_id')
         course_name = course_name if course_name else metadata.get('course_name')
         sec_num = metadata.get('sec_num', 'Unknown')
-        
-        folder_name = f"{term_name}_{course_id}_SEC_{sec_num}_grading"
+
+        name_for_path = sanitize_for_path(course_name)
+        if not name_for_path:
+            print(f"⚠️ Warning: Could not determine course_name; falling back to course_id ('{course_id}') for folder/file naming.")
+            name_for_path = sanitize_for_path(course_id)
+
+        folder_name = f"{term_name}_{name_for_path}_SEC_{sec_num}_grading"
     else:
-        folder_name = f"{term_name}_{course_id}_grading"
+        name_for_path = sanitize_for_path(course_name)
+        folder_name = f"{term_name}_{name_for_path}_grading"
         sec_num = None
 
     base_dir = Path(folder_name)
@@ -434,21 +496,21 @@ def init_course(course_name: str, term_name: str, course_id: str, input_file: st
     reports_dir.mkdir(parents=True)
 
     if input_file:
-        config_filename = f"{term_name}_{course_id}_SEC_{sec_num}_config.yaml"
+        config_filename = f"{term_name}_{name_for_path}_SEC_{sec_num}_config.yaml"
         config_path = course_info_dir / config_filename
-        csv_filename = f"{term_name}_{course_id}_SEC_{sec_num}_student_info.csv"
+        csv_filename = f"{term_name}_{name_for_path}_SEC_{sec_num}_student_info.csv"
         csv_path = course_info_dir / csv_filename
-        
+
         temp_yaml_path = course_info_dir / "temp_metadata.yaml"
         from course_info_prep.convert_student_info import convert_excel_to_csv_and_yaml
         metadata, clean_df = convert_excel_to_csv_and_yaml(input_path, csv_path=csv_path, yaml_path=temp_yaml_path)
-        
+
         create_merged_config(metadata, config_path)
         if temp_yaml_path.exists():
             temp_yaml_path.unlink()
-        
+
         # Generate initial attendance spreadsheet with placeholders
-        att_filename = f"{term_name}_{course_id}_attendance.xlsx"
+        att_filename = f"{get_course_file_prefix(base_dir)}_attendance.xlsx"
         att_path = data_dir / att_filename
         class_cols = calculate_class_dates('', '', '')
         save_attendance_excel(att_path, clean_df, class_cols)
@@ -459,7 +521,7 @@ def init_course(course_name: str, term_name: str, course_id: str, input_file: st
         print(f"✅ Generated config at: {config_path}")
         print(f"✅ Generated initial attendance sheet at: {att_path}")
     else:
-        config_filename = f"{term_name}_{course_id}_config.yaml"
+        config_filename = f"{term_name}_{name_for_path}_config.yaml"
         config_path = course_info_dir / config_filename
         
         with open(config_path, "w") as f:
@@ -552,12 +614,13 @@ def mkdb_course(config_file: str = None, input_alias: str = None):
     student_registry['Name'] = student_registry['Name'].astype(str).str.strip()
     
     data_dir.mkdir(parents=True, exist_ok=True)
-    
+    prefix = get_course_file_prefix(course_dir)
+
     for category, mapping_item in data_mapping.items():
         total_pts, columns = parse_category_mapping(mapping_item)
         if not isinstance(columns, list):
             continue
-        csv_path = data_dir / f"{category}.csv"
+        csv_path = data_dir / f"{prefix}_{category}.csv"
         print(f"🛠️ Creating empty score database: {csv_path.name}...")
         
         # Calculate target_total based on category weight or manual total_pts
@@ -618,42 +681,44 @@ def update_course(input_file: str = None, config_file: str = None):
         metadata = extract_metadata(df_raw)
         term_name = metadata.get('term')
         course_id = metadata.get('course_id')
+        course_name = metadata.get('course_name')
         sec_num = metadata.get('sec_num')
-        
+
         if not term_name or not course_id or not sec_num:
             print("❌ Error: Could not parse required metadata (term, course_id, sec_num) from input file.")
             sys.exit(1)
-            
+
+        name_for_path = sanitize_for_path(course_name)
+        if not name_for_path:
+            print(f"⚠️ Warning: Could not determine course_name; falling back to course_id ('{course_id}') for file naming.")
+            name_for_path = sanitize_for_path(course_id)
+
         # Automatic detection of target folder
         target_dir = None
         if Path("course_info").is_dir():
             target_dir = Path(".")
             print("🔍 Detected running from inside a course grading directory.")
         else:
-            folder_name = f"{term_name}_{course_id}_SEC_{sec_num}_grading"
-            target_dir = Path(folder_name)
-            # Check inside courses/ as well
-            if not target_dir.exists() and Path("courses").is_dir():
-                target_dir = Path("courses") / folder_name
-                
-        if not target_dir.exists():
-            print(f"❌ Target grading directory '{target_dir}' does not exist.")
+            target_dir = find_course_dir(term_name, course_id, sec_num)
+
+        if not target_dir or not target_dir.exists():
+            print(f"❌ Target grading directory for term={term_name}, course_id={course_id}, sec_num={sec_num} does not exist.")
             print(f"Please run 'grader init -i {input_file}' first to initialize the course.")
             sys.exit(1)
-            
+
         info_dir = target_dir / "course_info"
         if not info_dir.is_dir():
             print(f"❌ '{info_dir}' is not a directory.")
             sys.exit(1)
-            
+
         # Determine config and CSV paths
         config_files = [f for f in info_dir.iterdir() if f.is_file() and f.name.endswith("_config.yaml") and not f.name.endswith(".bak")]
         if config_files:
             config_path = config_files[0]
         else:
-            config_path = info_dir / f"{term_name}_{course_id}_SEC_{sec_num}_config.yaml"
-            
-        csv_path = info_dir / f"{term_name}_{course_id}_SEC_{sec_num}_student_info.csv"
+            config_path = info_dir / f"{term_name}_{name_for_path}_SEC_{sec_num}_config.yaml"
+
+        csv_path = info_dir / f"{term_name}_{name_for_path}_SEC_{sec_num}_student_info.csv"
         
         # Back up existing files
         if config_path.exists():
@@ -733,9 +798,7 @@ def update_course(input_file: str = None, config_file: str = None):
             
             # Update attendance spreadsheet
             try:
-                term_val = existing_config.get('term', term_name)
-                cid_val = existing_config.get('course_id', course_id)
-                att_filename = f"{term_val}_{cid_val}_attendance.xlsx"
+                att_filename = f"{get_course_file_prefix(target_dir)}_attendance.xlsx"
                 att_path = target_dir / "data" / att_filename
                 
                 sch = existing_config.get('class_schedule', {})
@@ -754,7 +817,7 @@ def update_course(input_file: str = None, config_file: str = None):
             
             # Create fresh attendance spreadsheet with placeholders
             try:
-                att_filename = f"{term_name}_{course_id}_attendance.xlsx"
+                att_filename = f"{get_course_file_prefix(target_dir)}_attendance.xlsx"
                 att_path = target_dir / "data" / att_filename
                 class_cols = calculate_class_dates('', '', '')
                 save_attendance_excel(att_path, merged_df, class_cols)
@@ -826,13 +889,14 @@ def update_course(input_file: str = None, config_file: str = None):
     
     data_dir.mkdir(parents=True, exist_ok=True)
     from rich.prompt import Confirm
-    
+    prefix = get_course_file_prefix(course_dir)
+
     for category, mapping_item in data_mapping.items():
         total_pts, columns = parse_category_mapping(mapping_item)
         if not isinstance(columns, list):
             continue
-        csv_path = data_dir / f"{category}.csv"
-        
+        csv_path = data_dir / f"{prefix}_{category}.csv"
+
         # Calculate target_total based on category weight or manual total_pts
         weights = config.get("weights", {})
         weight = weights.get(category, None)
@@ -1023,9 +1087,7 @@ def update_course(input_file: str = None, config_file: str = None):
     # Align/update attendance sheet if attendance is in weights
     if 'weights' in config and 'attendance' in config['weights']:
         try:
-            term_val = config.get('term', '')
-            cid_val = config.get('course_id', '')
-            att_filename = f"{term_val}_{cid_val}_attendance.xlsx"
+            att_filename = f"{prefix}_attendance.xlsx"
             att_path = data_dir / att_filename
             
             sch = config.get('class_schedule', {})
@@ -1091,13 +1153,17 @@ def undo_course():
 
 def mock_course():
     """
-    Generates a complete, self-contained mock course under courses/0_mock_grading/
-    with a config, student roster, score data, and attendance sheet, seeded
+    Generates a complete, self-contained mock course under courses/ with a
+    config, student roster, score data, and attendance sheet, seeded
     deterministically so grade-tui and the dashboard can be exercised end-to-end
     without needing real student data. Always wipes and regenerates that one
-    hardcoded, unmistakably-fake directory.
+    hardcoded, unmistakably-fake course (identified by its fixed term/course_name).
     """
-    base_dir = Path("courses") / "0_mock_grading"
+    mock_term = "0"
+    mock_course_name = "ฟิสิกส์ทั่วไป (ข้อมูลจำลอง)"
+    name_for_path = sanitize_for_path(mock_course_name)
+
+    base_dir = Path("courses") / f"{mock_term}_{name_for_path}_grading"
     if base_dir.exists():
         shutil.rmtree(base_dir)
 
@@ -1111,7 +1177,7 @@ def mock_course():
     rng = random.Random(42)
 
     # --- Config ---
-    config_path = course_info_dir / "0_mock_config.yaml"
+    config_path = course_info_dir / f"{mock_term}_{name_for_path}_config.yaml"
     config_path.write_text("""course_id: "MOCK"
 course_name: "ฟิสิกส์ทั่วไป (ข้อมูลจำลอง)"
 term: "0"
@@ -1177,7 +1243,7 @@ grade_boundaries:
         "Name": student_names,
         "Class Group": class_groups,
     })
-    student_registry.to_csv(course_info_dir / "0_mock_student_info.csv", index=False)
+    student_registry.to_csv(course_info_dir / f"{mock_term}_{name_for_path}_student_info.csv", index=False)
 
     # --- Deterministic edge-case index selection ---
     at_risk_idxs = set(rng.sample(range(num_students), 4))
@@ -1210,7 +1276,7 @@ grade_boundaries:
             "hw3 (10pts)": scores[2],
             "total (30pts)": row_total,
         })
-    pd.DataFrame(hw_rows).to_csv(data_dir / "homework.csv", index=False)
+    pd.DataFrame(hw_rows).to_csv(data_dir / f"{mock_term}_{name_for_path}_homework.csv", index=False)
 
     # --- Midterm scores (30pts) ---
     midterm_max = 30.0
@@ -1226,7 +1292,7 @@ grade_boundaries:
             "midterm_exam (30pts)": score,
             "total (30pts)": score,
         })
-    pd.DataFrame(mid_rows).to_csv(data_dir / "midterm.csv", index=False)
+    pd.DataFrame(mid_rows).to_csv(data_dir / f"{mock_term}_{name_for_path}_midterm.csv", index=False)
 
     # --- Final scores (40pts) ---
     final_max = 40.0
@@ -1242,7 +1308,7 @@ grade_boundaries:
             "final_exam (40pts)": score,
             "total (40pts)": score if score is not None else 0.0,
         })
-    pd.DataFrame(final_rows).to_csv(data_dir / "final.csv", index=False)
+    pd.DataFrame(final_rows).to_csv(data_dir / f"{mock_term}_{name_for_path}_final.csv", index=False)
 
     # --- Attendance sheet ---
     class_cols = calculate_class_dates(
@@ -1251,7 +1317,7 @@ grade_boundaries:
         num_sessions,
     )
 
-    att_codes = ["P", "L", "A", "EA"]
+    att_codes = ["P", "L", "A", "X"]
     att_weights = [75, 10, 10, 5]
     att_rows = []
     for i in range(num_students):
@@ -1263,7 +1329,7 @@ grade_boundaries:
         session = rng.choice(class_cols)
         att_rows[i][session] = "Z"  # deliberately invalid attendance code
 
-    att_path = data_dir / "0_mock_attendance.xlsx"
+    att_path = data_dir / f"{mock_term}_{name_for_path}_attendance.xlsx"
     # Seed a raw prefilled workbook, then reuse the real production helper to
     # merge those values in and apply the standard styling/validation/formulas.
     pd.DataFrame(att_rows).to_excel(att_path, index=False)
@@ -1304,7 +1370,7 @@ if __name__ == "__main__":
     parser_undo = subparsers.add_parser("undo", help="Undo the last update by restoring backup files")
 
     # Mock command
-    parser_mock = subparsers.add_parser("mock", help="Generate a complete mock course (courses/0_mock_grading) for testing grade-tui")
+    parser_mock = subparsers.add_parser("mock", help="Generate a complete mock course under courses/ for testing grade-tui")
 
     # Dashboard command
     parser_dashboard = subparsers.add_parser("dashboard", help="Launch the grade dashboard")

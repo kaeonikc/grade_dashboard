@@ -5,7 +5,7 @@ use ratatui::{
     widgets::{Bar, BarChart, Block, BorderType, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, TableState, Wrap},
     Frame,
 };
-use crate::app::{App, AppState, ANALYTICS_CATEGORIES};
+use crate::app::{App, AppState, ANALYTICS_CATEGORIES, SUMMARY_CATEGORIES};
 use unicode_width::UnicodeWidthStr;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -232,7 +232,7 @@ fn draw_dashboard(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Draw Main Content Pane depending on tab selection
     match app.active_tab {
-        0 => draw_summary_tab(f, app, chunks[1]),
+        0 => draw_summary_tab_container(f, app, chunks[1]),
         1 => draw_raw_details_tab(f, app, chunks[1]),
         2 => draw_analytics_tab(f, app, chunks[1]),
         3 => draw_roundup_tab(f, app, chunks[1]),
@@ -421,6 +421,285 @@ fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
             widths.push(Constraint::Length(score_col_width));
         }
     }
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(block)
+        .column_spacing(1);
+
+    let mut table_state = TableState::default().with_offset(app.scroll_row_offset);
+    f.render_stateful_widget(table, area, &mut table_state);
+}
+
+fn draw_summary_tab_container(f: &mut Frame, app: &mut App, area: Rect) {
+    let h_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(33), Constraint::Min(40)])
+        .split(area);
+
+    let left_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(h_chunks[0]);
+
+    draw_summary_left_panel(f, app, left_chunks[0]);
+    draw_summary_status_panel(f, app, left_chunks[1]);
+
+    if app.summary_category_index == 0 {
+        draw_summary_tab(f, app, h_chunks[1]);
+    } else {
+        draw_submission_table(f, app, h_chunks[1]);
+    }
+}
+
+fn draw_summary_left_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme;
+    let border_color = if !app.summary_right_focused { theme.border_focus } else { theme.border };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .title(" Categories ")
+        .title_style(Style::default().fg(theme.info).bold());
+
+    let idx = app.summary_category_index;
+    let right_focused = app.summary_right_focused;
+
+    let items: Vec<ListItem> = SUMMARY_CATEGORIES
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let is_highlighted = i == idx;
+            let style = if is_highlighted && !right_focused {
+                Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD)
+            } else if is_highlighted {
+                Style::default().fg(theme.active_tab).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.fg)
+            };
+            ListItem::new(Line::from(Span::styled(format!("  {}", name), style)))
+        })
+        .collect();
+
+    let list = List::new(items).block(block);
+    f.render_widget(list, area);
+}
+
+fn draw_summary_status_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme;
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border))
+        .title(" Student ")
+        .title_style(Style::default().fg(theme.info).bold());
+
+    if !app.summary_right_focused {
+        let placeholder = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  ─ no selection ─",
+                Style::default().fg(theme.inactive_tab),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  → to focus table",
+                Style::default().fg(theme.inactive_tab),
+            )),
+        ])
+        .block(block);
+        f.render_widget(placeholder, area);
+        return;
+    }
+
+    let data = match &app.course_data {
+        Some(d) => d,
+        None => { f.render_widget(block, area); return; }
+    };
+
+    if app.cursor_row >= data.student_grades.len() {
+        f.render_widget(block, area);
+        return;
+    }
+
+    let record = &data.student_grades[app.cursor_row];
+    let name_raw = record.get("Name").and_then(|v| v.as_str()).unwrap_or("—");
+    let sid = record.get("Student ID").and_then(|v| v.as_str()).unwrap_or("—");
+    let name_display: String = name_raw.chars().take(27).collect();
+
+    let fmt_int = |key: &str| -> String {
+        record.get(key)
+            .and_then(|v| v.as_f64())
+            .map(|n| format!("{}", n as i64))
+            .unwrap_or_else(|| "—".into())
+    };
+    let grade_str = record.get("Grade").and_then(|v| v.as_str()).unwrap_or("—").to_string();
+    let grade_color = grade_color_for(grade_str.trim(), &theme);
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!("  {}", name_display),
+            Style::default().fg(theme.fg).bold(),
+        )),
+        Line::from(Span::styled(
+            format!("  {}", sid),
+            Style::default().fg(theme.info),
+        )),
+    ];
+
+    if app.summary_category_index == 1 {
+        lines.push(Line::from(vec![
+            Span::styled("  Cumulative : ", Style::default().fg(theme.key_accent)),
+            Span::styled(fmt_int("Coursework Total"), Style::default().fg(theme.fg).bold()),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Midterm    : ", Style::default().fg(theme.key_accent)),
+            Span::styled(fmt_int("midterm_pct"), Style::default().fg(theme.warning).bold()),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Final      : ", Style::default().fg(theme.key_accent)),
+            Span::styled(fmt_int("final_pct"), Style::default().fg(Color::Indexed(33)).bold()),
+        ]));
+    }
+
+    lines.push(Line::from(vec![
+        Span::styled("  Score      : ", Style::default().fg(theme.key_accent)),
+        Span::styled(fmt_int("Final Score"), Style::default().fg(theme.key_accent).bold()),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  Grade      : ", Style::default().fg(theme.key_accent)),
+        Span::styled(
+            format!(" {} ", grade_str),
+            Style::default().fg(theme.bg).bg(grade_color).bold(),
+        ),
+    ]));
+
+    let paragraph = Paragraph::new(lines).block(block);
+    f.render_widget(paragraph, area);
+}
+
+struct SubmissionBlock {
+    label: &'static str,
+    key: &'static str,
+    pts: f64,
+    color: Color,
+}
+
+fn draw_submission_table(f: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme;
+    let data = match &app.course_data {
+        Some(d) => d,
+        None => return,
+    };
+
+    app.table_visible_rows = (area.height as usize).saturating_sub(5).max(1);
+
+    let show_cumulative = data.student_grades.first()
+        .map(|r| r.contains_key("Coursework Total"))
+        .unwrap_or(false);
+    let show_midterm = data.summary_columns.iter().any(|c| c == "midterm_pct");
+    let show_final = data.summary_columns.iter().any(|c| c == "final_pct");
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border))
+        .title(" 🎓 For Submission — final, rounded scores ")
+        .title_style(Style::default().fg(theme.info).bold())
+        .title_top(
+            Line::from(Span::styled(
+                format!(" [{}/{}] ", app.cursor_row + 1, data.student_grades.len()),
+                Style::default().fg(theme.key_accent).bold(),
+            ))
+            .right_aligned(),
+        );
+
+    if !show_cumulative && !show_midterm && !show_final {
+        let msg = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  No gradable categories configured for submission.",
+                Style::default().fg(theme.inactive_tab),
+            )),
+        ])
+        .block(block);
+        f.render_widget(msg, area);
+        return;
+    }
+
+    let cumulative_pts: f64 = data.weights.iter()
+        .filter(|(k, _)| k.as_str() != "midterm" && k.as_str() != "final")
+        .map(|(_, v)| *v)
+        .sum::<f64>() * 100.0;
+    let midterm_pts = data.weights.get("midterm").copied().unwrap_or(0.0) * 100.0;
+    let final_pts = data.weights.get("final").copied().unwrap_or(0.0) * 100.0;
+
+    let mut blocks: Vec<SubmissionBlock> = Vec::new();
+    if show_cumulative {
+        blocks.push(SubmissionBlock { label: "Cumulative Scores", key: "Coursework Total", pts: cumulative_pts, color: theme.purple });
+    }
+    if show_midterm {
+        blocks.push(SubmissionBlock { label: "Midterm", key: "midterm_pct", pts: midterm_pts, color: theme.warning });
+    }
+    if show_final {
+        blocks.push(SubmissionBlock { label: "Final", key: "final_pct", pts: final_pts, color: Color::Indexed(33) });
+    }
+
+    let num_col_width = format!("{}", data.student_grades.len()).len().max(1) as u16 + 1;
+    let sep_style = Style::default().fg(theme.border).add_modifier(Modifier::DIM);
+
+    let mut header_cells = vec![
+        Cell::from("#\n").style(Style::default().fg(theme.inactive_tab).add_modifier(Modifier::BOLD)),
+    ];
+    let mut widths = vec![Constraint::Length(num_col_width)];
+    for (b_idx, b) in blocks.iter().enumerate() {
+        if b_idx > 0 {
+            header_cells.push(Cell::from("│\n").style(sep_style));
+            widths.push(Constraint::Length(1));
+        }
+        header_cells.push(
+            Cell::from("ID\n").style(Style::default().fg(theme.key_accent).add_modifier(Modifier::BOLD))
+        );
+        widths.push(Constraint::Length(9));
+
+        let pts_str = if b.pts.fract() == 0.0 { format!("{}", b.pts as i64) } else { format!("{:.1}", b.pts) };
+        header_cells.push(
+            Cell::from(format!("{}\n({} pts)", b.label, pts_str))
+                .style(Style::default().fg(b.color).add_modifier(Modifier::BOLD))
+        );
+        let value_width = (b.label.chars().count() + 2).max(12) as u16;
+        widths.push(Constraint::Length(value_width));
+    }
+    let header = Row::new(header_cells).height(2).bottom_margin(1).style(Style::default().bg(theme.alt_row));
+
+    let rows: Vec<Row> = data.student_grades.iter().enumerate().map(|(r_idx, record)| {
+        let mut cells = vec![
+            Cell::from(format!("{}", r_idx + 1)).style(Style::default().fg(theme.inactive_tab)),
+        ];
+        for (b_idx, b) in blocks.iter().enumerate() {
+            if b_idx > 0 {
+                cells.push(Cell::from("│").style(sep_style));
+            }
+            let sid = record.get("Student ID").and_then(|v| v.as_str()).unwrap_or("—").to_string();
+            cells.push(Cell::from(sid).style(Style::default().fg(theme.info)));
+
+            let val_text = record.get(b.key)
+                .and_then(|v| v.as_f64())
+                .map(|n| format!("{}", n as i64))
+                .unwrap_or_else(|| "—".into());
+            cells.push(Cell::from(val_text).style(Style::default().fg(theme.fg).bold()));
+        }
+
+        let mut row_style = Style::default();
+        if r_idx == app.cursor_row {
+            row_style = row_style.bg(theme.highlight);
+        } else if r_idx % 2 == 1 {
+            row_style = row_style.bg(theme.alt_row);
+        }
+
+        Row::new(cells).style(row_style).height(1)
+    }).collect();
 
     let table = Table::new(rows, widths)
         .header(header)
@@ -1560,6 +1839,13 @@ fn draw_analytics_boundaries_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let mut sorted_bounds: Vec<(&String, &f64)> = data.grade_boundaries.iter().collect();
     sorted_bounds.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
 
+    let code_width = sorted_bounds
+        .iter()
+        .map(|(g, _)| g.len())
+        .chain(std::iter::once("F".len()))
+        .max()
+        .unwrap_or(1);
+
     let mut lines = vec![
         Line::from(""),
         Line::from(Span::styled("  ⚡ BOUNDARIES LIST", Style::default().fg(theme.title).bold())),
@@ -1568,7 +1854,7 @@ fn draw_analytics_boundaries_panel(f: &mut Frame, app: &mut App, area: Rect) {
     for (g, val) in &sorted_bounds {
         lines.push(Line::from(vec![
             Span::raw("   Grade "),
-            Span::styled((*g).clone(), Style::default().fg(grade_color_for(g, &theme)).bold()),
+            Span::styled(format!("{:<code_width$}", g), Style::default().fg(grade_color_for(g, &theme)).bold()),
             Span::raw(" : ≥ "),
             Span::styled(format!("{:.1}", val), Style::default().fg(theme.fg)),
         ]));
@@ -1576,7 +1862,7 @@ fn draw_analytics_boundaries_panel(f: &mut Frame, app: &mut App, area: Rect) {
     if let Some((_, min_val)) = sorted_bounds.last() {
         lines.push(Line::from(vec![
             Span::raw("   Grade "),
-            Span::styled("F", Style::default().fg(grade_color_for("F", &theme)).bold()),
+            Span::styled(format!("{:<code_width$}", "F"), Style::default().fg(grade_color_for("F", &theme)).bold()),
             Span::raw(" : < "),
             Span::styled(format!("{:.1}", min_val), Style::default().fg(theme.fg)),
         ]));
@@ -1584,6 +1870,18 @@ fn draw_analytics_boundaries_panel(f: &mut Frame, app: &mut App, area: Rect) {
 
     let p = Paragraph::new(lines).block(block);
     f.render_widget(p, area);
+}
+
+/// Right-pads a leading 1-2 digit day-of-month to a fixed width (e.g. "3 Feb 2027" ->
+/// " 3 Feb 2027") so the month text lines up across attendance date labels, regardless of
+/// whether the label came from `attendance_labels` or a raw "D Mon YYYY" CSV column header.
+fn pad_attendance_day(label: &str) -> String {
+    match label.split_once(' ') {
+        Some((day, rest)) if !day.is_empty() && day.len() <= 2 && day.chars().all(|c| c.is_ascii_digit()) => {
+            format!("{:>2} {}", day, rest)
+        }
+        _ => label.to_string(),
+    }
 }
 
 fn draw_analytics_progress(f: &mut Frame, app: &mut App, area: Rect) {
@@ -1612,7 +1910,10 @@ fn draw_analytics_progress(f: &mut Frame, app: &mut App, area: Rect) {
             let filled = ((item.avg_pct.clamp(0.0, 100.0) / 100.0) * bar_len_max as f64).round() as usize;
             let bar_filled = "▇".repeat(filled);
             let bar_empty = "░".repeat(bar_len_max - filled);
-            let label = data.attendance_labels.get(&item.label).cloned().unwrap_or_else(|| item.label.clone());
+            let mut label = data.attendance_labels.get(&item.label).cloned().unwrap_or_else(|| item.label.clone());
+            if series.category.eq_ignore_ascii_case("attendance") {
+                label = pad_attendance_day(&label);
+            }
             lines.push(Line::from(vec![
                 Span::styled(format!("   {:<14}", label), Style::default().fg(theme.fg)),
                 Span::styled(bar_filled, Style::default().fg(color)),
@@ -2018,6 +2319,29 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                         Span::styled(" [e] ", Style::default().fg(theme.key_accent).bold()),
                         Span::raw("Export CSV  "),
                     ];
+                    if app.active_tab == 0 {
+                        if app.summary_right_focused {
+                            if app.summary_category_index == 0 {
+                                leg.push(Span::styled(" [▲/▼/◀/▶] ", Style::default().fg(theme.active_tab).bold()));
+                            } else {
+                                leg.push(Span::styled(" [▲/▼] ", Style::default().fg(theme.active_tab).bold()));
+                            }
+                            leg.push(Span::raw("Move  "));
+                            leg.push(Span::styled(" [/] ", Style::default().fg(theme.active_tab).bold()));
+                            leg.push(Span::raw("Jump Category  "));
+                            leg.push(Span::styled(" [←/Esc] ", Style::default().fg(theme.warning).bold()));
+                            leg.push(Span::raw("Back to Categories  "));
+                        } else {
+                            leg.push(Span::styled(" [▲/▼] ", Style::default().fg(theme.active_tab).bold()));
+                            leg.push(Span::raw("Navigate  "));
+                            leg.push(Span::styled(" [/] ", Style::default().fg(theme.active_tab).bold()));
+                            leg.push(Span::raw("Jump Category  "));
+                            leg.push(Span::styled(" [→/Enter] ", Style::default().fg(theme.success).bold()));
+                            leg.push(Span::raw("Focus Table  "));
+                            leg.push(Span::styled(" [Esc] ", Style::default().fg(theme.warning).bold()));
+                            leg.push(Span::raw("Course Select  "));
+                        }
+                    }
                     if app.active_tab == 1 {
                         if app.raw_selected_student.is_some() {
                             // L2: student popup
@@ -2058,12 +2382,16 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                             leg.push(Span::raw("Move  "));
                             leg.push(Span::styled(" [Enter] ", Style::default().fg(theme.success).bold()));
                             leg.push(Span::raw("Open Student  "));
+                            leg.push(Span::styled(" [/] ", Style::default().fg(theme.active_tab).bold()));
+                            leg.push(Span::raw("Jump Category  "));
                             leg.push(Span::styled(" [←/Esc] ", Style::default().fg(theme.warning).bold()));
                             leg.push(Span::raw("Back to Categories  "));
                         } else {
                             // Category list focused
                             leg.push(Span::styled(" [▲/▼] ", Style::default().fg(theme.active_tab).bold()));
                             leg.push(Span::raw("Navigate  "));
+                            leg.push(Span::styled(" [/] ", Style::default().fg(theme.active_tab).bold()));
+                            leg.push(Span::raw("Jump Category  "));
                             leg.push(Span::styled(" [→/Enter] ", Style::default().fg(theme.success).bold()));
                             leg.push(Span::raw("Focus Table (At-Risk only)  "));
                             leg.push(Span::styled(" [Esc] ", Style::default().fg(theme.warning).bold()));

@@ -5,6 +5,22 @@ import yaml
 import pandas as pd
 from pathlib import Path
 
+def get_course_file_prefix(course_dir) -> str:
+    """
+    Derives the shared filename prefix for a course (e.g. "2026_S1_..._SEC_51")
+    from its own course_info/*_config.yaml filename, so category/report
+    filenames stay in sync with however that course's config/csv/attendance
+    files are already named (with or without a _SEC_n segment).
+    """
+    course_dir = Path(course_dir)
+    info_dir = course_dir / "course_info"
+    if not info_dir.is_dir():
+        raise FileNotFoundError(f"course_info directory not found under {course_dir}")
+    config_files = [f for f in info_dir.iterdir() if f.is_file() and f.name.endswith("_config.yaml") and not f.name.endswith(".bak")]
+    if not config_files:
+        raise FileNotFoundError(f"No *_config.yaml file found in {info_dir}")
+    return config_files[0].name[:-len("_config.yaml")]
+
 def parse_pts(col_name: str) -> tuple[str, float | None]:
     """
     Parses a column name to see if it already contains points notation.
