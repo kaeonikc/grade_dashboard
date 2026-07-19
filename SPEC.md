@@ -1,62 +1,68 @@
-# Spec: Align Analytics tab data panels ([3] Analytics)
+# Spec: Shrink git repo size (strip committed build artifacts + junk from history)
 
-## 1. Boundaries panel — align the `:` in BOUNDARIES LIST
+## Context
 
-**File:** `rust_tui/src/ui.rs`, function `draw_analytics_boundaries_panel` (~line 1825).
+"Clean up the memory" = shrink the git repository (`.git` was **413MB**), not
+Claude's memory system or app runtime RAM. Confirmed with user.
 
-**Problem:** Grade codes vary in width (`A`, `B+`, `B`, `C+`, `C`, `D+`, `D`, `F`), but each row
-renders `"   Grade {g} : ≥ {val}"` with `g` unpadded — so the `:` lands in a different column
-depending on whether `g` is 1 or 2 characters.
+Root cause: `rust_tui/target/` (Cargo build output — 875MB on disk, 11,545 files) had been
+committed to git across many commits, including individual blobs up to 23MB
+(`libtokio-*.rlib`, `dep-graph.bin` incremental-compilation files). `.gitignore` was added
+for `courses/`, `__pycache__/`, etc. at some point, but never for `rust_tui/target/`, and
+files already tracked before a `.gitignore` rule exists stay tracked regardless of the rule.
 
-**Fix:**
-- Before building `lines`, compute `code_width = sorted_bounds.iter().map(|(g, _)| g.len()).chain(std::iter::once("F".len())).max().unwrap_or(1)` — the width of the longest grade code actually present in this course (dynamic, not hardcoded to 2).
-- In the main loop over `sorted_bounds`, pad the grade code to `code_width` *inside* the existing `Span::styled((*g).clone(), ...)` call, e.g. `format!("{:<width$}", g, width = code_width)`, keeping the same color/bold style (trailing spaces in a styled span are visually inert).
-- Apply the same padding to the final `F` row's `Span::styled("F", ...)`.
-- Leave the literal `" : ≥ "` / `" : < "` and the value formatting (`format!("{:.1}", val)`) untouched — only the code column changes width, values stay as-is (left-flush after the `≥`/`<`).
+**Correction made mid-conversation:** `course_info_prep/`'s 3 tracked files
+(`convert_student_info.py`, `excel_cleaner.py`, `.agents/skills/excel-prep/SKILL.md`) turned
+out to be legitimate source files, not bloat — `repclasslist.xls` is actually a separate
+16KB file at repo root, and it's small enough not to be worth touching. `course_info_prep/`
+was left untouched.
 
-**Out of scope:** Right-aligning or decimal-aligning the numeric threshold values — explicitly not requested.
+## Scope — paths stripped from git history (via `git filter-repo`)
 
-## 2. Progress Over Time panel — align ⚡ ATTENDANCE dates
+1. `rust_tui/target/` — the 875MB Cargo build directory (source `rust_tui/src/`,
+   `Cargo.toml`, `Cargo.lock`, `CLAUDE.md`, `SPEC.md` were kept, only `target/` went).
+2. All tracked `__pycache__/` contents (5 files).
+3. All tracked `.DS_Store` files (7).
+4. Backup files: `grader.py.bak`, `src/dashboard.py.bak`.
 
-**File:** `src/tui_api.py`, function `_compute_attendance_labels` (~line 86, the label built at line 122).
+Nothing else was touched — `courses/`, `src/*.py`, `grader.py`, `course_info_prep/`,
+`repclasslist.xls`, `test_formula_header.xlsx`, `theme.json.example`, docs, and the
+`grader`/`grade-tui` symlinks are all left exactly as they were.
 
-**Problem:** Labels are built as `f"{d.day} {d.strftime('%b')} {d.year}"`, e.g. `"3 Feb 2026"` vs
-`"15 Feb 2026"`. Because `d.day` isn't fixed-width, the month abbreviation (`Feb`) starts at a
-different column depending on whether the day-of-month is 1 or 2 digits, which misaligns that
-column in the rust-tui's `draw_analytics_progress` panel (`rust_tui/src/ui.rs`, ~line 1868, which
-left-pads the whole label string to a fixed width of 14 via `format!("{:<14}", label)` — that outer
-padding only aligns the *bars*, not the month text within the label itself).
+## Out of scope
 
-**Fix:**
-- Change line 122 from:
-  ```python
-  labels[col] = f"{d.day} {d.strftime('%b')} {d.year}"
-  ```
-  to:
-  ```python
-  labels[col] = f"{d.day:>2} {d.strftime('%b')} {d.year}"
-  ```
-  This right-justifies the day-of-month to 2 characters (e.g. `" 3 Feb 2026"`, `"15 Feb 2026"`), so the month abbreviation always starts at the same column across all attendance rows.
-- No change needed in `rust_tui/src/ui.rs` — the existing `{:<14}` label padding already accounts for the (now-consistent) label width; `types.rs`'s `HashMap<String, String>` shape is unaffected.
+- Claude Code's own memory files (not what "memory" referred to).
+- Streamlit runtime/caching behavior.
+- Rewriting/squashing commit messages or reordering history — `filter-repo` only removed
+  the listed paths from every commit's tree; commit structure and messages are otherwise
+  preserved (22 original commits + 1 new `.gitignore` commit = 23).
+- Touching `course_info_prep/` or `repclasslist.xls`.
+- Any changes to app logic in `src/`, `grader.py`, or `rust_tui/src/`.
 
-**Out of scope:**
-- Any other category's item labels in the Progress Over Time panel (e.g. `hw1`, `q2`) — confirmed already uniform width, not touched.
-- Any change to `rust_tui/src/ui.rs` rendering logic for this panel.
+## What was done
 
-## End-to-end verification
+1. **Safety backup** — `git bundle create ../grade_dashboard_backup_20260720_005651.bundle --all`,
+   verified with `git bundle verify` before proceeding.
+2. **Installed** `git-filter-repo` via `pip3 install --user git-filter-repo`.
+3. **Rewrote history** with `git filter-repo --force --invert-paths` over the 7 paths listed
+   above. `filter-repo` auto-removed the `origin` remote as a safety measure.
+4. **Updated `.gitignore`** — added `rust_tui/target/`, `*.bak`, `.DS_Store`. Committed as
+   `d2a564d`.
+5. **Re-added** `origin` remote (`git@github.com:kaeonikc/grade_dashboard.git`).
+6. **Verified local shrink** — `.git` went from 413MB → 2.4MB.
+7. **`cargo clean`** on the working-tree `rust_tui/target/` — project directory went from
+   1.3GB → 91MB.
+8. **Force-pushed** — `git push origin --force --all` (solo repo, no other clones, no tags).
 
-1. Pick (or use) a course config with grade codes of mixed width, e.g. `A`, `B+`, `B`, `C+`, `C`,
-   `D+`, `D` (already present in `courses/1_test_grading/course_info/1_test_config.yaml`).
-2. Rebuild: `cargo build --release --manifest-path rust_tui/Cargo.toml`.
-3. Run the TUI (`./rust_tui/target/release/rust_tui`), open that course, go to tab `[3] Analytics`,
-   and view the Boundaries panel — confirm every `:` lines up in the same column across all grade
-   rows (`A`, `B+`, `B`, `C+`, `C`, `D+`, `D`, `F`).
-4. In the same course's config, ensure `term_start_date`, `class_schedule.day`, and enough `a1..aN`
-   attendance columns exist so `_compute_attendance_labels` produces at least one single-digit-day
-   date and one double-digit-day date (adjust `term_start_date` if needed to land a week on the
-   1st–9th).
-5. In the Analytics tab's Progress Over Time panel, confirm the `⚡ ATTENDANCE` series' date labels
-   all show the month abbreviation starting at the same column, regardless of 1- vs 2-digit day
-   (e.g. `" 3 Feb 2026"` and `"15 Feb 2026"` line up on `Feb`).
-6. Confirm no other panel (Grade Value Distribution, Item Difficulty & Discrimination, other
-   Progress Over Time categories) changed in appearance.
+## End-to-end verification (all passed)
+
+1. `git count-objects -vH`: `.git` shrank from 413MB to 2.4MB locally.
+2. `git log --oneline`: all 22 original commits preserved, plus the new `.gitignore` commit.
+3. `git ls-files | grep -E 'rust_tui/target|__pycache__|\.DS_Store|\.bak'` → empty.
+4. Fresh clone from `origin`: `.git` is 3.8MB, 23 commits — confirms the shrink landed on
+   the remote, not just locally.
+5. `python3 grader.py dashboard`: imports cleanly, lists all 7 courses, reaches the
+   interactive course-selector prompt (only failed on EOF because the verification run had
+   no stdin — proves no tracked file the app needs was caught by the filters).
+6. `cargo build --release --manifest-path rust_tui/Cargo.toml` from a clean `target/`:
+   succeeds (only pre-existing dead-code warnings, no errors).
