@@ -8,7 +8,6 @@ import datetime
 import random
 import re
 from pathlib import Path
-from rich.prompt import Confirm
 
 # Ensure src module can be imported, even if run from a softlink
 script_path = Path(__file__).resolve()
@@ -420,6 +419,15 @@ def parse_category_mapping(category_mapping) -> tuple[float | None, list]:
     else:
         return None, category_mapping
 
+def normalize_col_key(name: str) -> str:
+    """
+    Normalizes a cleaned column base-name for matching a CSV header against a
+    config column, so cosmetic differences (case, extra spaces, underscores
+    vs spaces) don't make an existing scored column look "missing" and get
+    silently duplicated/blanked during `grader update`.
+    """
+    return re.sub(r'[\s_]+', ' ', str(name).strip()).casefold()
+
 def create_empty_category_csv(category: str, columns: list, student_registry: pd.DataFrame, csv_path: Path, default_max: float = 100.0):
     headers = ['Student ID', 'Name']
     total_pts = 0.0
@@ -621,8 +629,16 @@ def mkdb_course(config_file: str = None, input_alias: str = None):
         if not isinstance(columns, list):
             continue
         csv_path = data_dir / f"{prefix}_{category}.csv"
+        if csv_path.exists():
+            # mkdb is for scaffolding brand-new databases; a file already
+            # existing here may hold scores someone entered by hand or via
+            # grade-tui, so never blindly overwrite it with a blank template.
+            # Realigning an existing database to config changes is `update`'s
+            # job, not mkdb's.
+            print(f"⏭️  {csv_path.name} already exists; leaving it as-is (use `grader update` to realign it with config changes).")
+            continue
         print(f"🛠️ Creating empty score database: {csv_path.name}...")
-        
+
         # Calculate target_total based on category weight or manual total_pts
         weights = config.get("weights", {})
         weight = weights.get(category, None)
@@ -661,7 +677,7 @@ def mkdb_course(config_file: str = None, input_alias: str = None):
             
     print("🚀 All databases created successfully!")
 
-def update_course(input_file: str = None, config_file: str = None):
+def update_course(input_file: str = None, config_file: str = None, purge_empty_orphans: bool = False):
     # 1. Raw excel file update mode (if input_file is supplied)
     if input_file:
         input_path = Path(input_file)
@@ -888,7 +904,6 @@ def update_course(input_file: str = None, config_file: str = None):
     registry_ids = set(student_registry['Student ID'].tolist())
     
     data_dir.mkdir(parents=True, exist_ok=True)
-    from rich.prompt import Confirm
     prefix = get_course_file_prefix(course_dir)
 
     for category, mapping_item in data_mapping.items():
@@ -933,131 +948,159 @@ def update_course(input_file: str = None, config_file: str = None):
             create_empty_category_csv(category, columns, student_registry, csv_path, default_max)
             continue
             
-        print(f"🔄 Aligning database score file: {csv_path.name}...")
         try:
             df = pd.read_csv(csv_path)
             df.columns = df.columns.astype(str).str.strip()
         except Exception as e:
             print(f"❌ Error reading {csv_path.name}: {e}. Skipping.")
             continue
-            
+
         if 'Student ID' not in df.columns:
             print(f"❌ Error: {csv_path.name} is missing 'Student ID' column. Skipping.")
             continue
-            
+
         # Separate Max/sentinel row from students (discard Max row if it exists)
         df['Student ID'] = df['Student ID'].astype(str).str.strip()
         max_mask = df['Student ID'].str.lower().isin(['max', 'max score', 'full score', 'full'])
         student_rows = df[~max_mask].copy()
-        
-        # Parse current headers to extract base names and original formatting
-        csv_columns_info = {} # base_name -> (original_header, max_score)
+
+        # Parse current headers to extract base names and original formatting.
+        # Keyed by a normalized form (case/whitespace/underscore-insensitive)
+        # so cosmetic header differences don't make a real, scored column
+        # look "missing" and get silently duplicated/blanked below.
+        csv_columns_info = {} # normalized_key -> (original_header, max_score)
         for col in df.columns:
             if col in ['Student ID', 'Name']:
                 continue
             clean_name, pts = parse_pts(col)
             if clean_name.lower().strip() == 'total':
                 continue
+            key = normalize_col_key(clean_name)
             if pts is not None:
-                csv_columns_info[clean_name] = (col, pts)
+                csv_columns_info[key] = (col, pts)
             else:
-                csv_columns_info[clean_name] = (col, 100.0)
-                
-        # Determine columns to add and remove
-        desired_base_cols = []
-        desired_base_mapping = {} # clean_name -> original_config_col
+                csv_columns_info[key] = (col, 100.0)
+
+        # Determine the columns the current config expects
+        desired_keys = []
+        desired_base_mapping = {} # normalized_key -> (clean_name, original_config_col)
         for col in columns:
             clean_name, _ = parse_config_col(col)
-            desired_base_cols.append(clean_name)
-            desired_base_mapping[clean_name] = col
-        
-        # Columns to remove
-        cols_to_remove = [b for b in csv_columns_info.keys() if b not in desired_base_cols]
-        for col in cols_to_remove:
-            orig_header = csv_columns_info[col][0]
-            if orig_header in student_rows.columns:
-                non_empty = student_rows[orig_header].dropna()
-                non_empty = non_empty[non_empty.astype(str).str.strip() != '']
-                non_empty = non_empty[non_empty != 0]
-                
-                if not non_empty.empty:
-                    warn_msg = f"⚠️ WARNING: Column '{orig_header}' in '{csv_path.name}' contains student scores. Removing it will discard these scores. Do you want to proceed?"
-                    if not Confirm.ask(warn_msg, default=False):
-                        print("🚫 Aborted. Database update cancelled.")
-                        sys.exit(0)
-                student_rows.drop(columns=[orig_header], inplace=True)
-                
-        # Determine header mapping for desired columns
+            key = normalize_col_key(clean_name)
+            desired_keys.append(key)
+            desired_base_mapping[key] = (clean_name, col)
+
+        # Columns present in the file but no longer referenced by config are
+        # left alone (and their data with them) - update never deletes a
+        # column, it only ever adds or renames one.
+        orphan_keys = [k for k in csv_columns_info.keys() if k not in desired_keys]
+        orphan_headers = []
+        for key in orphan_keys:
+            orig_header = csv_columns_info[key][0]
+
+            # --purge-empty-orphans only ever removes a column when every
+            # single row's value is blank/NaN - a literal "0" is a real score
+            # (a student who scored zero) and is never purged.
+            if purge_empty_orphans and orig_header in student_rows.columns:
+                col_data = student_rows[orig_header]
+                blank_mask = col_data.isna() | (col_data.astype(str).str.strip() == '')
+                is_empty = bool(blank_mask.all())
+                if is_empty:
+                    student_rows.drop(columns=[orig_header], inplace=True)
+                    print(f"  🗑️ Removed empty orphan column '{orig_header}' from {csv_path.name} (--purge-empty-orphans).")
+                    continue
+
+            orphan_headers.append(orig_header)
+            print(f"  ℹ️ '{orig_header}' in {csv_path.name} is not referenced by config; left as-is.")
+
+        # Determine header mapping for desired columns. This only ever adds a
+        # brand-new column or renames an existing one in place (both
+        # value-preserving) - it never assigns into a column that already
+        # holds data.
         final_headers = ['Student ID', 'Name']
         total_pts = 0.0
-        for col in desired_base_cols:
-            # Calculate the target new header name based on current config
-            config_col_item = desired_base_mapping[col]
-            clean_name, pts = parse_config_col(config_col_item)
+        for key in desired_keys:
+            clean_name, config_col_item = desired_base_mapping[key]
+            _, pts = parse_config_col(config_col_item)
             pts_val = pts if pts is not None else default_max
             total_pts += pts_val
-            
-            if pts_val is not None:
-                pts_str = str(int(pts_val)) if pts_val.is_integer() else str(pts_val)
-                new_header = f"{clean_name} ({pts_str}pts)"
-            else:
-                pts_str = str(int(default_max)) if default_max.is_integer() else str(default_max)
-                new_header = f"{col} ({pts_str}pts)"
 
-            if col in csv_columns_info:
-                # Column exists, check if points changed and update header if needed
-                orig_header = csv_columns_info[col][0]
-                if orig_header != new_header:
+            pts_str = str(int(pts_val)) if pts_val.is_integer() else str(pts_val)
+            new_header = f"{clean_name} ({pts_str}pts)"
+
+            if key in csv_columns_info:
+                # Column already exists (matched by normalized name).
+                orig_header = csv_columns_info[key][0]
+                if orig_header == new_header:
+                    final_headers.append(orig_header)
+                elif new_header in student_rows.columns:
+                    # Another column already occupies the desired header name;
+                    # don't clobber it, keep this column under its old name.
+                    final_headers.append(orig_header)
+                else:
                     student_rows.rename(columns={orig_header: new_header}, inplace=True)
-                    print(f"  📝 Updated max points header for '{col}' from '{orig_header}' to '{new_header}'")
+                    print(f"  📝 Updated max points header for '{clean_name}' from '{orig_header}' to '{new_header}'")
+                    final_headers.append(new_header)
+            elif new_header in student_rows.columns:
+                # A column with this exact name already exists even though it
+                # wasn't matched above - keep it rather than overwrite its data.
                 final_headers.append(new_header)
             else:
-                # Add new column header with specified or default max points
+                # Genuinely new column - safe to add.
                 student_rows[new_header] = ""
                 final_headers.append(new_header)
-                
+                print(f"  ✚ Added new column '{new_header}' to {csv_path.name}")
+
+        # Keep orphaned columns in the file (just not part of the calculated
+        # schema) rather than dropping them on the column reindex below.
+        final_headers.extend(orphan_headers)
+
         # Handle the total column at the end
         total_pts_str = str(int(total_pts)) if total_pts.is_integer() else str(total_pts)
         total_header = f"total ({total_pts_str}pts)"
-        
+
         # Locate if there is an existing total column in student_rows to rename/align
         existing_total_col = None
         for col in student_rows.columns:
             if str(col).lower().strip().startswith('total'):
                 existing_total_col = col
                 break
-                
+
         if existing_total_col:
             if existing_total_col != total_header:
                 student_rows.rename(columns={existing_total_col: total_header}, inplace=True)
                 print(f"  📝 Updated max points header for total column from '{existing_total_col}' to '{total_header}'")
         else:
             student_rows[total_header] = ""
-            
+
         final_headers.append(total_header)
-                
-        # Students to remove
+
+        # Students in the file who are no longer in the registry: never
+        # discard a row that still holds real data, only prune rows that are
+        # already empty.
         csv_student_ids = student_rows['Student ID'].tolist()
-        students_to_remove = [sid for sid in csv_student_ids if sid not in registry_ids]
-        
-        for sid in students_to_remove:
+        orphan_student_ids = [sid for sid in csv_student_ids if sid not in registry_ids]
+        score_cols = [c for c in student_rows.columns if c not in ['Student ID', 'Name']]
+        rows_to_drop = []
+
+        for sid in orphan_student_ids:
             stud_row = student_rows[student_rows['Student ID'] == sid]
             has_scores = False
-            score_cols = [c for c in student_rows.columns if c not in ['Student ID', 'Name']]
             for c in score_cols:
                 val = stud_row.iloc[0][c]
                 if pd.notna(val) and str(val).strip() != '' and str(val).strip() != '0' and val != 0:
                     has_scores = True
                     break
-                    
+
+            student_name = stud_row.iloc[0].get('Name', 'Unknown')
             if has_scores:
-                student_name = stud_row.iloc[0].get('Name', 'Unknown')
-                warn_msg = f"⚠️ WARNING: Student '{sid}' ({student_name}) has scores in '{csv_path.name}' but is no longer in the registry. Removing them will discard these scores. Do you want to proceed?"
-                if not Confirm.ask(warn_msg, default=False):
-                    print("🚫 Aborted. Database update cancelled.")
-                    sys.exit(0)
-            student_rows = student_rows[student_rows['Student ID'] != sid]
-            
+                print(f"  ℹ️ Student '{sid}' ({student_name}) has scores in {csv_path.name} but is no longer in the registry; left as-is.")
+            else:
+                rows_to_drop.append(sid)
+
+        if rows_to_drop:
+            student_rows = student_rows[~student_rows['Student ID'].isin(rows_to_drop)]
+
         # Students to add
         students_to_add = [sid for sid in registry_ids if sid not in csv_student_ids]
         add_rows = []
@@ -1068,18 +1111,36 @@ def update_course(input_file: str = None, config_file: str = None):
             new_row['Student ID'] = sid
             new_row['Name'] = name
             add_rows.append(new_row)
-            
+
         if add_rows:
             student_rows = pd.concat([student_rows, pd.DataFrame(add_rows)], ignore_index=True)
-            
+
         # Order columns and sort students
         student_rows = student_rows[final_headers]
         student_rows = student_rows.sort_values(by='Student ID').reset_index(drop=True)
-        
+
+        # Skip touching the file entirely if nothing actually changed.
+        needs_write = True
+        try:
+            original_aligned = df[~max_mask].copy()
+            original_aligned = original_aligned.sort_values(by='Student ID').reset_index(drop=True)
+            if (list(original_aligned.columns) == list(student_rows.columns)
+                    and original_aligned.shape[0] == student_rows.shape[0]
+                    and original_aligned.fillna('').astype(str).equals(student_rows.fillna('').astype(str))):
+                needs_write = False
+        except Exception:
+            pass
+
+        if not needs_write:
+            print(f"✅ {csv_path.name} already up to date.")
+            continue
+
+        print(f"🔄 Aligning database score file: {csv_path.name}...")
+
         # Backup before writing
         shutil.copy2(csv_path, csv_path.with_suffix(".csv.bak"))
         print(f"  📦 Backed up {csv_path.name} to {csv_path.with_suffix('.csv.bak').name}")
-        
+
         # Save
         student_rows.to_csv(csv_path, index=False)
         print(f"  ✅ Successfully updated {csv_path.name}")
@@ -1103,48 +1164,61 @@ def update_course(input_file: str = None, config_file: str = None):
             
     print("🚀 All databases updated successfully!")
 
+def _find_bak_files(course_dir: Path) -> list[Path]:
+    """
+    Collects .bak files from every subdirectory `update_course` can write
+    backups into - course_info/ (student roster + config) and data/
+    (per-category score CSVs) - so `grader undo` can restore whichever one
+    the last update actually touched.
+    """
+    bak_files = []
+    for subdir_name in ("course_info", "data"):
+        subdir = course_dir / subdir_name
+        if subdir.is_dir():
+            bak_files.extend(f for f in subdir.iterdir() if f.is_file() and f.name.endswith(".bak"))
+    return bak_files
+
 def undo_course():
     # Detect target folder
     target_dir = None
     if Path("course_info").is_dir():
         target_dir = Path(".")
     else:
-        # Scan current dir and courses/ for folders with course_info/*.bak files
+        # Scan current dir and courses/ for folders with .bak files under
+        # course_info/ or data/
         potential_dirs = []
         search_paths = [Path(".")]
         if Path("courses").is_dir():
             search_paths.append(Path("courses"))
-            
+
         for sp in search_paths:
             for d in sp.iterdir():
                 if d.is_dir() and (d / "course_info").is_dir():
-                    info_dir = d / "course_info"
-                    bak_files = [f for f in info_dir.iterdir() if f.is_file() and f.name.endswith(".bak")]
+                    bak_files = _find_bak_files(d)
                     if bak_files:
                         # Get latest modification time of any bak file
                         mtime = max(f.stat().st_mtime for f in bak_files)
                         potential_dirs.append((mtime, d))
-                        
+
         if potential_dirs:
             # Pick the one with the most recently modified bak files
             potential_dirs.sort(key=lambda x: x[0], reverse=True)
             target_dir = potential_dirs[0][1]
-            
+
     if not target_dir:
         print("❌ No backup files found to undo.")
         sys.exit(1)
-        
-    info_dir = target_dir / "course_info"
-    bak_files = [f for f in info_dir.iterdir() if f.is_file() and f.name.endswith(".bak")]
-    
+
+    bak_files = _find_bak_files(target_dir)
+
     if not bak_files:
-        print(f"❌ No backup files found in {target_dir / 'course_info'}.")
+        print(f"❌ No backup files found in {target_dir}.")
         sys.exit(1)
-        
-    print(f"🔄 Found backup files in course: {target_dir.name}")
+
+    print(f"🔄 Found backup files in course: {target_dir.resolve().name}")
     for bak in bak_files:
         original_name = bak.name[:-4] # strip .bak
-        original_path = info_dir / original_name
+        original_path = bak.parent / original_name
         # Restore
         shutil.copy2(bak, original_path)
         bak.unlink()
@@ -1365,6 +1439,10 @@ if __name__ == "__main__":
     parser_update = subparsers.add_parser("update", help="Update student list from raw file or update database files from config")
     parser_update.add_argument("-i", "--input", help="Path to raw excel/csv student list file (e.g. repclasslist.xls)")
     parser_update.add_argument("config_file", nargs="?", help="Path to course config YAML file")
+    parser_update.add_argument("--purge-empty-orphans", action="store_true",
+                                help="Remove category-CSV columns no longer referenced by config.yaml, "
+                                     "but only when every student's value in that column is blank. "
+                                     "Orphan columns holding any real score are always left alone.")
 
     # Undo command
     parser_undo = subparsers.add_parser("undo", help="Undo the last update by restoring backup files")
@@ -1388,7 +1466,7 @@ if __name__ == "__main__":
         if args.input:
             update_course(input_file=args.input)
         else:
-            update_course(config_file=args.config_file)
+            update_course(config_file=args.config_file, purge_empty_orphans=args.purge_empty_orphans)
     elif args.command == "undo":
         undo_course()
     elif args.command == "mock":

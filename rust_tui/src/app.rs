@@ -501,6 +501,15 @@ impl App {
             Some(ta) => ta.lines()[0].trim().to_string(),
             None => return,
         };
+        // The textarea starts empty, so a stray Enter right after opening
+        // this modal (before typing anything) must not silently blank the
+        // column for every student - require an explicit non-empty value to
+        // fill with; treat empty input as a cancel, same as Esc.
+        if val.is_empty() {
+            self.editing_bulk_fill = false;
+            self.bulk_fill_textarea = None;
+            return;
+        }
         self.dispatch_bulk_fill(val);
     }
 

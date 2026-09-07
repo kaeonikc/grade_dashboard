@@ -15,7 +15,7 @@ from rich import box
 script_path = Path(__file__).resolve()
 sys.path.insert(0, str(script_path.parent.parent))
 
-from src.data_loader import load_config, load_course_data, get_course_file_prefix
+from src.data_loader import load_config, load_course_data, get_course_file_prefix, backup_csv_before_write
 from src.calculators import calculate_final_grades, validate_scores
 
 console = Console()
@@ -312,8 +312,9 @@ def update_database_totals(course_path: Path, final_df: pd.DataFrame, data_mappi
                     
                     if target_col != total_header:
                         df.rename(columns={target_col: total_header}, inplace=True)
-                        
+
                     # Save back
+                    backup_csv_before_write(csv_path)
                     df.to_csv(csv_path, index=False)
             except Exception as e:
                 console.print(f"[yellow]⚠️ Warning: Failed to update total in {csv_path.name}: {e}[/yellow]")

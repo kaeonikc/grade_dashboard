@@ -14,7 +14,7 @@ import yaml
 import pandas as pd
 from datetime import datetime, timedelta
 
-from src.data_loader import load_config, load_course_data, parse_pts, parse_config_col
+from src.data_loader import load_config, load_course_data, parse_pts, parse_config_col, backup_csv_before_write
 from src.calculators import calculate_final_grades, validate_scores, assign_letter_grade
 from src.dashboard import export_reports, update_database_totals
 
@@ -584,10 +584,11 @@ def update_student_score(course_path, student_id, col_name, value):
             if target_col_orig_name in df.columns:
                 df[target_col_orig_name] = df[target_col_orig_name].astype(object)
             df.loc[mask, target_col_orig_name] = val_to_set
-            
+
             # Save back
+            backup_csv_before_write(target_file)
             df.to_csv(target_file, index=False)
-            
+
             # If this is attendance, also update the XLSX companion
             msg = f"Updated {col_name} to {value} for student {student_id} in {target_file.name}."
             if target_file.name.endswith("attendance.csv"):
@@ -753,6 +754,7 @@ def update_column_score(course_path, col_name, value):
             df.loc[mask, target_col_orig_name] = val_to_set
 
             # Save back
+            backup_csv_before_write(target_file)
             df.to_csv(target_file, index=False)
 
             msg = f"Filled '{col_name}' = {value} for {student_count} students in {target_file.name}."

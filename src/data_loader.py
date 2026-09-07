@@ -1,9 +1,23 @@
 import os
 import re
+import shutil
 import sys
 import yaml
 import pandas as pd
 from pathlib import Path
+
+def backup_csv_before_write(csv_path) -> None:
+    """
+    Snapshots a score file to `<name>.csv.bak` before it gets overwritten, so
+    a bad write (grader-tui single/bulk cell edits, dashboard total sync, or
+    `grader update`'s own realignment) is always recoverable via `grader
+    undo`. Every code path that overwrites an existing data/*.csv file with
+    a full-dataframe `to_csv` must call this first - a live column-fill
+    action can otherwise blank real scores with no way back.
+    """
+    csv_path = Path(csv_path)
+    if csv_path.exists():
+        shutil.copy2(csv_path, csv_path.with_suffix(".csv.bak"))
 
 def get_course_file_prefix(course_dir) -> str:
     """
