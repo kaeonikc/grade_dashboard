@@ -64,7 +64,7 @@ pip install -r requirements.txt xlrd       # xlrd reads the university's .xls cl
 | Every week | Take attendance | `data/<prefix>_attendance.xlsx` or `grade-tui` |
 | | Enter homework, lab and quiz scores | `grade-tui`, or edit the CSV |
 | Late registrations or withdrawals | Merge the newer class list | `grader update -i repclasslist.xls` |
-| Midterm and final | Mark the OMR sheets and send the scores in | `exam grade` → `exam roster` → `exam scores` |
+| Midterm and final | Mark the OMR sheets and send the scores in | `exam mark scan` → `exam mark roster` → `exam submit scores` |
 | End of term | Check the grades, rounding and absences, then export | `grade-tui` → `e` |
 | | Paste into the university system | `reports/<prefix>_copy_friendly_scores.csv` |
 | Any time something looks wrong | See what changed and undo it | `grader history`, `grader undo` |
@@ -95,7 +95,7 @@ It creates:
 
 `<prefix>` is the folder name without `_grading`, for example `2026_S1_ฟิสิกส์สำหรับอุตสาหกรรม_SEC_51`.
 
-**The roster is the single student list.** grade-tui, `exam roster` and `exam scores` all use
+**The roster is the single student list.** grade-tui, `exam mark roster` and `exam submit scores` all use
 `course_info/<prefix>_student_info.csv`. Change it only with `grader update -i` (see
 [section 12](#12-changes-during-the-semester)). Don't edit it by hand.
 
@@ -153,7 +153,7 @@ rules:
   `quiz:` under `data_mapping`) gives every student 0 for that part, and nothing warns you.
 - The names `midterm` and `final` are special: they're reported separately. Every other category (attendance,
   homework, quiz, lab, …) adds up to the *Coursework* score.
-- Column names are what `exam link` / `exam scores --column` use (`midterm_mcq`, or `final` for a category that has
+- Column names are what `exam submit link` / `exam submit scores --column` use (`midterm_mcq`, or `final` for a category that has
   one column).
 - Optional: a category can be written as `{total_pts: 30, columns: [...]}` to fix its total; a warning shows if the
   columns don't add up to it.
@@ -199,7 +199,7 @@ The same rules are written in `INTEGRATION.md`; exam_projects follows them too.
 
 1. **In grade-tui:** go to *Raw Details*, pick the category, then press `Enter` on a cell to edit it, or `f` to fill
    the whole column with one value.
-2. **From an exam:** `exam scores` (see [section 7](#7-scores-from-exam_projects)).
+2. **From an exam:** `exam submit scores` (see [section 7](#7-scores-from-exam_projects)).
 3. **In a spreadsheet:** open the CSV, type the scores, and save it as CSV (UTF-8). Keep the header row and the
    `Student ID` column exactly as they are, and close grade-tui first.
 
@@ -237,14 +237,15 @@ uses the roster from this folder, so it can tell you who was absent before anyth
 
 ```bash
 cd ~/cmru/teachings/2569-1/midterm_exams/2026_S1_midterm_exam_IndustPhys
-exam link          # once: finds this course (course code + term), asks for the column, e.g. midterm_mcq
-exam grade         # marks the scanned OMR sheets
-exam roster        # who sat the exam, who was absent, which IDs don't match the roster
-exam roster --fix  # accept the suggested corrections for misread IDs
-exam scores        # preview → y/N → writes the scores, and ขส for absent students
+exam submit link         # once: finds this course (course code + term), asks for the column, e.g. midterm_mcq
+exam mark scan           # marks the scanned OMR sheets
+exam mark roster         # who sat the exam, who was absent, which IDs don't match the roster
+exam mark roster --fix   # accept the suggested corrections for misread IDs
+exam submit scores       # preview → y/N → writes the scores, and ขส for absent students
+exam report topics       # optional: per-topic results of this exam for the class and each student
 ```
 
-What `exam scores` does to your course folder:
+What `exam submit scores` does to your course folder:
 
 - It changes **only the score cells** of one column. It never adds or removes students or columns, and never
   touches `total`, the roster or the config.
@@ -254,7 +255,7 @@ What `exam scores` does to your course folder:
 - If one exam covers two sections (two course folders), each student's score goes to the section whose roster lists
   them.
 
-Essay or hand-marked exams don't go through `exam scores`. Type those scores in grade-tui, or into the CSV, and use
+Essay or hand-marked exams don't go through `exam submit scores`. Type those scores in grade-tui, or into the CSV, and use
 `ขส` for absent students.
 
 ---
@@ -341,7 +342,7 @@ Before any tool changes a file in a course folder, it saves the old version:
 <course>/history/log.jsonl      one line per change: when, which tool, which files, how many cells, a note
 ```
 
-This covers `grader update`, edits and fills in grade-tui, total updates, and `exam scores`.
+This covers `grader update`, edits and fills in grade-tui, total updates, and `exam submit scores`.
 
 ```bash
 grader history                       # newest first; marks the ones already undone
@@ -391,8 +392,8 @@ automatically.
 | A category is 0 for everybody | Its weight has no columns in `data_mapping`, or the column names in the config and the CSV header differ. Run `grader update`. |
 | Percentages look too low or too high | A column has no `(Npts)`. Add the points in the config and run `grader update`. |
 | Warning "… is not a score … counted as 0" | Text in a score cell. Use a number, leave it empty, or `ขส`. |
-| `exam scores` says a student has no row in the data file | The roster has a student the score file doesn't. Run `grader update` inside the course folder. |
-| `exam scores` says the file "changed after the preview" | grade-tui or another tool saved the file meanwhile. Run `exam scores` again. |
+| `exam submit scores` says a student has no row in the data file | The roster has a student the score file doesn't. Run `grader update` inside the course folder. |
+| `exam submit scores` says the file "changed after the preview" | grade-tui or another tool saved the file meanwhile. Run `exam submit scores` again. |
 | `grader init -i` can't read the .xls | Install `xlrd` (`pip install xlrd`). The class list must be the original `.xls`, not a `.csv`. |
 | Something got overwritten | `grader history`, then `grader undo <ID>`. |
 

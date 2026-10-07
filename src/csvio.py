@@ -4,7 +4,7 @@ Cell-level CSV reading/writing for data/*.csv.
 Score files are edited as text, so a write only changes the cells it means to
 change: no "12" -> "12.0" reformatting, the BOM and line endings stay as they
 were, and the file is replaced atomically (temp file + os.replace), so a reader
-(grade-tui, `exam scores`) never sees half a file.
+(grade-tui, `exam submit scores`) never sees half a file.
 """
 
 import csv

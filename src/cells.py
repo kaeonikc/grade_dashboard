@@ -6,7 +6,7 @@ What a score cell in data/*.csv can hold (INTEGRATION.md, contract 1).
     "ขส"          absent from the exam (ขาดสอบ)  -> counts as 0, reported as absent
     anything else invalid                       -> counts as 0, reported as a warning
 
-exam_projects (`exam scores`) writes "ขส" for students on the roster who have no
+exam_projects (`exam submit scores`) writes "ขส" for students on the roster who have no
 answer sheet. exam_projects/cli/exam_cli/gradebook.py keeps a copy of
 `classify`; both are checked against the table in INTEGRATION.md.
 Attendance columns have their own codes (P/A/L/X/EA) and don't go through here.

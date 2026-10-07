@@ -10,7 +10,7 @@ and appends one JSON line to <course>/history/log.jsonl:
     {"id", "ts", "tool", "action", "files", "cells", "note"}
 
 `grader history` lists the entries and `grader undo [ID]` restores one.
-exam_projects (`exam scores`) writes entries in the same format with tool "exam".
+exam_projects (`exam submit scores`) writes entries in the same format with tool "exam".
 """
 
 import json
