@@ -160,6 +160,18 @@ pub struct CourseData {
     pub rules: Option<HashMap<String, serde_json::Value>>,
     pub attendance_labels: HashMap<String, String>,
     pub analytics: AnalyticsData,
+    /// Score cells holding "ขส" (absent from the exam). Older tui_api.py versions don't send it.
+    #[serde(default)]
+    pub absences: Vec<Absence>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Absence {
+    pub student_id: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub name: String,
+    pub column: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

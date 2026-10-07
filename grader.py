@@ -13,7 +13,7 @@ from pathlib import Path
 script_path = Path(__file__).resolve()
 sys.path.insert(0, str(script_path.parent))
 
-from src.data_loader import load_config, load_course_data, sync_attendance_xlsx_to_csv, get_course_file_prefix
+from src.data_loader import load_config, load_course_data, sync_attendance_xlsx_to_csv, get_course_file_prefix, backup_csv_before_write
 from src.calculators import calculate_final_grades
 
 _UNSAFE_PATH_CHARS = re.compile(r'[/\\:*?"<>|\x00-\x1f]')
@@ -736,7 +736,11 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
 
         csv_path = info_dir / f"{term_name}_{name_for_path}_SEC_{sec_num}_student_info.csv"
         
-        # Back up existing files
+        # Back up existing files (history/ snapshot for `grader undo`, plus the old .bak copies)
+        from src.history import snapshot
+        attendance_files = sorted((target_dir / "data").glob("*attendance.*")) if (target_dir / "data").is_dir() else []
+        snapshot(target_dir, [config_path, csv_path, *attendance_files], "grader", "update-roster",
+                 note=str(input_path.name))
         if config_path.exists():
             shutil.copy2(config_path, config_path.with_suffix(".yaml.bak"))
             print(f"📦 Backed up configuration to: {config_path.with_suffix('.yaml.bak').name}")
@@ -1138,8 +1142,8 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
         print(f"🔄 Aligning database score file: {csv_path.name}...")
 
         # Backup before writing
-        shutil.copy2(csv_path, csv_path.with_suffix(".csv.bak"))
-        print(f"  📦 Backed up {csv_path.name} to {csv_path.with_suffix('.csv.bak').name}")
+        backup_csv_before_write(csv_path, tool="grader", action="update")
+        print(f"  📦 Backed up {csv_path.name} (history/ and {csv_path.with_suffix('.csv.bak').name})")
 
         # Save
         student_rows.to_csv(csv_path, index=False)
@@ -1157,6 +1161,8 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
             term_start = config.get('term_start_date', '')
             
             class_cols = calculate_class_dates(term_start, weekday, exam_sch)
+            from src.history import snapshot
+            snapshot(course_dir, [att_path, att_path.with_suffix(".csv")], "grader", "update-attendance")
             save_attendance_excel(att_path, student_registry, class_cols)
             sync_attendance_xlsx_to_csv(att_path, att_path.with_suffix(".csv"))
         except Exception as e:
@@ -1178,44 +1184,112 @@ def _find_bak_files(course_dir: Path) -> list[Path]:
             bak_files.extend(f for f in subdir.iterdir() if f.is_file() and f.name.endswith(".bak"))
     return bak_files
 
-def undo_course():
-    # Detect target folder
-    target_dir = None
+def _course_dirs_here() -> list[Path]:
+    dirs = []
+    for sp in (Path("."), Path("courses")):
+        if sp.is_dir():
+            dirs.extend(d for d in sp.iterdir() if d.is_dir() and (d / "course_info").is_dir())
+    return dirs
+
+
+def _resolve_course_for_history(course: str = None) -> Path | None:
+    """--course DIR, else the course we're in, else the course under ./ or ./courses
+    whose history (or .bak files) changed most recently."""
+    from src.history import HISTORY, LOG
+    if course:
+        d = Path(course)
+        if not (d / "course_info").is_dir():
+            print(f"❌ {d} is not a course folder (no course_info/).")
+            sys.exit(1)
+        return d
     if Path("course_info").is_dir():
-        target_dir = Path(".")
-    else:
-        # Scan current dir and courses/ for folders with .bak files under
-        # course_info/ or data/
-        potential_dirs = []
-        search_paths = [Path(".")]
-        if Path("courses").is_dir():
-            search_paths.append(Path("courses"))
+        return Path(".")
+    best = []
+    for d in _course_dirs_here():
+        stamps = [f.stat().st_mtime for f in _find_bak_files(d)]
+        log = d / HISTORY / LOG
+        if log.exists():
+            stamps.append(log.stat().st_mtime)
+        if stamps:
+            best.append((max(stamps), d))
+    return max(best)[1] if best else None
 
-        for sp in search_paths:
-            for d in sp.iterdir():
-                if d.is_dir() and (d / "course_info").is_dir():
-                    bak_files = _find_bak_files(d)
-                    if bak_files:
-                        # Get latest modification time of any bak file
-                        mtime = max(f.stat().st_mtime for f in bak_files)
-                        potential_dirs.append((mtime, d))
 
-        if potential_dirs:
-            # Pick the one with the most recently modified bak files
-            potential_dirs.sort(key=lambda x: x[0], reverse=True)
-            target_dir = potential_dirs[0][1]
+def _describe_entry(e: dict) -> str:
+    cells = f", {e['cells']} cell(s)" if e.get("cells") is not None else ""
+    note = f" — {e['note']}" if e.get("note") else ""
+    return f"{e['id']}  [{e.get('tool')} {e.get('action')}{cells}]  {', '.join(e.get('files', []))}{note}"
 
+
+def history_course(course: str = None, limit: int = 20):
+    from src.history import list_entries
+    target_dir = _resolve_course_for_history(course)
+    if not target_dir:
+        print("❌ No course folder with history found here (use --course DIR).")
+        sys.exit(1)
+    entries = list_entries(target_dir)
+    print(f"🕘 History of {target_dir.resolve().name} ({len(entries)} entries, newest first)")
+    if not entries:
+        print("  (none yet)")
+        return
+    undone = {e.get("undoes") for e in entries if e.get("action") == "undo"}
+    for e in list(reversed(entries))[:limit]:
+        mark = "  (undone)" if e["id"] in undone else ""
+        print(f"  {_describe_entry(e)}{mark}")
+    print("Restore one with: grader undo <ID>   (no ID = newest one not undone yet)")
+
+
+def _confirm(question: str, yes: bool) -> bool:
+    if yes:
+        return True
+    if not sys.stdin.isatty():
+        print("Not restored: no terminal to confirm on (pass --yes).")
+        return False
+    return input(f"{question} [y/N] ").strip().lower() in ("y", "yes")
+
+
+def undo_course(entry_id: str = None, course: str = None, yes: bool = False):
+    from src.history import list_entries, latest_undoable, later_changes, restore
+    target_dir = _resolve_course_for_history(course)
     if not target_dir:
         print("❌ No backup files found to undo.")
         sys.exit(1)
 
-    bak_files = _find_bak_files(target_dir)
+    entries = list_entries(target_dir)
+    if entries or entry_id:
+        if entry_id:
+            entry = next((e for e in entries if e["id"] == entry_id), None)
+            if entry is None:
+                print(f"❌ No history entry {entry_id!r} in {target_dir.resolve().name} (see: grader history).")
+                sys.exit(1)
+        else:
+            entry = latest_undoable(target_dir)
+            if entry is None:
+                print(f"❌ Nothing left to undo in {target_dir.resolve().name} (see: grader history).")
+                sys.exit(1)
+        print(f"🔄 Course: {target_dir.resolve().name}")
+        print(f"   Restore: {_describe_entry(entry)}")
+        later = later_changes(target_dir, entry["id"])
+        if later:
+            print(f"   ⚠️  {len(later)} later change(s) to the same file(s) will be lost too:")
+            for e in later:
+                print(f"      {_describe_entry(e)}")
+        if not _confirm("Put these files back as they were before that change?", yes):
+            return
+        for rel in restore(target_dir, entry["id"]):
+            print(f"  ⏪ Restored {rel}")
+        print("✅ Undo completed (the versions it replaced are saved in history/ too).")
+        return
 
+    # No history yet: the old .bak behaviour.
+    bak_files = _find_bak_files(target_dir)
     if not bak_files:
         print(f"❌ No backup files found in {target_dir}.")
         sys.exit(1)
 
     print(f"🔄 Found backup files in course: {target_dir.resolve().name}")
+    if not _confirm(f"Restore {len(bak_files)} .bak file(s)?", yes):
+        return
     for bak in bak_files:
         original_name = bak.name[:-4] # strip .bak
         original_path = bak.parent / original_name
@@ -1444,8 +1518,14 @@ if __name__ == "__main__":
                                      "but only when every student's value in that column is blank. "
                                      "Orphan columns holding any real score are always left alone.")
 
-    # Undo command
-    parser_undo = subparsers.add_parser("undo", help="Undo the last update by restoring backup files")
+    # Undo / history commands
+    parser_undo = subparsers.add_parser("undo", help="Restore files from history/ (newest change not undone yet, or ID)")
+    parser_undo.add_argument("entry", nargs="?", help="History entry ID (see: grader history)")
+    parser_undo.add_argument("--course", help="Course folder (default: the one you're in, or the most recently changed)")
+    parser_undo.add_argument("-y", "--yes", action="store_true", help="Don't ask for confirmation")
+    parser_history = subparsers.add_parser("history", help="List the saved versions in a course's history/")
+    parser_history.add_argument("--course", help="Course folder (default: the one you're in, or the most recently changed)")
+    parser_history.add_argument("-n", type=int, default=20, help="How many entries to show (default 20)")
 
     # Mock command
     parser_mock = subparsers.add_parser("mock", help="Generate a complete mock course under courses/ for testing grade-tui")
@@ -1468,7 +1548,9 @@ if __name__ == "__main__":
         else:
             update_course(config_file=args.config_file, purge_empty_orphans=args.purge_empty_orphans)
     elif args.command == "undo":
-        undo_course()
+        undo_course(args.entry, args.course, args.yes)
+    elif args.command == "history":
+        history_course(args.course, args.n)
     elif args.command == "mock":
         mock_course()
     elif args.command == "dashboard":

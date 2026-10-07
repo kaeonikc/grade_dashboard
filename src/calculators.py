@@ -59,6 +59,21 @@ def validate_scores(df: pd.DataFrame, config: dict, max_scores: dict) -> list[st
                     f"has score {score} which exceeds the max of {max_val}."
                 )
 
+    # Text in a score cell that isn't a number or "ขส" (absent) counts as 0: say so.
+    mapped = {col: cat for cat, cols in data_mapping.items() if cat != 'attendance' for col in cols}
+    names = {}
+    if 'Student ID' in df.columns and 'Name' in df.columns:
+        names = dict(zip(df['Student ID'].astype(str), df['Name'].astype(str)))
+    for sid, col, text in df.attrs.get('invalid_cells', []):
+        if col not in mapped:
+            continue
+        name = names.get(sid, '').strip()
+        label = f"{sid} ({name})" if name else sid
+        warnings.append(
+            f"[{mapped[col]}] Column '{col}': student {label} has '{text}', which is not a score "
+            f"(use a number, leave it empty, or ขส for absent); counted as 0."
+        )
+
     return warnings
 
 
@@ -235,5 +250,6 @@ def calculate_final_grades(df: pd.DataFrame, config: dict, max_scores: dict, use
     
     result_df['Final Score'] = new_total.astype(int)
     result_df['Grade'] = result_df['Final Score'].apply(lambda x: assign_letter_grade(x, boundaries))
-    
+    result_df.attrs = dict(df.attrs)  # keep the absent/invalid cell lists from load_course_data
+
     return result_df

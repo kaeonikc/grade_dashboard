@@ -234,6 +234,13 @@ def export_reports(final_df: pd.DataFrame, course_path: Path, config: dict, max_
     report_dir = course_path / "reports"
     report_dir.mkdir(exist_ok=True)
     prefix = get_course_file_prefix(course_path)
+    # Which exam/score columns hold "ขส" (absent) for each student.
+    absent_by_sid = {}
+    for sid, col in final_df.attrs.get("absences", []):
+        absent_by_sid.setdefault(sid, []).append(col)
+    if absent_by_sid and "Student ID" in display_df.columns:
+        display_df["absent"] = display_df["Student ID"].astype(str).map(
+            lambda sid: ", ".join(absent_by_sid.get(sid, [])))
     display_df.to_csv(report_dir / f"{prefix}_final_grades.csv", index=False)
 
     # Mirrors rust_tui's "For Submission" tab (tab [1]): Cumulative Scores / Midterm / Final
@@ -260,7 +267,24 @@ def export_reports(final_df: pd.DataFrame, course_path: Path, config: dict, max_
 
     return report_dir
 
+def _same_number(old: str, new: str) -> bool:
+    old, new = (old or "").strip(), (new or "").strip()
+    if old == new:
+        return True
+    try:
+        return abs(float(old) - float(new)) < 1e-6
+    except ValueError:
+        return False
+
+
 def update_database_totals(course_path: Path, final_df: pd.DataFrame, data_mapping: dict, max_scores: dict):
+    """
+    Writes each category's computed total into the `total (Npts)` column of its
+    data CSV. Only the total cells (and the total header) are touched, and a file
+    is only rewritten - with a history snapshot first - when a total actually
+    changed, so opening a course in the dashboard doesn't rewrite every file.
+    """
+    from src.csvio import read_csv_text, write_csv_text, fmt_value
     data_dir = course_path / "data"
     if not data_dir.is_dir():
         return
@@ -271,53 +295,52 @@ def update_database_totals(course_path: Path, final_df: pd.DataFrame, data_mappi
             csv_path = csv_files[0] if csv_files else None
         else:
             csv_path = data_dir / f"{prefix}_{category}.csv"
-            
-        if csv_path and csv_path.exists():
-            try:
-                df = pd.read_csv(csv_path)
-                df.columns = df.columns.astype(str).str.strip()
-                
-                # Check for Student ID column
-                if 'Student ID' not in df.columns:
-                    continue
-                    
-                df['Student ID'] = df['Student ID'].astype(str).str.strip()
-                
-                # Determine total points
-                cat_max_scores = {col: max_scores.get(col, 100.0) for col in columns}
-                total_pts = sum(cat_max_scores.values())
-                total_pts_str = str(int(total_pts)) if total_pts.is_integer() else str(total_pts)
-                total_header = f"total ({total_pts_str}pts)"
-                
-                # Find if any existing total column exists
-                existing_total_col = None
-                for col in df.columns:
-                    if str(col).lower().strip().startswith('total'):
-                        existing_total_col = col
-                        break
-                        
-                calc_col = f"{category.title()} Total"
-                if calc_col in final_df.columns:
-                    totals_map = final_df.set_index("Student ID")[calc_col].to_dict()
-                    target_col = existing_total_col if existing_total_col else total_header
-                    
-                    # Fill the total column only for rows that are not 'Max' / sentinel rows
-                    max_mask = df['Student ID'].str.lower().isin(['max', 'max score', 'full score', 'full'])
-                    
-                    # For student rows, map totals from final_df
-                    df.loc[~max_mask, target_col] = df.loc[~max_mask, 'Student ID'].map(totals_map)
-                    
-                    # For Max row, put Z
-                    df.loc[max_mask, target_col] = total_pts
-                    
-                    if target_col != total_header:
-                        df.rename(columns={target_col: total_header}, inplace=True)
 
-                    # Save back
-                    backup_csv_before_write(csv_path)
-                    df.to_csv(csv_path, index=False)
-            except Exception as e:
-                console.print(f"[yellow]⚠️ Warning: Failed to update total in {csv_path.name}: {e}[/yellow]")
+        calc_col = f"{category.title()} Total"
+        if not (csv_path and csv_path.exists()) or calc_col not in final_df.columns:
+            continue
+        try:
+            doc = read_csv_text(csv_path)
+            sid_idx = doc.col('Student ID')
+            if sid_idx is None:
+                continue
+
+            cat_max_scores = {col: max_scores.get(col, 100.0) for col in columns}
+            total_pts = float(sum(cat_max_scores.values()))
+            total_pts_str = str(int(total_pts)) if total_pts.is_integer() else str(total_pts)
+            total_header = f"total ({total_pts_str}pts)"
+
+            tot_idx = next((i for i, h in enumerate(doc.header) if h.lower().strip().startswith('total')), None)
+            changed = 0
+            if tot_idx is None:
+                doc.header.append(total_header)
+                for r in doc.rows:
+                    r.append("")
+                tot_idx = len(doc.header) - 1
+                changed += 1
+            elif doc.header[tot_idx] != total_header:
+                doc.header[tot_idx] = total_header
+                changed += 1
+
+            totals_map = {str(k).strip(): v for k, v in final_df.set_index("Student ID")[calc_col].to_dict().items()}
+            for r in doc.rows:
+                sid = r[sid_idx].strip()
+                if not sid:
+                    continue
+                if sid.lower() in ('max', 'max score', 'full score', 'full'):
+                    new = fmt_value(total_pts)
+                else:
+                    v = totals_map.get(sid)
+                    new = "" if v is None or pd.isna(v) else fmt_value(float(round(float(v), 2)))
+                if not _same_number(r[tot_idx], new):
+                    r[tot_idx] = new
+                    changed += 1
+
+            if changed:
+                backup_csv_before_write(csv_path, tool="grade-tui", action="totals", cells=changed)
+                write_csv_text(csv_path, doc)
+        except Exception as e:
+            console.print(f"[yellow]⚠️ Warning: Failed to update total in {csv_path.name}: {e}[/yellow]")
 
 def run() -> None:
     while True:

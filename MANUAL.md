@@ -1,55 +1,82 @@
 # Grading System Manual
 
-## Starting the Dashboard
-To start the Grade Dashboard locally and view your courses:
-```bash
-streamlit run grader.py
-```
-This automatically opens the graphical interface in your browser where you can view aggregate statistics, review grade distributions across categories, and export finished reports.
+Two commands:
+
+- `grader` (`grader.py`) sets up and maintains a course folder.
+- `grade-tui` (`rust_tui/`, which calls `src/tui_api.py`) is the dashboard: scores, analytics, editing, export.
+
+Run both from the folder that holds your course folders (e.g. `~/cmru/teachings/2569-1`) or from inside one course
+folder.
 
 ---
 
 ## 🏗️ Managing Courses
 
-### Creating a New Course
-You can auto-generate the necessary folder structure and configuration template for a new course via the CLI. Both the course name and term are required:
-```bash
-python grader.py --course "GR2" --term "2026_S2"
-```
-This creates a combined directory:
-- `courses/2026_S2_GR2/`
-- `courses/2026_S2_GR2/data/` (Drop your CSVs here)
-- `courses/2026_S2_GR2/reports/` (Exported results will save here)
-- `courses/2026_S2_GR2/config.yaml` (Edit this to define weights and cutoffs)
+### Creating a course from the registration list
 
-### Configuring a Course (`config.yaml`)
-Every course utilizes a purely customizable `config.yaml`:
-- **`weights`**: Defines the categorical multiplier out of 1.0 (e.g., `homework: 0.3`).
-- **`data_mapping`**: Maps the exact column names present in your CSV files mathematically to their specific weight category.
-- **`grade_boundaries`**: Dictates the exact numerical boundary where a letter grade is earned (e.g., `B+: 75`).
-- **`rules`**: Enable specific operations (e.g., `drop_lowest_homework: true`).
+```bash
+grader init -i repclasslist.xls      # the CMRU class list (.xls)
+```
+
+This creates `<term>_<course name>_SEC_<n>_grading/` in the current folder:
+
+- `course_info/<prefix>_student_info.csv`: the roster (`Student ID,Name,Class Group`). It's the one student list both
+  `grade-tui` and `exam` use.
+- `course_info/<prefix>_config.yaml`: weights, `data_mapping`, grade boundaries.
+- `data/<prefix>_attendance.xlsx` (+ `.csv`): attendance sheet.
+
+Without a class list: `grader init --course_name X --term 2026_S1 --course_id PHYS1120`.
+
+### Score files
+
+Edit `data_mapping` in the config, then:
+
+```bash
+grader mkdb          # creates data/<prefix>_<category>.csv for each category (never overwrites)
+grader update        # realigns those files after a config change (adds columns/students, never deletes scores)
+grader update -i repclasslist.xls   # merges a newer class list into the roster
+```
+
+Each score file looks like `Student ID,Name,midterm_mcq (35pts),midterm_showsol (5pts),total (40pts)`. The points
+come from the header; `total` is filled in by the dashboard.
+
+### What to put in a score cell
+
+| Cell | Meaning |
+|---|---|
+| a number | the score |
+| empty | not entered yet (counts as 0) |
+| `ขส` | absent from the exam: counts as 0, shown as absent in the dashboard and the report |
+| anything else | invalid: counts as 0 and shows a warning |
+
+### Exam scores from `exam`
+
+Exams made with exam_projects send their scores here with `exam link` (once per exam) and `exam scores`. `exam roster`
+compares the answer sheets with this course's roster and lists who was absent. Details: `INTEGRATION.md`.
 
 ---
 
-## 🧮 How to Format CSV Data
+## 🕘 History and undo
 
-All data parsing works simply by placing any `.csv` or `.xlsx` file inside the `courses/<Your_Course>/data/` folder. The system will auto-merge every file using the **`Student ID`**.
+Before any tool changes a file in a course folder (`grader update`, edits in `grade-tui`, `exam scores`), the old version
+is saved in `<course>/history/` and listed in `history/log.jsonl`.
 
-To define the *maximum points* achievable on an assignment:
-Add an auxiliary row near the top of your data file where the `Student ID` column is explicitly named **`Full Score`**, **`Max`**, or **`Max Score`**.
-*Example Format:*
-```csv
-Student ID, Name, midterm_score, final_exam
-Full Score, Max, 100, 150
-123456, Alice, 82, 131
+```bash
+grader history              # newest first; --course DIR, -n 50
+grader undo                 # restores the newest change not undone yet (asks first)
+grader undo 20261007-101500_exam_scores    # restores that one
 ```
-The program will dynamically read that 100 and 150 points were the respective maximums and calculate the percentage scores using the configured category weights.
+
+An undo saves the current version first, so it can be undone too. Opening a course in `grade-tui` only writes when a
+`total` actually changed, and those automatic total updates are skipped by `grader undo`.
 
 ---
 
 ## 📊 Exporting Reports
 
-When ready, click "Export Final Report to CSV" in the sidebar menu.
-This will save:
-1. `final_grades.csv` - The complete dataset containing every student, every normalized categorical score, and their final letter grade.
-2. `copy_friendly_scores.csv` - An optimally formatted extract linking each *Student ID* immediately adjacent to specific assignment totals (e.g., Midterm, Final, Coursework Total), mathematically ready to highlight and paste directly into your university submission portal.
+In `grade-tui`, press `e`. This writes `reports/`:
+
+1. `<prefix>_final_grades.csv`: every student, category scores, final score and grade. When anyone has `ขส`, an
+   `absent` column lists their exam columns.
+2. `<prefix>_copy_friendly_scores.csv`: Student ID next to Cumulative / Midterm / Final, ready to paste into the
+   university system.

@@ -6,17 +6,22 @@ import yaml
 import pandas as pd
 from pathlib import Path
 
-def backup_csv_before_write(csv_path) -> None:
+def backup_csv_before_write(csv_path, tool: str = "grade-tui", action: str = "edit", note: str = "",
+                            cells: int | None = None) -> None:
     """
-    Snapshots a score file to `<name>.csv.bak` before it gets overwritten, so
-    a bad write (grader-tui single/bulk cell edits, dashboard total sync, or
-    `grader update`'s own realignment) is always recoverable via `grader
-    undo`. Every code path that overwrites an existing data/*.csv file with
-    a full-dataframe `to_csv` must call this first - a live column-fill
-    action can otherwise blank real scores with no way back.
+    Snapshots a score file before it gets overwritten, so a bad write
+    (grade-tui single/bulk cell edits, dashboard total sync, or `grader
+    update`'s own realignment) is always recoverable via `grader undo`.
+    The snapshot goes into the course's history/ (see src/history.py); the
+    old `<name>.csv.bak` copy is still written for compatibility. Every code
+    path that overwrites an existing data/*.csv file must call this first.
     """
     csv_path = Path(csv_path)
     if csv_path.exists():
+        from src.history import course_dir_of, snapshot
+        course = course_dir_of(csv_path)
+        if course is not None:
+            snapshot(course, [csv_path], tool, action, note=note, cells=cells)
         shutil.copy2(csv_path, csv_path.with_suffix(".csv.bak"))
 
 def get_course_file_prefix(course_dir) -> str:
@@ -179,6 +184,7 @@ def load_course_data(course_path: str) -> tuple[pd.DataFrame, dict]:
     all_dfs = []
     max_scores = {}
     attendance_cols = set()
+    score_cols = set()  # columns that come from data/ score files (not the roster, not attendance)
     
     # Load default max scores from config's data_mapping point annotations
     try:
@@ -261,6 +267,8 @@ def load_course_data(course_path: str) -> tuple[pd.DataFrame, dict]:
                             new_columns[col] = col
                     
                     df.rename(columns=new_columns, inplace=True)
+                    if not is_attendance:
+                        score_cols.update(c for c in df.columns if c not in ('Student ID', 'Name'))
                     
                     # Fallback: Check for max score row if someone still uses it, but don't overwrite header maxes
                     if len(df) > 0 and str(df.iloc[0].get('Student ID', '')).lower().strip() in ['max score', 'max', 'full score', 'full']:
@@ -306,10 +314,18 @@ def load_course_data(course_path: str) -> tuple[pd.DataFrame, dict]:
         if 'Student ID' in curr_df.columns:
             merged_df = pd.merge(merged_df, curr_df, on='Student ID', how='outer')
 
-    # Convert numeric columns where possible
+    # Convert numeric columns where possible. Score cells go through
+    # src/cells.py so "ขส" (absent) and stray text are remembered rather than
+    # silently turning into NaN (and later 0).
+    from src.cells import numeric_frame
+    cell_cols = [c for c in merged_df.columns if c in score_cols and c not in attendance_cols]
+    numeric, absences, invalid = numeric_frame(merged_df, cell_cols)
     for col in merged_df.columns:
-        if col != 'Student ID' and col not in attendance_cols:
+        if col in cell_cols:
+            merged_df[col] = numeric[col]
+        elif col != 'Student ID' and col not in attendance_cols:
             merged_df[col] = pd.to_numeric(merged_df[col], errors='coerce')
+    sids = merged_df['Student ID'].astype(str).str.strip() if 'Student ID' in merged_df.columns else None
 
     # Now that merging is done, put the Name column back in!
     # Map the Student ID to our master list of names, fallback to NaN if not found
@@ -324,4 +340,8 @@ def load_course_data(course_path: str) -> tuple[pd.DataFrame, dict]:
         # Ensure the final DataFrame is sorted by Student ID
         merged_df = merged_df.sort_values(by='Student ID').reset_index(drop=True)
 
+    # Which cells held "ขส" or unreadable text, keyed by Student ID (see src/cells.py).
+    if sids is not None:
+        merged_df.attrs['absences'] = [(sids[i], col) for i, col in absences]
+        merged_df.attrs['invalid_cells'] = [(sids[i], col, text) for i, col, text in invalid]
     return merged_df, max_scores

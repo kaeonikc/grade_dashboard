@@ -17,6 +17,8 @@ from datetime import datetime, timedelta
 from src.data_loader import load_config, load_course_data, parse_pts, parse_config_col, backup_csv_before_write
 from src.calculators import calculate_final_grades, validate_scores, assign_letter_grade
 from src.dashboard import export_reports, update_database_totals
+from src.cells import ABSENT
+from src.csvio import read_csv_text, write_csv_text, fmt_value
 
 def find_courses_fallback() -> dict:
     current_dir = Path(".")
@@ -372,13 +374,24 @@ def get_course_data(course_path, use_weighted=True):
         # Prepare list of raw scores
         raw_cols_present = [c for c in final_df.columns if c in raw_assignment_cols]
         raw_display_cols = ["Student ID", "Name"] + raw_cols_present
+        absent_cells = {(sid, col) for sid, col in raw_df.attrs.get("absences", [])}
         raw_scores = []
         for _, row in final_df[raw_display_cols].iterrows():
             record = {}
+            sid = str(row["Student ID"]).strip()
             for col in raw_display_cols:
                 val = row[col]
                 record[col] = "" if pd.isna(val) else val
+                if (sid, col) in absent_cells:
+                    record[col] = ABSENT  # show ขส rather than the 0 it counts as
             raw_scores.append(record)
+
+        names = dict(zip(final_df["Student ID"].astype(str), final_df["Name"].astype(str)))
+        absences = [
+            {"student_id": sid, "name": names.get(sid, ""), "column": col}
+            for sid, col in raw_df.attrs.get("absences", [])
+            if col in raw_assignment_cols
+        ]
             
         # Prepare grade distribution
         grade_order = list(config.get("grade_boundaries", {}).keys()) + ["F"]
@@ -464,6 +477,7 @@ def get_course_data(course_path, use_weighted=True):
             "rules": config.get("rules", {}),
             "attendance_labels": attendance_labels,
             "analytics": analytics,
+            "absences": absences,
         }
     except Exception as e:
         import traceback
@@ -572,22 +586,18 @@ def update_student_score(course_path, student_id, col_name, value):
             return {"status": "error", "message": f"Column '{col_name}' not found in any score sheets."}
             
         if not is_xlsx:
-            # Update CSV file
-            df = pd.read_csv(target_file)
-            df.columns = df.columns.astype(str).str.strip()
-            df['Student ID'] = df['Student ID'].astype(str).str.strip()
-            
-            mask = df['Student ID'] == student_id
-            if not mask.any():
+            # Update just that cell; every other cell keeps its exact text
+            doc = read_csv_text(target_file)
+            sid_idx, col_idx = doc.col('Student ID'), doc.col(target_col_orig_name)
+            hits = [r for r in doc.rows if sid_idx is not None and r[sid_idx].strip() == student_id]
+            if not hits or col_idx is None:
                 return {"status": "error", "message": f"Student ID '{student_id}' not found in {target_file.name}."}
-                
-            if target_col_orig_name in df.columns:
-                df[target_col_orig_name] = df[target_col_orig_name].astype(object)
-            df.loc[mask, target_col_orig_name] = val_to_set
+            for r in hits:
+                r[col_idx] = fmt_value(val_to_set)
 
             # Save back
-            backup_csv_before_write(target_file)
-            df.to_csv(target_file, index=False)
+            backup_csv_before_write(target_file, action="edit", note=f"{col_name} {student_id}", cells=len(hits))
+            write_csv_text(target_file, doc)
 
             # If this is attendance, also update the XLSX companion
             msg = f"Updated {col_name} to {value} for student {student_id} in {target_file.name}."
@@ -741,21 +751,19 @@ def update_column_score(course_path, col_name, value):
             return {"status": "error", "message": f"Column '{col_name}' not found in any score sheets."}
 
         if not is_xlsx:
-            # Update CSV file
-            df = pd.read_csv(target_file)
-            df.columns = df.columns.astype(str).str.strip()
-            df['Student ID'] = df['Student ID'].astype(str).str.strip()
-
-            mask = df['Student ID'].str.len() > 0
-            student_count = int(mask.sum())
-
-            if target_col_orig_name in df.columns:
-                df[target_col_orig_name] = df[target_col_orig_name].astype(object)
-            df.loc[mask, target_col_orig_name] = val_to_set
+            # Update that column only; every other cell keeps its exact text
+            doc = read_csv_text(target_file)
+            sid_idx, col_idx = doc.col('Student ID'), doc.col(target_col_orig_name)
+            if sid_idx is None or col_idx is None:
+                return {"status": "error", "message": f"Column '{col_name}' not found in {target_file.name}."}
+            rows = [r for r in doc.rows if r[sid_idx].strip()]
+            student_count = len(rows)
+            for r in rows:
+                r[col_idx] = fmt_value(val_to_set)
 
             # Save back
-            backup_csv_before_write(target_file)
-            df.to_csv(target_file, index=False)
+            backup_csv_before_write(target_file, action="fill", note=f"{col_name} = {value}", cells=student_count)
+            write_csv_text(target_file, doc)
 
             msg = f"Filled '{col_name}' = {value} for {student_count} students in {target_file.name}."
             if target_file.name.endswith("attendance.csv"):

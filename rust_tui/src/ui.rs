@@ -67,10 +67,15 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
             if let Some(ref data) = app.course_data {
                 (
                     format!(
-                        " ⚡  {}  |  Term: {}  |  Mode: {} ",
+                        " ⚡  {}  |  Term: {}  |  Mode: {}{} ",
                         data.course_name.to_uppercase(),
                         data.term.to_uppercase(),
-                        if app.use_weighted { "WEIGHTED PERCENTAGES" } else { "RAW SCORES" }
+                        if app.use_weighted { "WEIGHTED PERCENTAGES" } else { "RAW SCORES" },
+                        if data.absences.is_empty() {
+                            String::new()
+                        } else {
+                            format!("  |  {}: {}", ABSENT, data.absences.len())
+                        }
                     ),
                     Style::default().fg(theme.info).add_modifier(Modifier::BOLD)
                 )
@@ -563,6 +568,17 @@ fn draw_summary_status_panel(f: &mut Frame, app: &mut App, area: Rect) {
         ]));
     }
 
+    let absent_cols: Vec<&str> = data.absences.iter()
+        .filter(|a| a.student_id == sid)
+        .map(|a| a.column.as_str())
+        .collect();
+    if !absent_cols.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {} (absent): ", ABSENT), Style::default().fg(theme.warning).bold()),
+            Span::styled(absent_cols.join(", "), Style::default().fg(theme.warning)),
+        ]));
+    }
+
     lines.push(Line::from(vec![
         Span::styled("  Score      : ", Style::default().fg(theme.key_accent)),
         Span::styled(fmt_int("Final Score"), Style::default().fg(theme.key_accent).bold()),
@@ -954,6 +970,9 @@ fn draw_raw_details_tab(f: &mut Frame, app: &mut App, area: Rect) {
     draw_sub_column_view(f, app, h_chunks[1]);
 }
 
+/// Marker for "absent from the exam" in a score cell (counts as 0); see INTEGRATION.md.
+const ABSENT: &str = "ขส";
+
 fn score_value(v: &serde_json::Value) -> f64 {
     match v {
         serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0),
@@ -1185,6 +1204,8 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
             };
             let style = if is_attendance {
                 att_cell_style(&text, is_cursor, &theme)
+            } else if text.trim() == ABSENT && !is_cursor {
+                Style::default().fg(theme.warning).add_modifier(Modifier::BOLD)
             } else if is_cursor {
                 Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD)
             } else {
