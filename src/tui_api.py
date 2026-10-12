@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 
 from src.data_loader import load_config, load_course_data, parse_pts, parse_config_col, backup_csv_before_write
 from src.calculators import calculate_final_grades, validate_scores, assign_letter_grade
-from src.dashboard import export_reports, update_database_totals
+from src.dashboard import export_reports, update_database_totals, category_totals
 from src.cells import ABSENT
 from src.csvio import read_csv_text, write_csv_text, fmt_value
 
@@ -341,8 +341,14 @@ def get_course_data(course_path, use_weighted=True):
         warnings = validate_scores(raw_df, config, max_scores)
         final_df = calculate_final_grades(raw_df, config, max_scores, use_weighted)
         
-        # Write totals back to the raw CSV databases
+        # Keep each score file's total column in step with its cells (src/sync.py), then report
+        # anything only `grader sync` can settle: hand-added columns, points that disagree.
         update_database_totals(path, final_df, config.get("data_mapping", {}), max_scores)
+        try:
+            from src.sync import find_changes, warnings_for
+            warnings = warnings + warnings_for(find_changes(path))
+        except Exception as e:
+            warnings.append(f"Could not check the score files: {e}")
         
         # Prepare list of student grades (summary table)
         data_mapping = config.get("data_mapping", {})
@@ -478,6 +484,7 @@ def get_course_data(course_path, use_weighted=True):
             "attendance_labels": attendance_labels,
             "analytics": analytics,
             "absences": absences,
+            "category_totals": category_totals(raw_df, config, max_scores),
         }
     except Exception as e:
         import traceback
@@ -521,6 +528,17 @@ def _update_xlsx_attendance(xlsx_path, student_id, target_col_orig_name, val_to_
     ws.cell(row=row_idx, column=col_idx).value = val_to_set
     wb.save(xlsx_path)
     return True
+
+def _sync_total(course_path, csv_path) -> None:
+    """After an edit, put the file's total column right at once (not for attendance files)."""
+    try:
+        from src.sync import category_of, sync_file
+        cat = category_of(course_path, csv_path)
+        if cat:
+            sync_file(course_path, cat, tool="grade-tui", action="totals")
+    except Exception:
+        pass  # the next open of the course refreshes it
+
 
 def update_student_score(course_path, student_id, col_name, value):
     try:
@@ -595,9 +613,10 @@ def update_student_score(course_path, student_id, col_name, value):
             for r in hits:
                 r[col_idx] = fmt_value(val_to_set)
 
-            # Save back
+            # Save back, then refresh that file's total
             backup_csv_before_write(target_file, action="edit", note=f"{col_name} {student_id}", cells=len(hits))
             write_csv_text(target_file, doc)
+            _sync_total(path, target_file)
 
             # If this is attendance, also update the XLSX companion
             msg = f"Updated {col_name} to {value} for student {student_id} in {target_file.name}."
@@ -761,9 +780,10 @@ def update_column_score(course_path, col_name, value):
             for r in rows:
                 r[col_idx] = fmt_value(val_to_set)
 
-            # Save back
+            # Save back, then refresh that file's total
             backup_csv_before_write(target_file, action="fill", note=f"{col_name} = {value}", cells=student_count)
             write_csv_text(target_file, doc)
+            _sync_total(path, target_file)
 
             msg = f"Filled '{col_name}' = {value} for {student_count} students in {target_file.name}."
             if target_file.name.endswith("attendance.csv"):

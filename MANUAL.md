@@ -63,6 +63,7 @@ pip install -r requirements.txt xlrd       # xlrd reads the university's .xls cl
 | | Create the empty score files | `grader mkdb` |
 | Every week | Take attendance | `data/<prefix>_attendance.xlsx` or `grade-tui` |
 | | Enter homework, lab and quiz scores | `grade-tui`, or edit the CSV |
+| After editing a CSV by hand | Bring totals up to date; add new columns to the config | `grader sync` |
 | Late registrations or withdrawals | Merge the newer class list | `grader update -i repclasslist.xls` |
 | Midterm and final | Mark the OMR sheets and send the scores in | `exam mark scan` → `exam mark roster` → `exam submit scores` |
 | End of term | Check the grades, rounding and absences, then export | `grade-tui` → `e` |
@@ -180,8 +181,11 @@ Student ID,Name,midterm_mcq (35pts),midterm_showsol (5pts),total (40pts)
 69143302,นาย …,,,
 ```
 
-- The points come from the header `(Npts)`.
-- `total` is filled in by the dashboard. Don't type into it.
+- The points come from the header `(Npts)` and from `data_mapping` in the config. `grader sync` tells you if the
+  two ever disagree.
+- `total` is the plain sum of the category's columns (empty, `ขส` and invalid count 0). It's **recalculated for
+  you**: when grade-tui opens a course, after every edit in grade-tui, after `exam submit scores`, and by
+  `grader sync` after you edit the file by hand. Don't type into it.
 - `mkdb` never overwrites a file that already exists.
 
 ### What to put in a score cell
@@ -201,7 +205,35 @@ The same rules are written in `INTEGRATION.md`; exam_projects follows them too.
    the whole column with one value.
 2. **From an exam:** `exam submit scores` (see [section 7](#7-scores-from-exam_projects)).
 3. **In a spreadsheet:** open the CSV, type the scores, and save it as CSV (UTF-8). Keep the header row and the
-   `Student ID` column exactly as they are, and close grade-tui first.
+   `Student ID` column exactly as they are, and close grade-tui first. Then run **`grader sync`** in the course
+   folder (or just open grade-tui) to bring `total` up to date.
+
+### Adding a column by hand
+
+You can add a score column straight into a CSV, for example `bonus (5pts)` in the final file, typed before `total`.
+Until it's in the config, it shows in the file but **doesn't count**: not in `total`, not in the grade. grade-tui's
+warnings bar reminds you. To make it count, run:
+
+```bash
+grader sync
+```
+
+```
+Columns in a file but not in config.yaml (they don't count yet):
+  …_final.csv: add 'bonus: 5' to [final] in config.yaml so it counts? [y/N] y
+  ➕ [final] bonus: 5 (now counts)
+  🔁 …_final.csv: total column refreshed (19 cell(s))
+```
+
+`grader sync`:
+
+- **New columns:** asks before adding each one to `data_mapping`. If the header has no `(Npts)`, it asks for the full
+  score first.
+- **Points that disagree** between a header and the config: asks which to keep (the file's or the config's).
+- **Totals:** refreshes every stale `total` cell. Attendance files are never touched.
+
+It's all one history entry, so `grader undo` reverses it. `--yes` adds every new column without asking, but leaves
+points conflicts alone.
 
 ---
 
@@ -245,15 +277,23 @@ exam submit scores       # preview → y/N → writes the scores, and ขส for
 exam report topics       # optional: per-topic results of this exam for the class and each student
 ```
 
-What `exam submit scores` does to your course folder:
+What `exam submit scores` does to your course folder. It **copies** the exam's data in, and never changes
+`config.yaml`, the roster or other columns:
 
-- It changes **only the score cells** of one column. It never adds or removes students or columns, and never
-  touches `total`, the roster or the config.
-- Absent students get `ขส`, **but only in an empty cell**. A score you already entered, such as a make-up exam, is
-  kept.
-- It saves the file in `history/` first, so `grader undo` can put it back.
-- If one exam covers two sections (two course folders), each student's score goes to the section whose roster lists
-  them.
+- **Raw scores, part by part.** The MCQ part goes into its column and the fill part into its own (e.g.
+  `final_mcq (35pts)`, `final_fill (10pts)`), as set by `exam submit link`. The dashboard calculates percentages
+  and weights.
+- **Missing columns.** If the file doesn't have the column yet, exam adds it, and a column's header points follow the
+  exam. Run `grader sync` afterwards: it asks before adding the new points to `data_mapping`, and the column counts
+  from then on.
+- **Your hand edits.** Before writing, exam compares the file with what it sent last time and lists the cells you
+  changed by hand. **Your edits are kept** unless you choose to overwrite them. Columns you added are never touched.
+- **Absent students** get `ขส`, **but only in an empty cell**. A score you already entered, such as a make-up exam,
+  is kept.
+- **Totals.** It saves the file in `history/` first, so `grader undo` can put it back, and then recalculates
+  `total`.
+- **Two sections.** If one exam covers two sections (two course folders), each student's score goes to the section
+  whose roster lists them.
 
 Essay or hand-marked exams don't go through `exam submit scores`. Type those scores in grade-tui, or into the CSV, and use
 `ขส` for absent students.
@@ -271,14 +311,15 @@ Pick a course with `▲/▼` and `Enter`. The dashboard has four tabs; `Tab` and
 
 | Tab | What it shows |
 |---|---|
-| **1 Summary** | *Summary Scores*: every student's category scores, final score and grade, with a panel for the selected student (including any `ขส`). *For Submission*: Cumulative / Midterm / Final in the layout the university system expects. |
-| **2 Raw Details** | The raw scores per category, where you edit them. `ขส` cells are highlighted. `Enter` on a student's name opens all of that student's scores. |
+| **1 Summary** | *Summary Scores*: every student's category scores, final score and grade, with a panel for the selected student: the raw total / maximum and percentage of each category, and any `ขส`. *For Submission*: Cumulative / Midterm / Final in the layout the university system expects. |
+| **2 Raw Details** | The raw scores per category, where you edit them. The last column shows each student's **raw total and percentage** for the category (e.g. `35.0 · 78%`). `ขส` cells are highlighted. `Enter` on a student's name opens all of that student's scores. |
 | **3 Analytics** | *Overview* (mean, median, SD, pass rate, histogram, box plot) · *Progress Over Time* (class average per item) · *Item Analysis* (difficulty and discrimination per score column) · *Correlation Matrix* (between categories) · *At-Risk Students* (failing or below the lower quartile) |
 | **4 Roundup** | Which students' grades changed because each component is rounded up (see [section 9](#9-how-the-final-score-is-calculated)). |
 
 The header shows the course, the term, the mode (weighted or raw) and the number of `ขส` cells. A yellow
 **warnings** bar at the bottom lists problems in the data: scores over the maximum, text in score cells, invalid
-attendance codes, totals that don't match.
+attendance codes, columns that aren't in the config yet, and points that differ between a file and the config (all
+settled by `grader sync`).
 
 ### Keys
 
@@ -395,6 +436,8 @@ automatically.
 | `exam submit scores` says a student has no row in the data file | The roster has a student the score file doesn't. Run `grader update` inside the course folder. |
 | `exam submit scores` says the file "changed after the preview" | grade-tui or another tool saved the file meanwhile. Run `exam submit scores` again. |
 | `grader init -i` can't read the .xls | Install `xlrd` (`pip install xlrd`). The class list must be the original `.xls`, not a `.csv`. |
+| A `total` doesn't match the scores | You edited the CSV by hand. Run `grader sync` (or open grade-tui). |
+| A column you added doesn't count | It isn't in `data_mapping` yet. Run `grader sync` and answer y. |
 | Something got overwritten | `grader history`, then `grader undo <ID>`. |
 
 ---
@@ -408,6 +451,7 @@ automatically.
 | `grader mkdb [config.yaml]` | create the missing score files from `data_mapping` |
 | `grader update -i <class list.xls>` | merge a newer class list into the roster |
 | `grader update [config.yaml] [--purge-empty-orphans]` | align the score files with the config |
+| `grader sync [--course DIR] [--yes]` | after editing CSVs by hand: refresh totals, add your new columns to the config (asks) |
 | `grader history [--course DIR] [-n N]` | list saved versions |
 | `grader undo [ID] [--course DIR] [--yes]` | restore a saved version |
 | `grader mock` | create the practice course |

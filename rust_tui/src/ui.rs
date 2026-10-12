@@ -568,6 +568,18 @@ fn draw_summary_status_panel(f: &mut Frame, app: &mut App, area: Rect) {
         ]));
     }
 
+    let mut cats: Vec<&String> = data.category_totals.keys().collect();
+    cats.sort();
+    for c in cats {
+        if let Some(t) = data.category_totals.get(c).and_then(|m| m.get(sid)) {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {:<11}: ", c.chars().take(11).collect::<String>()),
+                             Style::default().fg(theme.inactive_tab)),
+                Span::styled(format!("{:.1}/{:.0}  ({:.1}%)", t.raw, t.max, t.pct), Style::default().fg(theme.fg)),
+            ]));
+        }
+    }
+
     let absent_cols: Vec<&str> = data.absences.iter()
         .filter(|a| a.student_id == sid)
         .map(|a| a.column.as_str())
@@ -869,10 +881,13 @@ fn draw_student_info_panel(f: &mut Frame, app: &mut App, area: Rect) {
                 .filter_map(|sc| record.get(sc))
                 .map(|v| score_value(v))
                 .sum();
+            let is_att = cat.to_lowercase().contains("attendance");
+            let max = category_max(data, &sub_cols, is_att);
             Some(Line::from(vec![
                 Span::styled("  Total            : ", Style::default().fg(theme.key_accent)),
                 Span::styled(
-                    format!("{:.1} pts", total),
+                    format!("{:.1} / {:.0} pts", total, max)
+                        + &if max > 0.0 { format!("  ({:.1}%)", total / max * 100.0) } else { String::new() },
                     Style::default().fg(theme.success).bold(),
                 ),
             ]))
@@ -968,6 +983,24 @@ fn draw_raw_details_tab(f: &mut Frame, app: &mut App, area: Rect) {
     draw_raw_left_panel(f, app, left_chunks[0]);
     draw_student_info_panel(f, app, left_chunks[1]);
     draw_sub_column_view(f, app, h_chunks[1]);
+}
+
+/// "35.0 · 78%": a raw category total and its share of the category's maximum.
+fn total_with_pct(total: f64, max: f64) -> String {
+    if max > 0.0 {
+        format!("{:.1} · {:.0}%", total + 0.0, total / max * 100.0)
+    } else {
+        format!("{:.1}", total + 0.0)
+    }
+}
+
+/// The maximum of a category: sessions for attendance, else the sum of its columns' points.
+fn category_max(data: &crate::types::CourseData, sub_cols: &[String], is_attendance: bool) -> f64 {
+    if is_attendance {
+        sub_cols.len() as f64
+    } else {
+        sub_cols.iter().filter_map(|sc| data.max_scores.get(sc)).sum()
+    }
 }
 
 /// Marker for "absent from the exam" in a score cell (counts as 0); see INTEGRATION.md.
@@ -1223,7 +1256,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
             if app.raw_right_focused && r_idx == app.cursor_row && app.cursor_col == sub_cols.len() + 2 {
                 total_style = Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
             }
-            let total_text = format!("{:.1}", total + 0.0);
+            let total_text = total_with_pct(total, category_max(data, &sub_cols, is_attendance));
             cells.push(Cell::from(total_text).style(total_style));
         }
 
@@ -1247,7 +1280,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
         widths.push(Constraint::Length(w));
     }
     if show_total {
-        widths.push(Constraint::Length(8));
+        widths.push(Constraint::Length(14));
     }
 
     let table = Table::new(rows, widths)
@@ -1403,7 +1436,7 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
             .map(|v| score_value(v))
             .sum();
         cells.push(
-            Cell::from(format!("{:.1}", total + 0.0))
+            Cell::from(total_with_pct(total, category_max(data, &sub_cols, is_attendance_popup)))
                 .style(Style::default().fg(theme.success).add_modifier(Modifier::BOLD))
         );
     }
@@ -1415,7 +1448,7 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
         widths.push(Constraint::Length(w));
     }
     if show_total {
-        widths.push(Constraint::Length(8));
+        widths.push(Constraint::Length(14));
     }
 
     let table = Table::new(vec![row], widths)

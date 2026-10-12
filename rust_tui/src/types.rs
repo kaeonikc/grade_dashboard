@@ -163,6 +163,16 @@ pub struct CourseData {
     /// Score cells holding "ขส" (absent from the exam). Older tui_api.py versions don't send it.
     #[serde(default)]
     pub absences: Vec<Absence>,
+    /// category → student id → raw total, maximum and % (src/dashboard.py:category_totals).
+    #[serde(default)]
+    pub category_totals: HashMap<String, HashMap<String, CatTotal>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CatTotal {
+    pub raw: f64,
+    pub max: f64,
+    pub pct: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

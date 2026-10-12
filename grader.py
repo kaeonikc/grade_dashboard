@@ -675,6 +675,7 @@ def mkdb_course(config_file: str = None, input_alias: str = None):
         except Exception as e:
             print(f"❌ Error writing {csv_path.name}: {e}")
             
+    _refresh_totals(course_dir, "mkdb")
     print("🚀 All databases created successfully!")
 
 def update_course(input_file: str = None, config_file: str = None, purge_empty_orphans: bool = False):
@@ -1168,6 +1169,7 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
         except Exception as e:
             print(f"⚠️ Warning: Could not update/align attendance spreadsheet: {e}")
             
+    _refresh_totals(course_dir, "update")
     print("🚀 All databases updated successfully!")
 
 def _find_bak_files(course_dir: Path) -> list[Path]:
@@ -1219,6 +1221,144 @@ def _describe_entry(e: dict) -> str:
     cells = f", {e['cells']} cell(s)" if e.get("cells") is not None else ""
     note = f" — {e['note']}" if e.get("note") else ""
     return f"{e['id']}  [{e.get('tool')} {e.get('action')}{cells}]  {', '.join(e.get('files', []))}{note}"
+
+
+def _refresh_totals(course_dir, action: str) -> None:
+    """Every score file's total column in step with its cells (src/sync.py); attendance untouched."""
+    from src.sync import sync_course
+    try:
+        done = sync_course(course_dir, tool="grader", action=action)
+    except Exception as e:
+        print(f"⚠️ Warning: could not refresh the total columns: {e}")
+        return
+    for name, n in done.items():
+        print(f"  🔁 {name}: total column refreshed ({n} cell(s))")
+
+
+def _ask(question: str, default: str = "") -> str:
+    if not sys.stdin.isatty():
+        return default
+    ans = input(question + " ").strip()
+    return ans or default
+
+
+def sync_cmd(course: str = None, yes: bool = False):
+    """
+    `grader sync`: after editing score CSVs by hand. Refreshes every total column and settles what only you can
+    decide: columns you added (add them to config.yaml?) and points that differ between a header and the config.
+    Attendance files are never touched. Everything it writes is one history entry (grader undo).
+    """
+    from src.csvio import read_csv_text, write_csv_text
+    from src.history import Entry
+    from src.sync import (_fmt_pts, category_items, config_file, data_files, find_changes, parse_item, parse_pts,
+                          raw_config, set_category, sync_course)
+    from src.csvio import atomic_write_bytes
+
+    target_dir = _resolve_course_for_history(course)
+    if not target_dir:
+        print("❌ No course folder here (use --course DIR).")
+        sys.exit(1)
+    target_dir = target_dir.resolve()
+    ch = find_changes(target_dir)
+    print(f"🔄 Sync: {target_dir.name}")
+    if ch.empty():
+        print("✅ Everything is in sync: every total matches its cells and every column is in config.yaml.")
+        return
+
+    if ch.stale:
+        print("Totals to refresh:")
+        for name, n in ch.stale.items():
+            print(f"  {name}: {n} cell(s)")
+    if ch.missing:
+        print("In config.yaml but not in the file (run `grader update` to add the column):")
+        for cat, col in ch.missing:
+            print(f"  [{cat}] {col}")
+    for cat, col in ch.no_points:
+        print(f"⚠️  [{cat}] '{col}' has no points in config.yaml or in its header: write `- {col}: N` in the config.")
+
+    cfg = raw_config(target_dir)
+    dm = cfg.get("data_mapping") or {}
+    new_values: dict = {}
+    header_fixes: list = []  # (category, column, points)
+
+    def items_of(cat):
+        if cat not in new_values:
+            import copy
+            new_values[cat] = copy.deepcopy(dm.get(cat))
+        return new_values[cat]
+
+    def set_points(cat, col, pts):
+        value = items_of(cat)
+        lst = value["columns"] if isinstance(value, dict) and "columns" in value else value
+        for i, item in enumerate(lst):
+            if parse_item(item)[0] == col:
+                lst[i] = {col: pts}
+                return
+
+    def add_column(cat, col, pts):
+        value = items_of(cat)
+        lst = value["columns"] if isinstance(value, dict) and "columns" in value else value
+        lst.append({col: pts})
+
+    if ch.unmapped:
+        print("Columns in a file but not in config.yaml (they don't count yet):")
+    for cat, fname, col, hp in ch.unmapped:
+        pts = hp
+        if pts is None:
+            raw = _ask(f"  {fname}: '{col}' has no points in its header. Full score for it (empty = skip)?")
+            try:
+                pts = float(raw) if raw else None
+            except ValueError:
+                pts = None
+            if pts is None:
+                print(f"  ⏭  {col}: skipped")
+                continue
+        pts = int(pts) if float(pts).is_integer() else pts
+        if yes or _ask(f"  {fname}: add '{col}: {_fmt_pts(pts)}' to [{cat}] in config.yaml so it counts? [y/N]",
+                       "n").lower() in ("y", "yes"):
+            add_column(cat, col, pts)
+            print(f"  ➕ [{cat}] {col}: {_fmt_pts(pts)} (now counts)")
+            if hp is None:
+                header_fixes.append((cat, col, pts))
+        else:
+            print(f"  ⏭  {col}: left out (not counted)")
+
+    if ch.conflicts:
+        print("Points that differ between a file and config.yaml:")
+    for cat, fname, col, hp, cp in ch.conflicts:
+        ans = "s" if yes else _ask(f"  {fname}: '{col}' is {_fmt_pts(hp)} pts in the file, {_fmt_pts(cp)} in "
+                                   f"config.yaml. Keep the file's [f] / the config's [c] / skip [s]?", "s").lower()
+        if ans.startswith("f"):
+            set_points(cat, col, int(hp) if float(hp).is_integer() else hp)
+        elif ans.startswith("c"):
+            header_fixes.append((cat, col, cp))
+        else:
+            print(f"  ⏭  {col}: left as it is")
+
+    entry = Entry(target_dir, "grader", "sync")
+    if new_values:
+        cfg_path = config_file(target_dir)
+        entry.capture(cfg_path)
+        for cat, value in new_values.items():
+            atomic_write_bytes(cfg_path, set_category(cfg_path, cat, value).encode("utf-8"))
+        print(f"  ✍️  {cfg_path.name}: data_mapping updated ({', '.join(new_values)})")
+    files = data_files(target_dir)
+    for cat, col, pts in header_fixes:
+        path = files.get(cat)
+        if not path:
+            continue
+        doc = read_csv_text(path)
+        for i, h in enumerate(doc.header):
+            if parse_pts(h)[0] == col and not h.strip().lower().startswith("total"):
+                doc.header[i] = f"{col} ({_fmt_pts(pts)}pts)"
+        entry.capture(path)
+        write_csv_text(path, doc)
+        print(f"  ✍️  {path.name}: header of '{col}' set to {_fmt_pts(pts)} pts")
+    done = sync_course(target_dir, entry=entry)
+    for name, n in done.items():
+        print(f"  🔁 {name}: total column refreshed ({n} cell(s))")
+    entry_id = entry.close(sum(done.values()) or None)
+    print("✅ Synced." + (f" Undo with: grader undo {entry_id}" if entry_id else " Nothing needed writing."))
 
 
 def history_course(course: str = None, limit: int = 20):
@@ -1523,6 +1663,11 @@ if __name__ == "__main__":
     parser_undo.add_argument("entry", nargs="?", help="History entry ID (see: grader history)")
     parser_undo.add_argument("--course", help="Course folder (default: the one you're in, or the most recently changed)")
     parser_undo.add_argument("-y", "--yes", action="store_true", help="Don't ask for confirmation")
+    parser_sync = subparsers.add_parser("sync", help="After editing score CSVs by hand: refresh the total columns, "
+                                        "and add hand-made columns to config.yaml (asks first)")
+    parser_sync.add_argument("--course", help="Course folder (default: the one you're in, or the most recently changed)")
+    parser_sync.add_argument("-y", "--yes", action="store_true", help="Add every new column without asking "
+                                                                         "(points conflicts are left alone)")
     parser_history = subparsers.add_parser("history", help="List the saved versions in a course's history/")
     parser_history.add_argument("--course", help="Course folder (default: the one you're in, or the most recently changed)")
     parser_history.add_argument("-n", type=int, default=20, help="How many entries to show (default 20)")
@@ -1549,6 +1694,8 @@ if __name__ == "__main__":
             update_course(config_file=args.config_file, purge_empty_orphans=args.purge_empty_orphans)
     elif args.command == "undo":
         undo_course(args.entry, args.course, args.yes)
+    elif args.command == "sync":
+        sync_cmd(args.course, args.yes)
     elif args.command == "history":
         history_course(args.course, args.n)
     elif args.command == "mock":

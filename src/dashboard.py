@@ -226,6 +226,27 @@ def show_grade_distribution(final_df: pd.DataFrame, config: dict) -> None:
     console.print()
 
 
+def category_totals(df: pd.DataFrame, config: dict, max_scores: dict) -> dict:
+    """{category: {student id: {raw, max, pct}}} for every score category (not attendance): the plain sum of the
+    student's raw scores in the category's columns, the sum of their maxima, and raw/max in %."""
+    out = {}
+    if df is None or df.empty or "Student ID" not in df.columns:
+        return out
+    for cat, cols in (config.get("data_mapping") or {}).items():
+        if cat == "attendance":
+            continue
+        present = [c for c in cols if c in df.columns]
+        if not present:
+            continue
+        mx = float(sum(max_scores.get(c, 0.0) for c in present))
+        raw = df[present].apply(pd.to_numeric, errors="coerce").fillna(0.0).sum(axis=1)
+        out[cat] = {}
+        for sid, r in zip(df["Student ID"].astype(str), raw):
+            r = round(float(r), 2)
+            out[cat][sid] = {"raw": r, "max": round(mx, 2), "pct": round(r / mx * 100, 1) if mx else 0.0}
+    return out
+
+
 def export_reports(final_df: pd.DataFrame, course_path: Path, config: dict, max_scores: dict, use_weighted: bool) -> Path:
     weights = config.get("weights", {})
     rename = {k: v.replace("\n", " ") for k, v in _col_headers(final_df, max_scores, config, use_weighted).items()}
@@ -234,6 +255,13 @@ def export_reports(final_df: pd.DataFrame, course_path: Path, config: dict, max_
     report_dir = course_path / "reports"
     report_dir.mkdir(exist_ok=True)
     prefix = get_course_file_prefix(course_path)
+    # Raw total, maximum and percentage per category (not weighted), e.g. final_raw 35, final_max 45, final_pct 77.8.
+    for cat, totals in category_totals(final_df, config, max_scores).items():
+        by_sid = {sid: t for sid, t in totals.items()}
+        display_df[f"{cat}_raw"] = display_df["Student ID"].astype(str).map(lambda s: by_sid.get(s, {}).get("raw"))
+        display_df[f"{cat}_max"] = display_df["Student ID"].astype(str).map(lambda s: by_sid.get(s, {}).get("max"))
+        display_df[f"{cat}_pct"] = display_df["Student ID"].astype(str).map(lambda s: by_sid.get(s, {}).get("pct"))
+
     # Which exam/score columns hold "ขส" (absent) for each student.
     absent_by_sid = {}
     for sid, col in final_df.attrs.get("absences", []):
@@ -267,80 +295,19 @@ def export_reports(final_df: pd.DataFrame, course_path: Path, config: dict, max_
 
     return report_dir
 
-def _same_number(old: str, new: str) -> bool:
-    old, new = (old or "").strip(), (new or "").strip()
-    if old == new:
-        return True
+def update_database_totals(course_path: Path, final_df: pd.DataFrame = None, data_mapping: dict = None,
+                           max_scores: dict = None):
+    """
+    Refreshes the `total (Npts)` column of every score file (not attendance) from its cells:
+    the plain sum of the columns data_mapping lists for that category (src/sync.py). A file is
+    rewritten - after a history snapshot - only when a total actually changed. The extra
+    arguments are ignored; they're kept so existing callers don't break.
+    """
+    from src.sync import sync_course
     try:
-        return abs(float(old) - float(new)) < 1e-6
-    except ValueError:
-        return False
-
-
-def update_database_totals(course_path: Path, final_df: pd.DataFrame, data_mapping: dict, max_scores: dict):
-    """
-    Writes each category's computed total into the `total (Npts)` column of its
-    data CSV. Only the total cells (and the total header) are touched, and a file
-    is only rewritten - with a history snapshot first - when a total actually
-    changed, so opening a course in the dashboard doesn't rewrite every file.
-    """
-    from src.csvio import read_csv_text, write_csv_text, fmt_value
-    data_dir = course_path / "data"
-    if not data_dir.is_dir():
-        return
-    prefix = get_course_file_prefix(course_path)
-    for category, columns in data_mapping.items():
-        if category == 'attendance':
-            csv_files = [f for f in data_dir.iterdir() if f.is_file() and f.name.endswith("attendance.csv")]
-            csv_path = csv_files[0] if csv_files else None
-        else:
-            csv_path = data_dir / f"{prefix}_{category}.csv"
-
-        calc_col = f"{category.title()} Total"
-        if not (csv_path and csv_path.exists()) or calc_col not in final_df.columns:
-            continue
-        try:
-            doc = read_csv_text(csv_path)
-            sid_idx = doc.col('Student ID')
-            if sid_idx is None:
-                continue
-
-            cat_max_scores = {col: max_scores.get(col, 100.0) for col in columns}
-            total_pts = float(sum(cat_max_scores.values()))
-            total_pts_str = str(int(total_pts)) if total_pts.is_integer() else str(total_pts)
-            total_header = f"total ({total_pts_str}pts)"
-
-            tot_idx = next((i for i, h in enumerate(doc.header) if h.lower().strip().startswith('total')), None)
-            changed = 0
-            if tot_idx is None:
-                doc.header.append(total_header)
-                for r in doc.rows:
-                    r.append("")
-                tot_idx = len(doc.header) - 1
-                changed += 1
-            elif doc.header[tot_idx] != total_header:
-                doc.header[tot_idx] = total_header
-                changed += 1
-
-            totals_map = {str(k).strip(): v for k, v in final_df.set_index("Student ID")[calc_col].to_dict().items()}
-            for r in doc.rows:
-                sid = r[sid_idx].strip()
-                if not sid:
-                    continue
-                if sid.lower() in ('max', 'max score', 'full score', 'full'):
-                    new = fmt_value(total_pts)
-                else:
-                    v = totals_map.get(sid)
-                    new = "" if v is None or pd.isna(v) else fmt_value(float(round(float(v), 2)))
-                if not _same_number(r[tot_idx], new):
-                    r[tot_idx] = new
-                    changed += 1
-
-            if changed:
-                backup_csv_before_write(csv_path, tool="grade-tui", action="totals", cells=changed)
-                write_csv_text(csv_path, doc)
-        except Exception as e:
-            console.print(f"[yellow]⚠️ Warning: Failed to update total in {csv_path.name}: {e}[/yellow]")
+        sync_course(Path(course_path), tool="grade-tui", action="totals")
+    except Exception as e:
+        console.print(f"[yellow]⚠️ Warning: Failed to update totals: {e}[/yellow]")
 
 def run() -> None:
     while True:
