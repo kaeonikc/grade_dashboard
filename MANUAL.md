@@ -229,7 +229,10 @@ Columns in a file but not in config.yaml (they don't count yet):
 
 - **New columns:** asks before adding each one to `data_mapping`. If the header has no `(Npts)`, it asks for the full
   score first.
-- **Points that disagree** between a header and the config: asks which to keep (the file's or the config's).
+- **Columns you took out of config.yaml** that are still in a file: asks, as `grader update` does (delete / rename /
+  keep). They're never proposed back for the config.
+- **Points that disagree** between a header and the config: if you changed the config, the header follows. If you
+  changed the header, it asks which to keep (the file's or the config's).
 - **Totals:** refreshes every stale `total` cell.
 - **Attendance:** keeps the attendance xlsx and csv in step (see [Attendance](#6-attendance)).
 
@@ -453,10 +456,24 @@ columns `a1`…`a15` are renamed to dates, once `term_start_date` is set.
 
 **New score columns or categories.** Edit `data_mapping`, then run `grader update` inside the course folder.
 
-- New columns and files are added.
-- Renamed columns keep their scores.
-- A column that's no longer in the config is kept. Add `--purge-empty-orphans` to remove such columns, but only when
-  every cell in them is empty.
+The score files follow what you changed in the config:
+
+- **New columns and files** are added.
+- **Changed points** (`hw_heat: 10` → `20`) go into the column's header.
+- **A column you took out of the config:**
+  - if it's empty, it's deleted;
+  - if it still has scores, it asks: `[d]` delete it / `[r]` rename it to one of the new config columns, which keeps
+    its scores (e.g. `hw1` → `hw_motions`) / `[k]` keep it. A kept column isn't counted and is never proposed for the
+    config again.
+
+  `grader undo` brings back a deleted column.
+- **To rename a column**, change its name in the config, run `grader update`, and answer `r`.
+
+grader remembers the config's columns each time `grader update`, `mkdb` or `sync` runs
+(`history/config_sync.json`). That's how it tells **a column you removed from the config** (the CSV follows the
+config) from **a column you added to the CSV by hand** (`grader sync` offers to add it to the config). Points work
+the same way: whichever side you edited wins. If you changed a header's points by hand, `grader update` keeps them and
+`grader sync` asks.
 
 ---
 
@@ -473,6 +490,7 @@ columns `a1`…`a15` are renamed to dates, once `term_start_date` is set.
 | `grader init -i` can't read the .xls | Install `xlrd` (`pip install xlrd`). The class list must be the original `.xls`, not a `.csv`. |
 | A `total` doesn't match the scores | You edited the CSV by hand. Run `grader sync` (or open grade-tui). |
 | A column you added doesn't count | It isn't in `data_mapping` yet. Run `grader sync` and answer y. |
+| You removed or renamed a column in config.yaml and it's still in the CSV | Run `grader update`: it asks whether to delete it, rename it (keeping its scores) or keep it. |
 | The attendance xlsx and csv differ, or grade-tui warns "attendance: … run `grader sync`" | Run `grader sync` in the course folder and answer its questions. |
 | "… is open in Excel" | Close the attendance xlsx in Excel, then run `grader sync` again. |
 | Something got overwritten | `grader history`, then `grader undo <ID>`. |

@@ -64,7 +64,8 @@ Student ID,Name,final_mcq (35pts),final_fill (10pts),bonus (2pts),total (45pts)
 ```
 
 - **Points.** A column's points are in its header and, for the columns that count, in `config.yaml` `data_mapping`.
-  `grader sync` reports any disagreement and asks which one wins.
+  `grader sync` reports any disagreement: when you changed the config, the header follows; when the header changed
+  (by hand, or by `exam submit scores`), it asks which one wins.
 - **Columns that count** are the ones `data_mapping` lists for the category. A column that is only in the file
   (added by hand, or added by `exam submit scores`) doesn't count until `grader sync` adds it to the config, which
   it does only after asking you.

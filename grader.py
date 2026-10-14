@@ -692,7 +692,7 @@ def mkdb_course(config_file: str = None, input_alias: str = None):
             default_max = 100.0
             # Warning check
             import math
-            if not math.isclose(specified_total, target_total, abs_tol=1e-2):
+            if total_pts is not None and not math.isclose(specified_total, target_total, abs_tol=1e-2):
                 print(f"⚠️ WARNING: [{category}] Manual total score is determined as {target_total}pts, "
                       f"but the sum of specified columns is {specified_total}pts.")
         
@@ -702,6 +702,8 @@ def mkdb_course(config_file: str = None, input_alias: str = None):
         except Exception as e:
             print(f"❌ Error writing {csv_path.name}: {e}")
             
+    from src.columns import save_base
+    save_base(course_dir)
     _refresh_totals(course_dir, "mkdb")
     print("🚀 All databases created successfully!")
 
@@ -935,6 +937,11 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
     
     data_dir.mkdir(parents=True, exist_ok=True)
     prefix = get_course_file_prefix(course_dir)
+    from src.columns import points_side, save_base, settle_removed, unmapped
+    removed_names: dict = {}  # taken out of config.yaml, or kept on purpose: no "added by hand?" note for these
+    for u in unmapped(course_dir):
+        if u.kind in ("removed", "kept"):
+            removed_names.setdefault(u.category, set()).add(u.name)
 
     for category, mapping_item in data_mapping.items():
         total_pts, columns = parse_category_mapping(mapping_item)
@@ -968,7 +975,7 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
             default_max = 100.0
             # Warning check
             import math
-            if not math.isclose(specified_total, target_total, abs_tol=1e-2):
+            if total_pts is not None and not math.isclose(specified_total, target_total, abs_tol=1e-2):
                 print(f"⚠️ WARNING: [{category}] Manual total score is determined as {target_total}pts, "
                       f"but the sum of specified columns is {specified_total}pts.")
         
@@ -1020,9 +1027,9 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
             desired_keys.append(key)
             desired_base_mapping[key] = (clean_name, col)
 
-        # Columns present in the file but no longer referenced by config are
-        # left alone (and their data with them) - update never deletes a
-        # column, it only ever adds or renames one.
+        # Columns present in the file but no longer referenced by config stay
+        # here for now; after this loop, settle_removed() asks about the ones
+        # you took out of the config (delete / rename / keep), src/columns.py.
         orphan_keys = [k for k in csv_columns_info.keys() if k not in desired_keys]
         orphan_headers = []
         for key in orphan_keys:
@@ -1041,7 +1048,9 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
                     continue
 
             orphan_headers.append(orig_header)
-            print(f"  ℹ️ '{orig_header}' in {csv_path.name} is not referenced by config; left as-is.")
+            if parse_pts(orig_header)[0] not in removed_names.get(category, set()):
+                print(f"  ℹ️ '{orig_header}' in {csv_path.name} isn't in config.yaml (added by hand?); left as-is. "
+                      "`grader sync` offers to add it.")
 
         # Determine header mapping for desired columns. This only ever adds a
         # brand-new column or renames an existing one in place (both
@@ -1063,6 +1072,11 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
                 orig_header = csv_columns_info[key][0]
                 if orig_header == new_header:
                     final_headers.append(orig_header)
+                elif points_side(course_dir, category, clean_name, parse_pts(orig_header)[1], pts) == "file":
+                    # You changed the points in the CSV header, not in the config: keep them; `grader sync` asks.
+                    final_headers.append(orig_header)
+                    print(f"  ℹ️ '{orig_header}': points changed in the file, not in config.yaml; kept. "
+                          "Run `grader sync` to settle them.")
                 elif new_header in student_rows.columns:
                     # Another column already occupies the desired header name;
                     # don't clobber it, keep this column under its old name.
@@ -1190,7 +1204,15 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
             _attendance_rows(course_dir, att_path, student_registry, class_cols)
         except Exception as e:
             print(f"⚠️ Warning: Could not update/align attendance spreadsheet: {e}")
-            
+
+    # Columns you took out of config.yaml that are still in a score file: delete / rename / keep.
+    from src.history import Entry
+    entry = Entry(course_dir, "grader", "update-columns")
+    settled = settle_removed(course_dir, _ask, entry)
+    entry_id = entry.close()
+    if entry_id:
+        print(f"  (undo with: grader undo {entry_id})")
+    save_base(course_dir, kept=settled.kept)
     _refresh_totals(course_dir, "update")
     print("🚀 All databases updated successfully!")
 
@@ -1288,7 +1310,9 @@ def sync_cmd(course: str = None, yes: bool = False):
     att = attendance.plan(target_dir)
     print(f"🔄 Sync: {target_dir.name}")
     att_todo = att is not None and (att.has_changes() or att.empty_past or att.first_run)
+    from src.columns import save_base, settle_removed
     if ch.empty() and not att_todo:
+        save_base(target_dir)
         print("✅ Everything is in sync: every total matches its cells, every column is in config.yaml"
               + (", and the attendance xlsx and csv agree." if att is not None else "."))
         return
@@ -1308,6 +1332,16 @@ def sync_cmd(course: str = None, yes: bool = False):
     dm = cfg.get("data_mapping") or {}
     new_values: dict = {}
     header_fixes: list = []  # (category, column, points)
+    entry = Entry(target_dir, "grader", "sync")
+
+    # You edited config.yaml: the files follow it (src/columns.py tells which side changed).
+    for cat, fname, col, hp, cp in ch.follow_config:
+        print(f"  ✍️  {fname}: '{col}' {_fmt_pts(hp)} → {_fmt_pts(cp)} pts, as you set in config.yaml")
+        header_fixes.append((cat, col, cp))
+    settled = None
+    if ch.removed:
+        print("Taken out of config.yaml but still in a file:")
+        settled = settle_removed(target_dir, _ask, entry, yes=yes)
 
     def items_of(cat):
         if cat not in new_values:
@@ -1365,7 +1399,6 @@ def sync_cmd(course: str = None, yes: bool = False):
 
     att_decisions = _attendance_questions(att, yes) if att_todo else None
 
-    entry = Entry(target_dir, "grader", "sync")
     if att_decisions is not None and att_decisions.apply:
         try:
             for name, n in attendance.apply(att, att_decisions, entry).items():
@@ -1393,6 +1426,7 @@ def sync_cmd(course: str = None, yes: bool = False):
     done = sync_course(target_dir, entry=entry)
     for name, n in done.items():
         print(f"  🔁 {name}: total column refreshed ({n} cell(s))")
+    save_base(target_dir, kept=settled.kept if settled else None)
     entry_id = entry.close(sum(done.values()) or None)
     print("✅ Synced." + (f" Undo with: grader undo {entry_id}" if entry_id else " Nothing needed writing."))
 

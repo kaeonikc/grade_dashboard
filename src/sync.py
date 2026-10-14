@@ -231,15 +231,21 @@ class Changes:
     missing: list = field(default_factory=list)    # (category, column): in data_mapping, not in the file
     no_points: list = field(default_factory=list)  # (category, column): no points in config or header
     stale: dict = field(default_factory=dict)      # file name → total cells that would change
+    removed: list = field(default_factory=list)    # src.columns.Unmapped: taken out of config.yaml, still in a file
+    follow_config: list = field(default_factory=list)  # (category, file, column, header pts, config pts): you
+                                                       # changed the config's points, so the header follows
 
     def empty(self) -> bool:
-        return not (self.unmapped or self.conflicts or self.missing or self.no_points or self.stale)
+        return not (self.unmapped or self.conflicts or self.missing or self.no_points or self.stale or self.removed
+                    or self.follow_config)
 
 
 def find_changes(course) -> Changes:
+    from src.columns import points_side, unmapped
     course = Path(course)
     cfg_map = mapping(raw_config(course))
     ch = Changes()
+    kinds = {(u.category, u.name): u for u in unmapped(course)}
     for cat, path in data_files(course).items():
         doc = read_csv_text(path)
         cols = cfg_map[cat]
@@ -247,9 +253,17 @@ def find_changes(course) -> Changes:
         present = {name: hp for _, name, hp in score_columns(doc)}
         for name, hp in present.items():
             if name not in mapped:
-                ch.unmapped.append((cat, path.name, name, hp))
+                u = kinds.get((cat, name))
+                if u is None or u.kind == "hand":
+                    ch.unmapped.append((cat, path.name, name, hp))
+                elif u.kind == "removed":
+                    ch.removed.append(u)
             elif hp is not None and mapped[name] is not None and abs(hp - mapped[name]) > 1e-9:
-                ch.conflicts.append((cat, path.name, name, hp, mapped[name]))
+                row = (cat, path.name, name, hp, mapped[name])
+                if points_side(course, cat, name, hp, mapped[name]) == "config":
+                    ch.follow_config.append(row)
+                else:
+                    ch.conflicts.append(row)
             elif hp is None and mapped[name] is None:
                 ch.no_points.append((cat, name))
         for name in mapped:
@@ -268,6 +282,12 @@ def warnings_for(ch: Changes) -> list:
     for cat, f, col, hp in ch.unmapped:
         pts = f" ({_fmt_pts(hp)}pts)" if hp is not None else ""
         out.append(f"{f}: column '{col}{pts}' isn't in config.yaml, so it doesn't count: run `grader sync`")
+    for u in ch.removed:
+        out.append(f"{u.path.name}: '{u.header}' was removed from config.yaml but is still in the file: "
+                   f"run `grader update`")
+    for cat, f, col, hp, cp in ch.follow_config:
+        out.append(f"{f}: '{col}' is {_fmt_pts(cp)} pts in config.yaml now (the file still says {_fmt_pts(hp)}): "
+                   f"run `grader update`")
     for cat, f, col, hp, cp in ch.conflicts:
         out.append(f"{f}: '{col}' is {_fmt_pts(hp)} pts in the file but {_fmt_pts(cp)} in config.yaml: "
                    f"run `grader sync`")
