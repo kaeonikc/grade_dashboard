@@ -349,6 +349,9 @@ def get_course_data(course_path, use_weighted=True):
             warnings = warnings + warnings_for(find_changes(path))
         except Exception as e:
             warnings.append(f"Could not check the score files: {e}")
+        # The attendance xlsx/csv were synced by load_config when that needed no question; the rest is reported.
+        from src.attendance import warnings as attendance_warnings
+        warnings = warnings + attendance_warnings(path)
         
         # Prepare list of student grades (summary table)
         data_mapping = config.get("data_mapping", {})
@@ -529,6 +532,15 @@ def _update_xlsx_attendance(xlsx_path, student_id, target_col_orig_name, val_to_
     wb.save(xlsx_path)
     return True
 
+def _sync_attendance(course_path) -> None:
+    """After an attendance edit (csv and xlsx): refresh the csv total and the sync baseline (src/attendance.py)."""
+    try:
+        from src.attendance import auto_sync
+        auto_sync(course_path)
+    except Exception:
+        pass  # the next open of the course (or `grader sync`) does it
+
+
 def _sync_total(course_path, csv_path) -> None:
     """After an edit, put the file's total column right at once (not for attendance files)."""
     try:
@@ -570,7 +582,8 @@ def update_student_score(course_path, student_id, col_name, value):
         target_col_orig_name = None
         
         for file in data_dir.iterdir():
-            if file.is_file() and file.suffix in ['.csv', '.xlsx']:
+            # The attendance xlsx is reached through its csv (which updates both files and keeps them in sync)
+            if file.is_file() and file.suffix in ['.csv', '.xlsx'] and not file.name.endswith("attendance.xlsx"):
                 if file.suffix == '.csv':
                     try:
                         df = pd.read_csv(file, nrows=0)
@@ -628,6 +641,7 @@ def update_student_score(course_path, student_id, col_name, value):
                         msg += " (also updated Excel spreadsheet)"
                     else:
                         msg += " (failed to update Excel spreadsheet)"
+                _sync_attendance(path)
             return {"status": "success", "message": msg}
         else:
             # Update XLSX file using openpyxl to preserve formulas/formats
@@ -736,7 +750,8 @@ def update_column_score(course_path, col_name, value):
         target_col_orig_name = None
 
         for file in data_dir.iterdir():
-            if file.is_file() and file.suffix in ['.csv', '.xlsx']:
+            # The attendance xlsx is reached through its csv (which updates both files and keeps them in sync)
+            if file.is_file() and file.suffix in ['.csv', '.xlsx'] and not file.name.endswith("attendance.xlsx"):
                 if file.suffix == '.csv':
                     try:
                         df = pd.read_csv(file, nrows=0)
@@ -794,6 +809,7 @@ def update_column_score(course_path, col_name, value):
                         msg += " (also updated Excel spreadsheet)"
                     else:
                         msg += " (failed to update Excel spreadsheet)"
+                _sync_attendance(path)
             return {"status": "success", "message": msg}
         else:
             # Update XLSX file using openpyxl to preserve formulas/formats

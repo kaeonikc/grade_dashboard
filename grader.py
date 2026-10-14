@@ -13,7 +13,7 @@ from pathlib import Path
 script_path = Path(__file__).resolve()
 sys.path.insert(0, str(script_path.parent))
 
-from src.data_loader import load_config, load_course_data, sync_attendance_xlsx_to_csv, get_course_file_prefix, backup_csv_before_write
+from src.data_loader import load_config, load_course_data, get_course_file_prefix, backup_csv_before_write
 from src.calculators import calculate_final_grades
 
 _UNSAFE_PATH_CHARS = re.compile(r'[/\\:*?"<>|\x00-\x1f]')
@@ -367,6 +367,33 @@ def save_attendance_excel(excel_path: Path, student_registry: pd.DataFrame, colu
     wb.save(excel_path)
     print(f"✅ Generated and formatted attendance sheet at: {excel_path.name}")
 
+def _attendance_csv(course_dir: Path) -> None:
+    """The csv copy of a freshly made attendance xlsx, and the first sync baseline (src/attendance.py)."""
+    from src.attendance import make_csv
+    try:
+        make_csv(course_dir)
+    except Exception as e:
+        print(f"⚠️ Warning: could not write the attendance csv: {e}")
+
+
+def _attendance_rows(course_dir: Path, att_path: Path, registry: pd.DataFrame, class_cols: list[str]) -> None:
+    """
+    `grader update`: an existing attendance sheet keeps its session columns (the ones you deleted stay deleted);
+    only its rows follow the roster, in the xlsx and the csv alike. Without a sheet, a new one is made.
+    """
+    from src.attendance import align_rows
+    if not att_path.exists():
+        save_attendance_excel(att_path, registry, class_cols)
+        _attendance_csv(course_dir)
+        print(f"✅ Created attendance sheet: {att_path.name}")
+        return
+    done = align_rows(course_dir, class_dates=class_cols)
+    for name, n in done.items():
+        print(f"  ✍️  {name}: rows follow the roster ({n} change(s)); session columns kept")
+    if not done:
+        print(f"✅ {att_path.name}: already follows the roster")
+
+
 def parse_pts(col_name: str) -> tuple[str, float | None]:
     """
     Parses a column name to see if it already contains points notation.
@@ -522,7 +549,7 @@ def init_course(course_name: str, term_name: str, course_id: str, input_file: st
         att_path = data_dir / att_filename
         class_cols = calculate_class_dates('', '', '')
         save_attendance_excel(att_path, clean_df, class_cols)
-        sync_attendance_xlsx_to_csv(att_path, att_path.with_suffix(".csv"))
+        _attendance_csv(base_dir)
         
         print(f"✅ Successfully created course structure at: {base_dir}")
         print(f"✅ Generated student list at: {csv_path}")
@@ -828,8 +855,7 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
                 term_start = existing_config.get('term_start_date', '')
                 
                 class_cols = calculate_class_dates(term_start, weekday, exam_sch)
-                save_attendance_excel(att_path, merged_df, class_cols)
-                sync_attendance_xlsx_to_csv(att_path, att_path.with_suffix(".csv"))
+                _attendance_rows(target_dir, att_path, merged_df, class_cols)
             except Exception as e:
                 print(f"⚠️ Warning: Could not update attendance spreadsheet: {e}")
         else:
@@ -841,8 +867,7 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
                 att_filename = f"{get_course_file_prefix(target_dir)}_attendance.xlsx"
                 att_path = target_dir / "data" / att_filename
                 class_cols = calculate_class_dates('', '', '')
-                save_attendance_excel(att_path, merged_df, class_cols)
-                sync_attendance_xlsx_to_csv(att_path, att_path.with_suffix(".csv"))
+                _attendance_rows(target_dir, att_path, merged_df, class_cols)
             except Exception as e:
                 print(f"⚠️ Warning: Could not create attendance spreadsheet: {e}")
             
@@ -1162,10 +1187,7 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
             term_start = config.get('term_start_date', '')
             
             class_cols = calculate_class_dates(term_start, weekday, exam_sch)
-            from src.history import snapshot
-            snapshot(course_dir, [att_path, att_path.with_suffix(".csv")], "grader", "update-attendance")
-            save_attendance_excel(att_path, student_registry, class_cols)
-            sync_attendance_xlsx_to_csv(att_path, att_path.with_suffix(".csv"))
+            _attendance_rows(course_dir, att_path, student_registry, class_cols)
         except Exception as e:
             print(f"⚠️ Warning: Could not update/align attendance spreadsheet: {e}")
             
@@ -1224,7 +1246,7 @@ def _describe_entry(e: dict) -> str:
 
 
 def _refresh_totals(course_dir, action: str) -> None:
-    """Every score file's total column in step with its cells (src/sync.py); attendance untouched."""
+    """Every score file's total column in step with its cells (src/sync.py); attendance is src/attendance.py."""
     from src.sync import sync_course
     try:
         done = sync_course(course_dir, tool="grader", action=action)
@@ -1244,9 +1266,11 @@ def _ask(question: str, default: str = "") -> str:
 
 def sync_cmd(course: str = None, yes: bool = False):
     """
-    `grader sync`: after editing score CSVs by hand. Refreshes every total column and settles what only you can
-    decide: columns you added (add them to config.yaml?) and points that differ between a header and the config.
-    Attendance files are never touched. Everything it writes is one history entry (grader undo).
+    `grader sync`: after editing score CSVs or the attendance sheet by hand. Refreshes every total column and settles
+    what only you can decide: columns you added (add them to config.yaml?), points that differ between a header and
+    the config, and the attendance xlsx ↔ csv (src/attendance.py: what changed in one file is copied to the other;
+    conflicts, removing a session with marks and empty past sessions are asked). Everything it writes is one
+    history entry (grader undo).
     """
     from src.csvio import read_csv_text, write_csv_text
     from src.history import Entry
@@ -1259,10 +1283,14 @@ def sync_cmd(course: str = None, yes: bool = False):
         print("❌ No course folder here (use --course DIR).")
         sys.exit(1)
     target_dir = target_dir.resolve()
+    from src import attendance
     ch = find_changes(target_dir)
+    att = attendance.plan(target_dir)
     print(f"🔄 Sync: {target_dir.name}")
-    if ch.empty():
-        print("✅ Everything is in sync: every total matches its cells and every column is in config.yaml.")
+    att_todo = att is not None and (att.has_changes() or att.empty_past or att.first_run)
+    if ch.empty() and not att_todo:
+        print("✅ Everything is in sync: every total matches its cells, every column is in config.yaml"
+              + (", and the attendance xlsx and csv agree." if att is not None else "."))
         return
 
     if ch.stale:
@@ -1335,7 +1363,15 @@ def sync_cmd(course: str = None, yes: bool = False):
         else:
             print(f"  ⏭  {col}: left as it is")
 
+    att_decisions = _attendance_questions(att, yes) if att_todo else None
+
     entry = Entry(target_dir, "grader", "sync")
+    if att_decisions is not None and att_decisions.apply:
+        try:
+            for name, n in attendance.apply(att, att_decisions, entry).items():
+                print(f"  ✍️  {name}: attendance synced")
+        except attendance.Locked as e:
+            print(f"  ❌ attendance not synced: {e}")
     if new_values:
         cfg_path = config_file(target_dir)
         entry.capture(cfg_path)
@@ -1359,6 +1395,48 @@ def sync_cmd(course: str = None, yes: bool = False):
         print(f"  🔁 {name}: total column refreshed ({n} cell(s))")
     entry_id = entry.close(sum(done.values()) or None)
     print("✅ Synced." + (f" Undo with: grader undo {entry_id}" if entry_id else " Nothing needed writing."))
+
+
+def _attendance_questions(att, yes: bool):
+    """The attendance part of `grader sync`: preview, then the questions (SPEC.md decisions 1-3, 7, 8)."""
+    from src.attendance import Decisions
+    print(f"Attendance ({att.xlsx.name} ↔ {att.csv.name}):")
+    for line in _att_lines(att):
+        print(line)
+    d = Decisions()
+    if att.is_locked:
+        print(f"  ❌ {att.xlsx.name} is open in Excel: close it, then run `grader sync` again.")
+        d.apply = False
+        return d
+    for r in att.marked:
+        other = "csv" if r.deleted_in == "xlsx" else "xlsx"
+        ans = "n" if yes else _ask(f"  Session '{r.session}' is gone from the {r.deleted_in} but has {r.marks} mark(s) "
+                                   f"in the {other}. Remove it from the {other} too? [y/N]", "n").lower()
+        if ans not in ("y", "yes"):
+            d.keep.add(r.session)
+            print(f"  ↩️  '{r.session}' kept: put back into the {r.deleted_in}")
+    for sid, f, x, c, b in att.conflicts:
+        ans = "s" if yes else _ask(f"  {sid} {f}: xlsx {x or '—'} / csv {c or '—'}. Keep the xlsx's [x] / the csv's [c] "
+                                   f"/ skip [s]?", "s").lower()
+        if ans.startswith(("x", "c")):
+            d.choose[(sid, f)] = ans[0]
+        else:
+            print(f"  ⏭  {sid} {f}: left different (asked again next time)")
+    if att.empty_past:
+        print(f"  Sessions before today with no mark for anyone: {', '.join(att.empty_past)}")
+        ans = "n" if yes else _ask("  Remove them from both files (the attendance maximum drops to the sessions "
+                                   "left)? [y/N]", "n").lower()
+        d.drop_empty = ans in ("y", "yes")
+    if att.first_run and (att.copies or att.removals or att.additions):
+        d.apply = yes or _ask("  Apply these attendance changes (first sync)? [y/N]", "n").lower() in ("y", "yes")
+        if not d.apply:
+            print("  ⏭  attendance not synced")
+    return d
+
+
+def _att_lines(att):
+    from src.attendance import describe
+    return describe(att)
 
 
 def history_course(course: str = None, limit: int = 20):
@@ -1622,7 +1700,7 @@ grade_boundaries:
     # merge those values in and apply the standard styling/validation/formulas.
     pd.DataFrame(att_rows).to_excel(att_path, index=False)
     save_attendance_excel(att_path, student_registry, class_cols)
-    sync_attendance_xlsx_to_csv(att_path, att_path.with_suffix(".csv"))
+    _attendance_csv(base_dir)
 
     print(f"✅ Successfully generated mock course at: {base_dir}")
     print(f"✅ {num_students} students, {num_sessions} attendance sessions.")
@@ -1663,11 +1741,13 @@ if __name__ == "__main__":
     parser_undo.add_argument("entry", nargs="?", help="History entry ID (see: grader history)")
     parser_undo.add_argument("--course", help="Course folder (default: the one you're in, or the most recently changed)")
     parser_undo.add_argument("-y", "--yes", action="store_true", help="Don't ask for confirmation")
-    parser_sync = subparsers.add_parser("sync", help="After editing score CSVs by hand: refresh the total columns, "
-                                        "and add hand-made columns to config.yaml (asks first)")
+    parser_sync = subparsers.add_parser("sync", help="After editing score CSVs or the attendance sheet by hand: "
+                                        "refresh the total columns, add hand-made columns to config.yaml, and keep "
+                                        "the attendance xlsx and csv in step (asks first)")
     parser_sync.add_argument("--course", help="Course folder (default: the one you're in, or the most recently changed)")
-    parser_sync.add_argument("-y", "--yes", action="store_true", help="Add every new column without asking "
-                                                                         "(points conflicts are left alone)")
+    parser_sync.add_argument("-y", "--yes", action="store_true", help="Add every new column and copy one-sided "
+                                        "attendance changes without asking (conflicts, removing a session with "
+                                        "marks and empty sessions are left alone)")
     parser_history = subparsers.add_parser("history", help="List the saved versions in a course's history/")
     parser_history.add_argument("--course", help="Course folder (default: the one you're in, or the most recently changed)")
     parser_history.add_argument("-n", type=int, default=20, help="How many entries to show (default 20)")

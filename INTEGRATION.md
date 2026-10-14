@@ -22,7 +22,7 @@ Contract 2 (2026-10-12) adds three things:
 | Roster `course_info/<prefix>_student_info.csv` (`Student ID,Name,Class Group`) | grade_dashboard (`grader init/update -i repclasslist.xls`) | read it; never write it |
 | Config `course_info/<prefix>_config.yaml` (`data_mapping`, `weights`, …) | grade_dashboard (you, `grader sync`) | read it; **never write it** |
 | Score files `data/<prefix>_<category>.csv` | grade_dashboard (`grader mkdb/update`) | change the cells of its mapped columns; **add** its own missing part columns; fix their header points; recompute that file's `total` |
-| Attendance `data/<prefix>_attendance.xlsx/.csv` | grade_dashboard | never touch them (nor does the total sync) |
+| Attendance `data/<prefix>_attendance.xlsx/.csv` | grade_dashboard (`grader sync` keeps the two in step; the score-total rule doesn't apply) | never touch them |
 | Exam folder, `grading/results.csv` | exam_projects | — (grade_dashboard doesn't read them) |
 
 exam never adds or removes rows, never changes columns other than its own, and never writes `ขส` over a score.

@@ -230,10 +230,12 @@ Columns in a file but not in config.yaml (they don't count yet):
 - **New columns:** asks before adding each one to `data_mapping`. If the header has no `(Npts)`, it asks for the full
   score first.
 - **Points that disagree** between a header and the config: asks which to keep (the file's or the config's).
-- **Totals:** refreshes every stale `total` cell. Attendance files are never touched.
+- **Totals:** refreshes every stale `total` cell.
+- **Attendance:** keeps the attendance xlsx and csv in step (see [Attendance](#6-attendance)).
 
-It's all one history entry, so `grader undo` reverses it. `--yes` adds every new column without asking, but leaves
-points conflicts alone.
+It's all one history entry, so `grader undo` reverses it. `--yes` adds every new column and copies one-sided
+attendance changes without asking. It leaves alone the points conflicts, the attendance conflicts, removing a session
+that has marks, and removing empty sessions.
 
 ---
 
@@ -254,11 +256,43 @@ Enter one of these codes:
 | *(empty)* | not recorded | 0 |
 
 The attendance score is the sum of the codes ÷ the number of date columns. Until the term ends, the empty future
-dates pull the attendance percentage down; that's expected.
+dates pull the attendance percentage down; that's expected. The `total (Npts)` column of both files shows the same
+sum, and N is the number of date columns.
 
-You can record attendance in Excel (the dashboard re-reads the `.xlsx` whenever it's newer than the `.csv`), or in
-grade-tui. In grade-tui, `Enter` on a cell opens a P/L/A/X picker, and `f` fills a whole date. grade-tui updates both
-files.
+You can record attendance in grade-tui, in Excel/Numbers (usually the `.xlsx`), or in the `.csv`. In grade-tui,
+`Enter` on a cell opens a P/L/A/X picker, and `f` fills a whole date. grade-tui updates both files.
+
+### Keeping the xlsx and csv in step
+
+```bash
+grader sync          # inside the course folder
+```
+
+Each sync remembers what the two files held (`history/attendance_sync.json`). The next sync compares each file with
+that:
+
+- **Changed in one file only** (a code, a name, a date column added or deleted): copied to the other file.
+- **Changed differently in both:** shows both values and asks: keep the xlsx's `[x]`, the csv's `[c]`, or skip `[s]`
+  (both stay different, and it asks again next time).
+- **A date column deleted in one file that still has marks in the other:** asks before removing it. N (the default)
+  puts it back in the file you deleted it from.
+- **Dates before today that nobody has a mark in** (a holiday, or the weeks after you stopped recording): offered for
+  removal, "Remove them from both files? [y/N]". Future dates are never offered.
+- **Students** follow the roster: a roster student missing from a file gets an empty row. A row that isn't on the
+  roster is listed and left alone.
+- The **first** sync of a course has nothing to compare with: where the files differ, the newer file's values are
+  proposed, and nothing is written until you answer y.
+
+The xlsx is edited in place. Only the cells that differ change. Deleted columns go, the `total (Npts)` header and
+each row's `COUNTIF` range follow, and so do the column widths, the P/A/L/X dropdown and the colours. Your own
+formatting stays. Close the file in Excel first: while Excel has it open (`~$…xlsx`), nothing is written.
+
+Opening a course in grade-tui does the same sync on its own when nothing needs a question. Otherwise it shows a
+warning: "attendance: … run `grader sync`".
+
+**End of term.** Run `grader sync` and answer y to remove the empty dates, or delete the columns yourself in the xlsx
+(or the csv) and then run `grader sync`. Either way both files end up with the same 12–13 dates, and the attendance
+score is out of those. `grader update` keeps your columns: it never brings deleted dates back.
 
 ---
 
@@ -413,8 +447,9 @@ grader update -i repclasslist_IndustPhysics.xls     # from the term folder or in
 grader update                                       # inside the course folder: add the new students to the score files
 ```
 
-New students are added. Students who are no longer on the list stay in the roster: nothing is deleted
-automatically.
+New students are added, to the attendance sheet too (both files). Students who are no longer on the list stay
+in the roster: nothing is deleted automatically. The attendance sheet keeps its date columns. Only placeholder
+columns `a1`…`a15` are renamed to dates, once `term_start_date` is set.
 
 **New score columns or categories.** Edit `data_mapping`, then run `grader update` inside the course folder.
 
@@ -438,6 +473,8 @@ automatically.
 | `grader init -i` can't read the .xls | Install `xlrd` (`pip install xlrd`). The class list must be the original `.xls`, not a `.csv`. |
 | A `total` doesn't match the scores | You edited the CSV by hand. Run `grader sync` (or open grade-tui). |
 | A column you added doesn't count | It isn't in `data_mapping` yet. Run `grader sync` and answer y. |
+| The attendance xlsx and csv differ, or grade-tui warns "attendance: … run `grader sync`" | Run `grader sync` in the course folder and answer its questions. |
+| "… is open in Excel" | Close the attendance xlsx in Excel, then run `grader sync` again. |
 | Something got overwritten | `grader history`, then `grader undo <ID>`. |
 
 ---
@@ -451,7 +488,7 @@ automatically.
 | `grader mkdb [config.yaml]` | create the missing score files from `data_mapping` |
 | `grader update -i <class list.xls>` | merge a newer class list into the roster |
 | `grader update [config.yaml] [--purge-empty-orphans]` | align the score files with the config |
-| `grader sync [--course DIR] [--yes]` | after editing CSVs by hand: refresh totals, add your new columns to the config (asks) |
+| `grader sync [--course DIR] [--yes]` | after editing CSVs or the attendance sheet by hand: refresh totals, add your new columns to the config, sync the attendance xlsx ↔ csv (asks) |
 | `grader history [--course DIR] [-n N]` | list saved versions |
 | `grader undo [ID] [--course DIR] [--yes]` | restore a saved version |
 | `grader mock` | create the practice course |

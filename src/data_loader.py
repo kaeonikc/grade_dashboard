@@ -73,36 +73,13 @@ def parse_config_col(col) -> tuple[str, float | None]:
         col_str = str(col).strip()
         return parse_pts(col_str)
 
-def sync_attendance_xlsx_to_csv(xlsx_path: Path, csv_path: Path):
-    """
-    Reads the attendance Excel file and saves it as a CSV file.
-    Ensures the CSV acts as the database for calculations/TUI.
-    """
-    try:
-        df = pd.read_excel(xlsx_path)
-        df.columns = df.columns.astype(str).str.strip()
-        # Clean Student ID and Name columns
-        if 'Student ID' in df.columns:
-            df['Student ID'] = df['Student ID'].astype(str).str.strip()
-        if 'Name' in df.columns:
-            df['Name'] = df['Name'].astype(str).str.strip()
-            
-        csv_path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(csv_path, index=False)
-        print(f"✅ Synced attendance database CSV at: {csv_path.name}", file=sys.stderr)
-    except Exception as e:
-        print(f"⚠️ Error syncing attendance XLSX to CSV: {e}", file=sys.stderr)
-
-def check_and_sync_attendance(course_path: Path):
-    data_dir = course_path / "data"
-    if not data_dir.exists() or not data_dir.is_dir():
-        return
-    xlsx_files = [f for f in data_dir.iterdir() if f.is_file() and f.name.endswith("attendance.xlsx")]
-    for xlsx_file in xlsx_files:
-        csv_file = xlsx_file.with_suffix(".csv")
-        # Sync if CSV doesn't exist or Excel is newer
-        if not csv_file.exists() or xlsx_file.stat().st_mtime > csv_file.stat().st_mtime:
-            sync_attendance_xlsx_to_csv(xlsx_file, csv_file)
+def check_and_sync_attendance(course_path: Path) -> list:
+    """Keeps the attendance xlsx and csv in step when that needs no question (src/attendance.py); returns warnings."""
+    from src.attendance import auto_sync
+    warns = auto_sync(course_path)
+    for w in warns:
+        print(f"⚠️ {w}", file=sys.stderr)
+    return warns
 
 def load_config(course_path: str) -> dict:
     """Reads the <term>_<course_id>_config.yaml under course_info/ for a given course."""
