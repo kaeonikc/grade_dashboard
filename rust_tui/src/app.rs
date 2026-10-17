@@ -46,7 +46,7 @@ pub struct App {
     pub selected_course_path: String,
     pub course_data: Option<CourseData>,
     pub active_tab: usize, // 0: Summary, 1: Raw Details, 2: Analytics, 3: Roundup
-    pub use_weighted: bool,
+    pub show_left_panel: bool, // [s]: hide/show the left panels on every tab
     
     // Global UI state
     pub loading: bool,
@@ -126,7 +126,7 @@ impl App {
             selected_course_path: String::new(),
             course_data: None,
             active_tab: 0,
-            use_weighted: true,
+            show_left_panel: true,
             loading: false,
             loading_msg: String::new(),
             error: None,
@@ -243,13 +243,12 @@ impl App {
             return;
         }
         self.loading = true;
-        self.loading_msg = format!("Loading course data (weighted: {})...", self.use_weighted);
+        self.loading_msg = "Loading course data...".to_string();
         self.error = None;
         let path = self.selected_course_path.clone();
-        let use_weighted = self.use_weighted;
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let res = crate::bridge::get_course_data(&path, use_weighted).await;
+            let res = crate::bridge::get_course_data(&path).await;
             let event = AppEvent::CourseDataLoaded(res);
             let _ = tx.send(event).await;
         });
@@ -362,10 +361,9 @@ impl App {
         self.loading = true;
         self.loading_msg = "Exporting final grades & copy-friendly scores...".to_string();
         let path = self.selected_course_path.clone();
-        let use_weighted = self.use_weighted;
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let res = crate::bridge::export_reports(&path, use_weighted).await;
+            let res = crate::bridge::export_reports(&path).await;
             let event = AppEvent::ReportsExported(res.map(|r| r.message));
             let _ = tx.send(event).await;
         });
@@ -848,6 +846,16 @@ impl App {
         }
     }
 
+    /// Inner width of the Raw Details table: the full terminal for the student popup or when the
+    /// left panel is hidden, otherwise the terminal minus the left panel (33) — both minus 2 borders.
+    pub fn raw_table_inner_width(&self) -> usize {
+        if self.raw_selected_student.is_some() || !self.show_left_panel {
+            (self.width as usize).saturating_sub(2)
+        } else {
+            (self.width as usize).saturating_sub(35)
+        }
+    }
+
     fn adjust_scroll_col(&mut self) {
         if self.active_tab == 1 {
             if self.cursor_col < 2 {
@@ -866,12 +874,7 @@ impl App {
             let is_attendance = self.raw_selected_category.as_deref()
                 .map(|c| c.to_lowercase().contains("attendance") || c.to_lowercase().contains("att"))
                 .unwrap_or(false);
-            // popup = full-width; category view = terminal minus left panel (33) + 2 borders
-            let right_inner = if self.raw_selected_student.is_some() {
-                (self.width as usize).saturating_sub(2)
-            } else {
-                (self.width as usize).saturating_sub(35)
-            };
+            let right_inner = self.raw_table_inner_width();
             // Frozen cols: # (2) + ID (9) + Name (≈32) + sep (1) + 4 spacing gaps = 48
             let scrollable_width = right_inner.saturating_sub(48);
             // col width: sub_col_width(2) + column_spacing(1)
@@ -1197,10 +1200,12 @@ impl App {
                                 self.attendance_index = 4; // Clear
                                 self.save_attendance_score();
                                 self.editing_attendance = false;
-                            } else if matches!(key.code, crossterm::event::KeyCode::Char('c') | crossterm::event::KeyCode::Char('C')) {
-                                self.use_weighted = !self.use_weighted;
-                                self.load_course_data();
                             }
+                        }
+                    }
+                    crossterm::event::KeyCode::Char('s') | crossterm::event::KeyCode::Char('S') => {
+                        if self.state == AppState::Dashboard && self.raw_selected_student.is_none() {
+                            self.show_left_panel = !self.show_left_panel;
                         }
                     }
                     crossterm::event::KeyCode::Char('e') | crossterm::event::KeyCode::Char('E') => {
@@ -1463,5 +1468,69 @@ impl App {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn dashboard_app() -> App {
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        let mut app = App::new(tx);
+        app.state = AppState::Dashboard;
+        app
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.update(AppEvent::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+    }
+
+    #[test]
+    fn s_toggles_left_panel_and_survives_tab_switches() {
+        let mut app = dashboard_app();
+        assert!(app.show_left_panel);
+        press(&mut app, KeyCode::Char('s'));
+        assert!(!app.show_left_panel);
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::BackTab);
+        assert!(!app.show_left_panel);
+        press(&mut app, KeyCode::Char('S'));
+        assert!(app.show_left_panel);
+    }
+
+    #[test]
+    fn s_is_ignored_in_student_popup_and_course_select() {
+        let mut app = dashboard_app();
+        app.raw_selected_student = Some(0);
+        press(&mut app, KeyCode::Char('s'));
+        assert!(app.show_left_panel);
+
+        let mut app = dashboard_app();
+        app.state = AppState::CourseSelect;
+        press(&mut app, KeyCode::Char('s'));
+        assert!(app.show_left_panel);
+    }
+
+    #[tokio::test]
+    async fn c_off_an_attendance_cell_does_nothing() {
+        let mut app = dashboard_app();
+        app.selected_course_path = "/nonexistent/course".to_string();
+        press(&mut app, KeyCode::Char('c'));
+        assert!(!app.loading, "c must no longer reload the course");
+    }
+
+    #[test]
+    fn hidden_panel_gives_raw_table_the_full_width() {
+        let mut app = dashboard_app();
+        app.width = 120;
+        assert_eq!(app.raw_table_inner_width(), 85);
+        app.show_left_panel = false;
+        assert_eq!(app.raw_table_inner_width(), 118);
+        app.raw_selected_student = Some(0);
+        app.show_left_panel = true;
+        assert_eq!(app.raw_table_inner_width(), 118);
     }
 }

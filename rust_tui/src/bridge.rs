@@ -59,14 +59,12 @@ pub async fn get_courses() -> Result<CourseListResponse, String> {
     Ok(res)
 }
 
-pub async fn get_course_data(course_path: &str, use_weighted: bool) -> Result<CourseData, String> {
+pub async fn get_course_data(course_path: &str) -> Result<CourseData, String> {
     let api_path = resolve_tui_api_path();
-    let weighted_str = if use_weighted { "true" } else { "false" };
     let output = Command::new("python3")
         .arg(&api_path)
         .arg("get-course-data")
         .arg(course_path)
-        .arg(weighted_str)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -157,14 +155,12 @@ pub async fn update_config(course_path: &str, weights: &str, boundaries: &str) -
     Ok(res)
 }
 
-pub async fn export_reports(course_path: &str, use_weighted: bool) -> Result<GenericResponse, String> {
+pub async fn export_reports(course_path: &str) -> Result<GenericResponse, String> {
     let api_path = resolve_tui_api_path();
-    let weighted_str = if use_weighted { "true" } else { "false" };
     let output = Command::new("python3")
         .arg(&api_path)
         .arg("export-reports")
         .arg(course_path)
-        .arg(weighted_str)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()

@@ -67,10 +67,9 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
             if let Some(ref data) = app.course_data {
                 (
                     format!(
-                        " ⚡  {}  |  Term: {}  |  Mode: {}{} ",
+                        " ⚡  {}  |  Term: {}{} ",
                         data.course_name.to_uppercase(),
                         data.term.to_uppercase(),
-                        if app.use_weighted { "WEIGHTED PERCENTAGES" } else { "RAW SCORES" },
                         if data.absences.is_empty() {
                             String::new()
                         } else {
@@ -436,24 +435,35 @@ fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(table, area, &mut table_state);
 }
 
-fn draw_summary_tab_container(f: &mut Frame, app: &mut App, area: Rect) {
+/// Splits a tab area into (left panel, main view). The left panel is None when hidden with [s].
+fn split_left(app: &App, area: Rect, left: Constraint) -> (Option<Rect>, Rect) {
+    if !app.show_left_panel {
+        return (None, area);
+    }
     let h_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(33), Constraint::Min(40)])
+        .constraints([left, Constraint::Min(40)])
         .split(area);
+    (Some(h_chunks[0]), h_chunks[1])
+}
 
-    let left_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(h_chunks[0]);
+fn draw_summary_tab_container(f: &mut Frame, app: &mut App, area: Rect) {
+    let (left, main) = split_left(app, area, Constraint::Length(33));
 
-    draw_summary_left_panel(f, app, left_chunks[0]);
-    draw_summary_status_panel(f, app, left_chunks[1]);
+    if let Some(left) = left {
+        let left_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(left);
+
+        draw_summary_left_panel(f, app, left_chunks[0]);
+        draw_summary_status_panel(f, app, left_chunks[1]);
+    }
 
     if app.summary_category_index == 0 {
-        draw_summary_tab(f, app, h_chunks[1]);
+        draw_summary_tab(f, app, main);
     } else {
-        draw_submission_table(f, app, h_chunks[1]);
+        draw_submission_table(f, app, main);
     }
 }
 
@@ -970,19 +980,18 @@ fn draw_raw_details_tab(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let h_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(33), Constraint::Min(40)])
-        .split(area);
+    let (left, main) = split_left(app, area, Constraint::Length(33));
 
-    let left_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(h_chunks[0]);
+    if let Some(left) = left {
+        let left_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(left);
 
-    draw_raw_left_panel(f, app, left_chunks[0]);
-    draw_student_info_panel(f, app, left_chunks[1]);
-    draw_sub_column_view(f, app, h_chunks[1]);
+        draw_raw_left_panel(f, app, left_chunks[0]);
+        draw_student_info_panel(f, app, left_chunks[1]);
+    }
+    draw_sub_column_view(f, app, main);
 }
 
 /// "35.0 · 78%": a raw category total and its share of the category's maximum.
@@ -1465,29 +1474,28 @@ fn draw_analytics_tab(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let h_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(33), Constraint::Min(40)])
-        .split(area);
+    let (left, main) = split_left(app, area, Constraint::Length(33));
 
-    let n_bounds = app.course_data.as_ref()
-        .map(|d| d.grade_boundaries.len() + 1) // +1 for the synthetic "F" row
-        .unwrap_or(8) as u16;
-    let boundaries_height = n_bounds + 5; // borders(2) + blank + header + blank
-    let left_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(10), Constraint::Length(boundaries_height)])
-        .split(h_chunks[0]);
+    if let Some(left) = left {
+        let n_bounds = app.course_data.as_ref()
+            .map(|d| d.grade_boundaries.len() + 1) // +1 for the synthetic "F" row
+            .unwrap_or(8) as u16;
+        let boundaries_height = n_bounds + 5; // borders(2) + blank + header + blank
+        let left_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(10), Constraint::Length(boundaries_height)])
+            .split(left);
 
-    draw_analytics_left_panel(f, app, left_chunks[0]);
-    draw_analytics_boundaries_panel(f, app, left_chunks[1]);
+        draw_analytics_left_panel(f, app, left_chunks[0]);
+        draw_analytics_boundaries_panel(f, app, left_chunks[1]);
+    }
 
     match app.analytics_category_index {
-        0 => draw_analytics_summary(f, app, h_chunks[1]),
-        1 => draw_analytics_progress(f, app, h_chunks[1]),
-        2 => draw_analytics_item_analysis(f, app, h_chunks[1]),
-        3 => draw_analytics_correlation(f, app, h_chunks[1]),
-        4 => draw_analytics_at_risk(f, app, h_chunks[1]),
+        0 => draw_analytics_summary(f, app, main),
+        1 => draw_analytics_progress(f, app, main),
+        2 => draw_analytics_item_analysis(f, app, main),
+        3 => draw_analytics_correlation(f, app, main),
+        4 => draw_analytics_at_risk(f, app, main),
         _ => {}
     }
 }
@@ -2186,10 +2194,7 @@ fn draw_roundup_tab(f: &mut Frame, app: &mut App, area: Rect) {
         None => return,
     };
 
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
-        .split(area);
+    let (left, main) = split_left(app, area, Constraint::Percentage(35));
 
     // Left panel: roundup distribution table
     let summary = &data.roundup_summary;
@@ -2214,7 +2219,9 @@ fn draw_roundup_tab(f: &mut Frame, app: &mut App, area: Rect) {
         .border_style(Style::default().fg(theme.border));
     let left_p = Paragraph::new(left_lines)
         .block(left_block);
-    f.render_widget(left_p, chunks[0]);
+    if let Some(left) = left {
+        f.render_widget(left_p, left);
+    }
 
     // Right panel: Table of students whose grades improved
     let right_block = Block::default()
@@ -2273,7 +2280,7 @@ fn draw_roundup_tab(f: &mut Frame, app: &mut App, area: Rect) {
         .block(right_block)
         .column_spacing(1);
 
-    f.render_widget(table, chunks[1]);
+    f.render_widget(table, main);
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
@@ -2368,8 +2375,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                         Span::raw("Next Tab  "),
                         Span::styled(" [Esc] ", Style::default().fg(theme.key_accent).bold()),
                         Span::raw("Courses Menu  "),
-                        Span::styled(" [c] ", Style::default().fg(theme.key_accent).bold()),
-                        Span::raw("Toggle Weighted  "),
+                        Span::styled(" [s] ", Style::default().fg(theme.key_accent).bold()),
+                        Span::raw(if app.show_left_panel { "Hide Panel  " } else { "Show Panel  " }),
                         Span::styled(" [e] ", Style::default().fg(theme.key_accent).bold()),
                         Span::raw("Export CSV  "),
                     ];

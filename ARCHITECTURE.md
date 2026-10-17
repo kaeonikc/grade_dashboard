@@ -176,7 +176,7 @@ rust_tui/src/app.rs  App::update()
         │         ▼
         │   bridge::get_course_data()
         │         │  tokio::process::Command
-        │         │  "python3 src/tui_api.py get-course-data <path> <weighted>"
+        │         │  "python3 src/tui_api.py get-course-data <path>"
         │         │
         │         ▼  stdout JSON
         │   serde_json → types::CourseData
@@ -198,7 +198,7 @@ rust_tui/src/app.rs  App::update()
         │         └─  same as above but null <weights_json> and <boundaries_json>
         │
         └─ 'e' key  →  bridge::export_reports()
-                  │  "python3 src/tui_api.py export-reports <path> <weighted>"
+                  │  "python3 src/tui_api.py export-reports <path>"
                   └─  writes courses/<name>/reports/*.csv
                               │
                               ▼
@@ -225,10 +225,10 @@ rust_tui/src/app.rs  App::update()
 | Subcommand | Args | Response keys |
 |---|---|---|
 | `get-courses` | — | `status`, `courses[]` (`name`, `path`) |
-| `get-course-data` | `<path> <weighted>` | `status`, `course_id`, `weights`, `grade_boundaries`, `student_grades[]`, `raw_scores[]`, `grade_distribution`, `roundup_summary` |
+| `get-course-data` | `<path> [weighted]` (default true) | `status`, `course_id`, `weights`, `grade_boundaries`, `student_grades[]`, `raw_scores[]`, `grade_distribution`, `roundup_summary` |
 | `update-score` | `<path> <student_id> <col> <value>` | `status`, `message` |
 | `update-config` | `<path> <weights_json\|null> <boundaries_json\|null>` | `status`, `message` |
-| `export-reports` | `<path> <weighted>` | `status`, `message` |
+| `export-reports` | `<path> [weighted]` (default true) | `status`, `message` |
 
 ### Rust TUI key bindings
 
@@ -239,7 +239,7 @@ rust_tui/src/app.rs  App::update()
 | `Enter` | CourseSelect | Load selected course |
 | `Enter` | Dashboard Raw Details | Open cell editor |
 | `Tab / Shift+Tab` | Dashboard | Cycle tabs (Summary / Raw Details / Distribution / Roundup) |
-| `c` | Dashboard | Toggle weighted ↔ raw mode |
+| `s` | Dashboard | Hide / show the left panels (all tabs) |
 | `w` | Dashboard | Open weight editor overlay |
 | `b` | Dashboard | Open grade boundary editor overlay |
 | `e` | Dashboard | Export reports |

@@ -353,7 +353,7 @@ Pick a course with `▲/▼` and `Enter`. The dashboard has four tabs; `Tab` and
 | **3 Analytics** | *Overview* (mean, median, SD, pass rate, histogram, box plot) · *Progress Over Time* (class average per item) · *Item Analysis* (difficulty and discrimination per score column) · *Correlation Matrix* (between categories) · *At-Risk Students* (failing or below the lower quartile) |
 | **4 Roundup** | Which students' grades changed because each component is rounded up (see [section 9](#9-how-the-final-score-is-calculated)). |
 
-The header shows the course, the term, the mode (weighted or raw) and the number of `ขส` cells. A yellow
+The header shows the course, the term and the number of `ขส` cells. A yellow
 **warnings** bar at the bottom lists problems in the data: scores over the maximum, text in score cells, invalid
 attendance codes, columns that aren't in the config yet, and points that differ between a file and the config (all
 settled by `grader sync`).
@@ -370,7 +370,7 @@ settled by `grader sync`).
 | `[` / `]` | Raw Details, Analytics | previous / next category |
 | `Enter` | Raw Details cell | edit the score (`Enter` saves, `Esc` cancels); attendance opens a P/L/A/X picker |
 | `f` | Raw Details | fill the whole column with one value |
-| `c` | dashboard | switch between weighted scores and raw percentages |
+| `s` | dashboard | hide / show the left panels on every tab, giving the table the full width |
 | `w` / `b` | dashboard | edit weights / grade boundaries (saved to config.yaml) |
 | `e` | dashboard | export the reports (see [section 10](#10-submitting-grades)) |
 | `Esc` | dashboard | back to the course list |
@@ -393,8 +393,6 @@ when a total actually changed, and only the total cells. Every write it makes, e
    number (22.5 → 23). This is deliberate. The Roundup tab shows whose grade this changed.
 5. **Final Score** = Coursework + Midterm + Final. **Grade:** the highest boundary the score reaches; below the
    lowest one is F.
-
-Press `c` to see raw percentages instead of weighted points.
 
 ---
 
