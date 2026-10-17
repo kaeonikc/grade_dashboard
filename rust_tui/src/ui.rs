@@ -15,13 +15,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let bg_block = Block::default().style(Style::default().bg(theme.bg));
     f.render_widget(bg_block, f.area());
 
+    // The legend wraps onto as many rows as the terminal width needs
+    let (footer_line, footer_kind) = footer_line(app);
+    let footer_rows = wrap_legend(footer_line.spans, f.area().width);
+
     // Master Layout: Header + Content + Footer (Legend)
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Header
             Constraint::Min(5),    // Content Workspace
-            Constraint::Length(1), // Footer (Legend)
+            Constraint::Length(footer_rows.len().max(1) as u16), // Footer (Legend)
         ])
         .split(f.area());
 
@@ -35,7 +39,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     // 3. Draw Footer (Legend)
-    draw_footer(f, app, chunks[2]);
+    draw_footer(f, app, chunks[2], footer_rows, footer_kind);
 
     // 4. Overlays
     if app.loading {
@@ -2283,7 +2287,8 @@ fn draw_roundup_tab(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(table, main);
 }
 
-fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+/// The footer's content as one line, plus its kind: 0 key legend, 1 info, 2 error.
+fn footer_line(app: &App) -> (Line<'static>, u8) {
     let theme = app.theme;
     
     // Bottom status line showing helpful messages or key legends
@@ -2471,14 +2476,76 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         };
         (Line::from(spans), 0)
     };
+    (status_line, is_special)
+}
 
+/// Packs footer spans into rows no wider than `width`. Each `[key]` span starts an item that keeps its
+/// label with it; an item too wide for one row (a long info or error message) breaks between words.
+fn wrap_legend<'a>(spans: Vec<Span<'a>>, width: u16) -> Vec<Line<'a>> {
+    let width = width as usize;
+    let trimmed_width = |item: &[Span]| -> usize {
+        let n = item.len();
+        item[..n - 1].iter().map(|s| s.width()).sum::<usize>()
+            + UnicodeWidthStr::width(item[n - 1].content.trim_end())
+    };
+
+    let mut items: Vec<Vec<Span<'a>>> = Vec::new();
+    for span in spans {
+        match items.last_mut() {
+            Some(item) if !span.content.starts_with(" [") => item.push(span),
+            _ => items.push(vec![span]),
+        }
+    }
+    let items: Vec<Vec<Span<'a>>> = items
+        .into_iter()
+        .flat_map(|item| {
+            if trimmed_width(&item) <= width {
+                vec![item]
+            } else {
+                item.into_iter()
+                    .flat_map(|s| {
+                        s.content
+                            .split_inclusive(' ')
+                            .map(|w| vec![Span::styled(w.to_string(), s.style)])
+                            .collect::<Vec<_>>()
+                    })
+                    .collect()
+            }
+        })
+        .collect();
+
+    let mut rows: Vec<Vec<Span<'a>>> = Vec::new();
+    let mut row_width = 0;
+    for item in items {
+        let fits = row_width + trimmed_width(&item) <= width;
+        if rows.is_empty() || (!fits && row_width > 0) {
+            rows.push(Vec::new());
+            row_width = 0;
+        }
+        row_width += item.iter().map(|s| s.width()).sum::<usize>();
+        rows.last_mut().unwrap().extend(item);
+    }
+
+    rows.into_iter()
+        .map(|mut row| {
+            if let Some(last) = row.last_mut() {
+                let trimmed = last.content.trim_end().to_string();
+                last.content = trimmed.into();
+            }
+            Line::from(row)
+        })
+        .collect()
+}
+
+fn draw_footer(f: &mut Frame, app: &App, area: Rect, rows: Vec<Line>, is_special: u8) {
+    let theme = app.theme;
     let style = match is_special {
         1 => Style::default().bg(theme.bg),
         2 => Style::default().bg(theme.bg),
         _ => Style::default().fg(theme.fg).bg(theme.panel_bg), // Monokai dark grey status bar (#1c1a1d)
     };
     
-    let paragraph = Paragraph::new(status_line)
+    let paragraph = Paragraph::new(rows)
         .style(style)
         .alignment(Alignment::Center);
 
@@ -3066,5 +3133,86 @@ fn grade_color_for(grade: &str, theme: &crate::style::Theme) -> ratatui::style::
         "D+"                    => theme.grade_dplus,
         g if g.starts_with("D") => theme.grade_d,
         _                       => theme.grade_f,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn legend() -> Vec<Span<'static>> {
+        vec![
+            Span::raw(" [Tab] "), Span::raw("Next Tab  "),       // 17
+            Span::raw(" [Esc] "), Span::raw("Courses Menu  "),   // 21
+            Span::raw(" [s] "), Span::raw("Hide Panel  "),       // 17
+            Span::raw(" [e] "), Span::raw("Export CSV  "),       // 17
+        ]
+    }
+
+    fn texts(lines: &[Line]) -> Vec<String> {
+        lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect()
+    }
+
+    #[test]
+    fn wide_terminal_keeps_one_row() {
+        let lines = wrap_legend(legend(), 200);
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn narrow_terminal_wraps_whole_items_into_rows() {
+        let lines = wrap_legend(legend(), 40);
+        assert_eq!(
+            texts(&lines),
+            vec![
+                " [Tab] Next Tab   [Esc] Courses Menu".to_string(),
+                " [s] Hide Panel   [e] Export CSV".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn rows_never_split_a_key_from_its_label() {
+        for width in 20..60 {
+            for line in wrap_legend(legend(), width) {
+                assert!(line.spans.len() % 2 == 0, "width {width}: {:?}", texts(&[line]));
+                assert!(line.width() <= width as usize, "width {width}");
+            }
+        }
+    }
+
+    fn render(width: u16, height: u16) -> Vec<String> {
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        let mut app = App::new(tx);
+        app.state = AppState::Dashboard;
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| (0..width).map(|x| buf[(x, y)].symbol().to_string()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn narrow_window_shows_every_legend_item_on_extra_rows() {
+        let wide = render(220, 30);
+        assert!(wide[29].contains("Export CSV") && !wide[28].contains("Next Tab"));
+
+        let narrow = render(60, 30);
+        let footer = narrow[26..].join("\n");
+        for label in ["Next Tab", "Courses Menu", "Hide Panel", "Export CSV", "Edit Weights", "Edit Boundaries"] {
+            assert!(footer.contains(label), "missing {label} in:\n{footer}");
+        }
+    }
+
+    #[test]
+    fn long_message_wraps_by_words() {
+        let spans = vec![
+            Span::raw(" ℹ️ INFO "),
+            Span::raw(" Exported final_grades.csv and copy_friendly_scores.csv to reports "),
+        ];
+        let lines = wrap_legend(spans, 30);
+        assert!(lines.len() >= 3);
+        assert!(lines.iter().all(|l| l.width() <= 30));
     }
 }
