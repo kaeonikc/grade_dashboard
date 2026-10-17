@@ -1030,8 +1030,9 @@ fn at_category_default(data: &crate::types::CourseData, cat: &str, col: &str) ->
     }
 }
 
-/// Each score column's width. A column at its category's default (a lab) is only as wide as what it shows: its name,
-/// its widest score, an unsaved value, or the editor while you type in it. Other columns keep 12 cells for "(35 pts)".
+/// Each score column's width. A column at its category's default (a lab) is as wide as what it shows (its name, its
+/// widest score, an unsaved value, or the editor while you type in it) plus LAB_PAD cells of breathing room. Other
+/// columns keep 12 cells for "(35 pts)".
 pub(crate) fn sub_col_widths(app: &App, cat: &str, cols: &[String]) -> Vec<u16> {
     let Some(data) = app.course_data.as_ref() else { return vec![12; cols.len()] };
     let is_attendance = cat.to_lowercase().contains("attendance");
@@ -1057,9 +1058,12 @@ pub(crate) fn sub_col_widths(app: &App, cat: &str, cols: &[String]) -> Vec<u16> 
                 w = w.max(UnicodeWidthStr::width(ta.lines()[0].as_str()) + 1); // + the ▏ cursor
             }
         }
-        w as u16
+        (w + LAB_PAD) as u16
     }).collect()
 }
+
+/// Extra cells after a lab column's content, so a column of 10s isn't cramped (`10` → 4 cells).
+const LAB_PAD: usize = 2;
 
 /// Width of the row-number column ("▸12").
 fn num_col_width(data: &crate::types::CourseData) -> u16 {
@@ -3323,8 +3327,8 @@ mod tests {
         assert!(all.contains("(20 pts)"), "a column off the default keeps them");
         let head = s.iter().find(|l| l.contains("hw1")).unwrap();
         let (a, b) = (head.find("hw1").unwrap(), head.find("hw2").unwrap());
-        assert_eq!(head[a..b].chars().count(), 4, "as wide as `hw1` (scores are ≤ 3) + 1 spacing: {head}");
-        assert_eq!(sub_col_widths(&app, "homework", &["hw1".into(), "hw3".into()]), vec![3, 12]);
+        assert_eq!(head[a..b].chars().count(), 6, "`hw1` (scores are ≤ 3) + 2 padding + 1 spacing: {head}");
+        assert_eq!(sub_col_widths(&app, "homework", &["hw1".into(), "hw3".into()]), vec![5, 12]);
     }
 
     #[test]
@@ -3347,10 +3351,11 @@ mod tests {
 
         let name = app.course_data.as_ref().unwrap().raw_scores[0]["Name"].as_str().unwrap().to_string();
         let surname = name.split_whitespace().last().unwrap().to_string();
-        // wide window: all ten labs, each as wide as "9.5"
-        let all = screen(&mut app, 140, 30).join("\n");
+        // wide window: all ten labs, each "9.5" + 2 padding
+        app.width = 180;
+        let all = screen(&mut app, 180, 30).join("\n");
         assert!(all.contains("Raw Details  ›  lab · 10 pts each") && all.contains(&surname));
-        assert!(all.contains(" 9   10  Total"), "lab 9 and 10 shown, 3 wide:\n{all}");
+        assert!(all.contains(" 9     10    Total"), "lab 9 and 10 shown, 5 wide:\n{all}");
         // narrow window: Name keeps its width, the labs that don't fit scroll
         app.width = 90;
         let s = screen(&mut app, 90, 30);
