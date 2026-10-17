@@ -325,6 +325,19 @@ def _compute_analytics(final_df: pd.DataFrame, config: dict, max_scores: dict) -
     }
 
 
+def _class_groups(course_path) -> dict:
+    """{student id: Class Group} from the roster (course_info/*_student_info.csv); {} without that column."""
+    for f in sorted((Path(course_path) / "course_info").glob("*_student_info.csv")):
+        try:
+            df = pd.read_csv(f, dtype=str, keep_default_na=False)
+        except Exception:
+            continue
+        df.columns = df.columns.astype(str).str.strip()
+        if "Student ID" in df.columns and "Class Group" in df.columns:
+            return {sid.strip(): g.strip() for sid, g in zip(df["Student ID"], df["Class Group"])}
+    return {}
+
+
 def get_course_data(course_path, use_weighted=True):
     try:
         path = Path(course_path)
@@ -383,16 +396,27 @@ def get_course_data(course_path, use_weighted=True):
         # Prepare list of raw scores
         raw_cols_present = [c for c in final_df.columns if c in raw_assignment_cols]
         raw_display_cols = ["Student ID", "Name"] + raw_cols_present
+        # Roster group per student, for Fill Column's group choice in grade-tui
+        groups = _class_groups(path)
         absent_cells = {(sid, col) for sid, col in raw_df.attrs.get("absences", [])}
+        invalid_cells = {(sid, col): text for sid, col, text in raw_df.attrs.get("invalid_cells", [])}
+        # Cells as written in the files (raw_df, before blanks count as 0), in final_df's row order
+        # so raw_scores[i] and student_grades[i] stay the same student.
+        raw_rows = {str(r["Student ID"]).strip(): r for _, r in raw_df.iterrows()}
         raw_scores = []
         for _, row in final_df[raw_display_cols].iterrows():
             record = {}
             sid = str(row["Student ID"]).strip()
+            src_row = raw_rows.get(sid, row)
             for col in raw_display_cols:
-                val = row[col]
+                val = src_row[col] if col in src_row.index else row[col]
                 record[col] = "" if pd.isna(val) else val
                 if (sid, col) in absent_cells:
                     record[col] = ABSENT  # show ขส rather than the 0 it counts as
+                elif (sid, col) in invalid_cells:
+                    record[col] = invalid_cells[(sid, col)]  # e.g. "abs": shown as typed, counts as 0
+            if groups:
+                record["Class Group"] = groups.get(sid, "")
             raw_scores.append(record)
 
         names = dict(zip(final_df["Student ID"].astype(str), final_df["Name"].astype(str)))
@@ -688,6 +712,176 @@ def update_student_score(course_path, student_id, col_name, value):
         import traceback
         return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
 
+def _cell_value(value):
+    """Typed text -> the value to store: int/float when numeric, None when blank, else the text (P, ขส, ...)."""
+    text = str(value).strip()
+    if text == "":
+        return None
+    try:
+        return float(text) if "." in text else int(text)
+    except ValueError:
+        return text
+
+
+def _same_cell(a, b) -> bool:
+    """Whether two cell values mean the same thing: 8 == "8.0", "" == None, " ขส " == "ขส"."""
+    from src.cells import classify
+    return classify(a) == classify(b)
+
+
+def _find_column_file(data_dir: Path, col_name: str):
+    """(file, header as written, is_xlsx) of the score file holding `col_name`, or (None, None, False)."""
+    for file in sorted(data_dir.iterdir()):
+        # The attendance xlsx is reached through its csv (which updates both files and keeps them in sync)
+        if not file.is_file() or file.suffix not in (".csv", ".xlsx") or file.name.endswith("attendance.xlsx"):
+            continue
+        try:
+            df = pd.read_csv(file, nrows=0) if file.suffix == ".csv" else pd.read_excel(file, nrows=0)
+        except Exception:
+            continue
+        for col in df.columns.astype(str).str.strip():
+            if col == col_name or parse_pts(col)[0] == col_name:
+                return file, col, file.suffix == ".xlsx"
+    return None, None, False
+
+
+def _xlsx_cells(ws, col_name):
+    """(column index of `col_name`, {student id: row index}) in a worksheet whose header is row 1."""
+    col_idx = sid_idx = None
+    for c in range(1, ws.max_column + 1):
+        h = ws.cell(row=1, column=c).value
+        if h is not None:
+            if str(h).strip() == col_name:
+                col_idx = c
+            if str(h).strip() == "Student ID":
+                sid_idx = c
+    rows = {}
+    if sid_idx:
+        for r in range(2, ws.max_row + 1):
+            sid = ws.cell(row=r, column=sid_idx).value
+            if sid is not None:
+                rows.setdefault(str(sid).strip(), r)
+    return col_idx, rows
+
+
+def apply_edits(course_path, edits):
+    """
+    Saves a batch of grade-tui edits, each {"student_id", "column", "value", "original"}.
+
+    A cell is written only when the file still holds `original` (compared by meaning, see
+    _same_cell); otherwise it is reported as a conflict and left alone. Every file that changes
+    is captured in ONE history entry first, so one `grader undo` reverts the whole batch.
+    """
+    try:
+        path = Path(course_path)
+        data_dir = path / "data"
+        if not data_dir.is_dir():
+            return {"status": "error", "message": f"Data directory not found in {course_path}"}
+
+        conflicts = []
+        by_file = {}  # file -> (header name, is_xlsx, [edits])
+        columns = {}
+        for e in edits:
+            col = e["column"]
+            if col not in columns:
+                columns[col] = _find_column_file(data_dir, col)
+            file, header, is_xlsx = columns[col]
+            if file is None:
+                conflicts.append({"student_id": e["student_id"], "column": col, "reason": "not found", "disk_value": None})
+                continue
+            by_file.setdefault(file, []).append((header, is_xlsx, e))
+
+        # 1. Work out every change in memory, checking each cell against what the TUI started from
+        csv_docs, workbooks, xlsx_mirror, saved = {}, {}, {}, []
+        for file, items in by_file.items():
+            if file.suffix == ".csv":
+                doc = read_csv_text(file)
+                sid_idx = doc.col("Student ID")
+                changed = False
+                for header, _, e in items:
+                    col_idx = doc.col(header)
+                    sid = str(e["student_id"]).strip()
+                    hits = [r for r in doc.rows if sid_idx is not None and r[sid_idx].strip() == sid]
+                    if not hits or col_idx is None:
+                        conflicts.append({"student_id": sid, "column": e["column"], "reason": "not found", "disk_value": None})
+                        continue
+                    disk = hits[0][col_idx].strip()
+                    if not _same_cell(disk, e.get("original", "")):
+                        conflicts.append({"student_id": sid, "column": e["column"], "reason": "changed", "disk_value": disk})
+                        continue
+                    for r in hits:
+                        r[col_idx] = fmt_value(_cell_value(e["value"]))
+                    changed = True
+                    saved.append(e)
+                    if file.name.endswith("attendance.csv"):
+                        xlsx_mirror.setdefault(file.with_suffix(".xlsx"), []).append((sid, header, _cell_value(e["value"])))
+                if changed:
+                    csv_docs[file] = doc
+            else:
+                import openpyxl
+                wb = openpyxl.load_workbook(file)
+                ws = wb.active
+                changed = False
+                for header, _, e in items:
+                    col_idx, row_of = _xlsx_cells(ws, header)
+                    sid = str(e["student_id"]).strip()
+                    if not col_idx or sid not in row_of:
+                        conflicts.append({"student_id": sid, "column": e["column"], "reason": "not found", "disk_value": None})
+                        continue
+                    cell = ws.cell(row=row_of[sid], column=col_idx)
+                    if not _same_cell(cell.value, e.get("original", "")):
+                        disk = "" if cell.value is None else str(cell.value)
+                        conflicts.append({"student_id": sid, "column": e["column"], "reason": "changed", "disk_value": disk})
+                        continue
+                    cell.value = _cell_value(e["value"])
+                    changed = True
+                    saved.append(e)
+                if changed:
+                    workbooks[file] = wb
+        xlsx_mirror = {x: cells for x, cells in xlsx_mirror.items() if x.exists()}
+
+        files = list(csv_docs) + list(workbooks)
+        if not files:
+            return {"status": "success", "saved": 0, "files": [], "conflicts": conflicts,
+                    "message": "Nothing saved." if conflicts else "No changes to save."}
+
+        # 2. One history entry for the whole batch, then write
+        from src.history import course_dir_of, snapshot
+        import shutil
+        course = course_dir_of(files[0])
+        if course is not None:
+            snapshot(course, files + list(xlsx_mirror), "grade-tui", "edit", note=f"{len(saved)} cells", cells=len(saved))
+        for file, doc in csv_docs.items():
+            shutil.copy2(file, file.with_suffix(".csv.bak"))
+            write_csv_text(file, doc)
+        for file, wb in workbooks.items():
+            wb.save(file)
+        if xlsx_mirror:
+            import openpyxl
+            for xlsx, cells in xlsx_mirror.items():
+                wb = openpyxl.load_workbook(xlsx)
+                ws = wb.active
+                for sid, header, value in cells:
+                    col_idx, row_of = _xlsx_cells(ws, header)
+                    if col_idx and sid in row_of:
+                        ws.cell(row=row_of[sid], column=col_idx).value = value
+                wb.save(xlsx)
+
+        # 3. Totals and the attendance baseline follow
+        for file in csv_docs:
+            if file.name.endswith("attendance.csv"):
+                _sync_attendance(path)
+            else:
+                _sync_total(path, file)
+
+        names = sorted(f.name for f in files)
+        msg = f"Saved {len(saved)} cell{'s' if len(saved) != 1 else ''} ({len(names)} file{'s' if len(names) != 1 else ''})."
+        return {"status": "success", "saved": len(saved), "files": names, "conflicts": conflicts, "message": msg}
+    except Exception as e:
+        import traceback
+        return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
+
+
 def _update_xlsx_attendance_bulk(xlsx_path, target_col_orig_name, val_to_set):
     import openpyxl
     wb = openpyxl.load_workbook(xlsx_path)
@@ -936,6 +1130,16 @@ if __name__ == "__main__":
         col_name = sys.argv[3]
         value = sys.argv[4]
         print(json.dumps(update_column_score(course_path, col_name, value)))
+    elif cmd == "apply-edits":
+        if len(sys.argv) < 3:
+            print(json.dumps({"status": "error", "message": "Missing course path"}))
+            sys.exit(1)
+        try:
+            payload = json.loads(sys.stdin.read() or "{}")
+        except ValueError as e:
+            print(json.dumps({"status": "error", "message": f"Bad edits JSON on stdin: {e}"}))
+            sys.exit(1)
+        print(json.dumps(apply_edits(sys.argv[2], payload.get("edits", []))))
     elif cmd == "update-config":
         if len(sys.argv) < 5:
             print(json.dumps({"status": "error", "message": "Missing arguments (path, weights_json, boundaries_json)"}))

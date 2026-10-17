@@ -83,7 +83,7 @@ grade_dashboard/
 ┌─────────┴────────────────────────────────────────────────────────────┐
 │                         src/tui_api.py                               │
 │   JSON-over-subprocess bridge (CLI: get-courses | get-course-data |  │
-│   update-score | update-config | export-reports)                     │
+│   apply-edits | update-config | export-reports)                      │
 └─────────────────────────────────┬────────────────────────────────────┘
                                   ▲  stdout JSON
                                   │  python3 src/tui_api.py <cmd> [args]
@@ -185,10 +185,10 @@ rust_tui/src/app.rs  App::update()
         │   App.course_data = Some(CourseData)
         │   AppState → Dashboard
         │
-        ├─ Enter on Raw Details cell  →  bridge::update_score()
-        │         │  "python3 src/tui_api.py update-score <path> <id> <col> <val>"
-        │         │  updates CSV/XLSX in place
-        │         └─ AppEvent::ScoreUpdated → reload course data
+        ├─ Ctrl+S (unsaved edits in edits.rs)  →  bridge::apply_edits()
+        │         │  "python3 src/tui_api.py apply-edits <path>"  (edits JSON on stdin)
+        │         │  one history entry, then updates CSV/XLSX in place
+        │         └─ AppEvent::EditsSaved → settle edits, reload course data
         │
         ├─ 'w' key  →  weight editor overlay  →  bridge::update_config()
         │         │  "python3 src/tui_api.py update-config <path> <weights_json> null"
@@ -226,8 +226,9 @@ rust_tui/src/app.rs  App::update()
 |---|---|---|
 | `get-courses` | — | `status`, `courses[]` (`name`, `path`) |
 | `get-course-data` | `<path> [weighted]` (default true) | `status`, `course_id`, `weights`, `grade_boundaries`, `student_grades[]`, `raw_scores[]`, `grade_distribution`, `roundup_summary` |
-| `update-score` | `<path> <student_id> <col> <value>` | `status`, `message` |
+| `update-score` | `<path> <student_id> <col> <value>` | `status`, `message` (legacy; grade-tui uses apply-edits) |
 | `update-config` | `<path> <weights_json\|null> <boundaries_json\|null>` | `status`, `message` |
+| `apply-edits` | `<path>`, stdin `{"edits": [{student_id, column, value, original}]}` | `status`, `saved`, `files`, `conflicts[]` (`reason`: changed / not found), `message` |
 | `export-reports` | `<path> [weighted]` (default true) | `status`, `message` |
 
 ### Rust TUI key bindings

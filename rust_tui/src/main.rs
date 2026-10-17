@@ -2,13 +2,14 @@ mod types;
 mod bridge;
 mod style;
 mod app;
+mod edits;
 mod ui;
 
 use app::{App, AppEvent};
 use std::io;
 use std::time::Duration;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, Event},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     cursor::{Hide, Show},
@@ -84,23 +85,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Wait for event from tokio channel
         if let Some(event) = rx.recv().await {
-            // Check for exit
-            if let AppEvent::Key(key) = event {
-                // If 'q' is pressed and we aren't editing a cell, weight, boundary, or bulk-filling: exit!
-                if key.code == KeyCode::Char('q') && !app.editing && !app.editing_weights && !app.editing_boundaries && !app.editing_bulk_fill {
-                    break;
-                }
-                
-                // Allow Ctrl+C to exit globally
-                if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                    break;
-                }
-
-                // Process standard key events inside app update
-                app.update(AppEvent::Key(key));
-            } else {
-                // Forward resize, tick, and async results to app updater
-                app.update(event);
+            app.update(event);
+            // q / Ctrl+C go through App so unsaved edits get a Save / Discard prompt first
+            if app.quit {
+                break;
             }
         }
     }

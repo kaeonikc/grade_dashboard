@@ -263,7 +263,7 @@ dates pull the attendance percentage down; that's expected. The `total (Npts)` c
 sum, and N is the number of date columns.
 
 You can record attendance in grade-tui, in Excel/Numbers (usually the `.xlsx`), or in the `.csv`. In grade-tui,
-`Enter` on a cell opens a P/L/A/X picker, and `f` fills a whole date. grade-tui updates both files.
+On a cell, type `P` `L` `A` `X` (or `Enter` for a picker), and `f` fills a date for all, marked or chosen students. Saving (`Ctrl+S`) updates both files.
 
 ### Keeping the xlsx and csv in step
 
@@ -368,13 +368,26 @@ settled by `grader sync`).
 | `→` or `Enter` | category list | focus the table |
 | `←` or `Esc` | table | back to the category list |
 | `[` / `]` | Raw Details, Analytics | previous / next category |
-| `Enter` | Raw Details cell | edit the score (`Enter` saves, `Esc` cancels); attendance opens a P/L/A/X picker |
-| `f` | Raw Details | fill the whole column with one value |
+| `0`–`9` `.` | Raw Details score cell | start typing a new score in the cell; `Enter` keeps it and moves to the next student |
+| `Enter` | Raw Details cell | edit the current value in the cell; attendance opens a P/L/A/X picker |
+| `-` / `Backspace` | Raw Details score cell | mark `ขส` (absent) / blank the cell |
+| `P` `L` `A` `X` / `c` | Raw Details attendance cell | set the code and move down / clear |
+| `Space`, `Shift-▲▼` or `K` `J` | Raw Details table | mark students (for Fill Column); `m` clears the marks |
+| `f` | Raw Details | Fill Column: one value for all, marked, a row range, or a Class Group, optionally only empty cells |
+| `u` | dashboard | undo the last unsaved change (a typed cell or a whole fill) |
+| `Ctrl-S` | dashboard | save every unsaved change at once |
 | `s` | dashboard | hide / show the left panels on every tab, giving the table the full width |
 | `w` / `b` | dashboard | edit weights / grade boundaries (saved to config.yaml) |
 | `e` | dashboard | export the reports (see [section 10](#10-submitting-grades)) |
 | `Esc` | dashboard | back to the course list |
-| `q` | not while editing | quit |
+| `q` / `Ctrl-C` | not while editing | quit (asks Save / Discard first when changes are unsaved) |
+
+**Entering scores.** Typed scores and fills are *unsaved* until `Ctrl-S`: they are underlined (red when above the
+column's maximum), and the header shows `● N unsaved`. Totals, grades and the other tabs update after saving. Text
+and negative numbers are refused; a score above the maximum is kept (bonus points). One save is one `history/`
+entry, so one `grader undo` reverses all of it. If a cell changed on disk since you started (for example
+`exam submit scores` ran), the save skips it, names it, and keeps it unsaved; `Ctrl-S` again writes it. Leaving the
+course or quitting with unsaved changes asks: `S` save, `D` discard, `Esc` keep editing.
 
 **What opening a course writes.** grade-tui keeps each score file's `total` column up to date. It writes a file only
 when a total actually changed, and only the total cells. Every write it makes, edits included, is saved in

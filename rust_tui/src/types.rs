@@ -189,3 +189,28 @@ pub struct GenericResponse {
     pub status: String,
     pub message: String,
 }
+
+/// `tui_api.py apply-edits` result (SPEC_batch_editing.md).
+#[derive(Debug, Clone, Deserialize)]
+pub struct SaveReport {
+    pub status: String,
+    #[serde(default)]
+    pub saved: usize,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub files: Vec<String>,
+    #[serde(default)]
+    pub conflicts: Vec<Conflict>,
+    #[serde(default)]
+    pub message: String,
+}
+
+/// A cell the save skipped: `reason` is "changed" (the file no longer holds the original) or "not found".
+#[derive(Debug, Clone, Deserialize)]
+pub struct Conflict {
+    pub student_id: String,
+    pub column: String,
+    pub reason: String,
+    #[serde(default)]
+    pub disk_value: Option<String>,
+}

@@ -1,6 +1,6 @@
 # SPEC: Batch score editing, save-on-quit prompt, targeted Fill Column
 
-Status: **draft, awaiting confirmation** · 2026-10-17 · grade_dashboard only (rust_tui + `src/tui_api.py`)
+Status: **confirmed and implemented** · 2026-10-17 · grade_dashboard only (rust_tui + `src/tui_api.py`)
 Branch: `batch-edit`, cut from `panel-toggle`.
 Previous specs: `SPEC.md` (attendance sync), `SPEC_total_sync.md`, `SPEC_config_columns.md`.
 

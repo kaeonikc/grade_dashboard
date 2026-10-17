@@ -82,49 +82,26 @@ pub async fn get_course_data(course_path: &str) -> Result<CourseData, String> {
     Ok(res)
 }
 
-pub async fn update_score(course_path: &str, student_id: &str, col_name: &str, value: &str) -> Result<GenericResponse, String> {
+pub async fn apply_edits(course_path: &str, edits_json: String) -> Result<SaveReport, String> {
+    use tokio::io::AsyncWriteExt;
     let api_path = resolve_tui_api_path();
-    let output = Command::new("python3")
+    let mut child = Command::new("python3")
         .arg(&api_path)
-        .arg("update-score")
+        .arg("apply-edits")
         .arg(course_path)
-        .arg(student_id)
-        .arg(col_name)
-        .arg(value)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
-        .await
+        .spawn()
         .map_err(|e| format!("Failed to spawn python3: {}", e))?;
-
-    let stdout_str = String::from_utf8_lossy(&output.stdout);
-    let res: GenericResponse = serde_json::from_str(&stdout_str)
-        .map_err(|e| format!("JSON parse error: {}\nOutput was: {}", e, stdout_str))?;
-
-    if res.status == "error" {
-        return Err(res.message);
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(edits_json.as_bytes()).await.map_err(|e| format!("Failed to send edits: {}", e))?;
     }
-    Ok(res)
-}
-
-pub async fn bulk_update_score(course_path: &str, col_name: &str, value: &str) -> Result<GenericResponse, String> {
-    let api_path = resolve_tui_api_path();
-    let output = Command::new("python3")
-        .arg(&api_path)
-        .arg("bulk-update-score")
-        .arg(course_path)
-        .arg(col_name)
-        .arg(value)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| format!("Failed to spawn python3: {}", e))?;
+    let output = child.wait_with_output().await.map_err(|e| format!("python3 failed: {}", e))?;
 
     let stdout_str = String::from_utf8_lossy(&output.stdout);
-    let res: GenericResponse = serde_json::from_str(&stdout_str)
+    let res: SaveReport = serde_json::from_str(&stdout_str)
         .map_err(|e| format!("JSON parse error: {}\nOutput was: {}", e, stdout_str))?;
-
     if res.status == "error" {
         return Err(res.message);
     }

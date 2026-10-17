@@ -44,16 +44,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // 4. Overlays
     if app.loading {
         draw_loading_overlay(f, app);
-    } else if app.editing {
-        draw_edit_overlay(f, app);
+    } else if app.confirm_leave.is_some() {
+        draw_confirm_leave(f, app);
     } else if app.editing_attendance {
         draw_attendance_picker(f, app);
-    } else if app.editing_bulk_fill {
-        if app.bulk_fill_is_attendance {
-            draw_bulk_fill_attendance_picker(f, app);
-        } else {
-            draw_bulk_fill_overlay(f, app);
-        }
+    } else if app.fill.is_some() {
+        draw_fill_dialog(f, app);
     } else if app.editing_weights || app.editing_boundaries {
         draw_settings_overlay(f, app);
     }
@@ -99,7 +95,14 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         .title_style(Style::default().fg(theme.key_accent).bold())
         .title_alignment(Alignment::Center);
 
-    let paragraph = Paragraph::new(header_text)
+    let mut header_line = vec![Span::styled(header_text, title_style)];
+    if app.state == AppState::Dashboard && !app.edits.is_empty() {
+        header_line.push(Span::styled(
+            format!(" ● {} unsaved ", app.edits.len()),
+            Style::default().fg(theme.bg).bg(theme.warning).add_modifier(Modifier::BOLD),
+        ));
+    }
+    let paragraph = Paragraph::new(Line::from(header_line))
         .block(block)
         .alignment(Alignment::Center)
         .style(title_style);
@@ -1107,7 +1110,8 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
     // area.height - 2 borders - 3 header (height=2 + bottom_margin=1)
     app.table_visible_rows = (area.height as usize).saturating_sub(5).max(1);
 
-    let num_col_width = format!("{}", data.raw_scores.len()).len().max(1) as u16 + 1;
+    // +1 for the ▸ of a marked row
+    let num_col_width = format!("{}", data.raw_scores.len()).len().max(1) as u16 + 2;
 
     let sub_cols = data.data_mapping.get(&cat).cloned().unwrap_or_default();
     let show_total = true;
@@ -1132,7 +1136,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
 
     let border_color = if app.raw_right_focused { category_color(&cat, &theme) } else { theme.border };
     let title_text = if app.raw_right_focused {
-        format!(" 📋 Raw Details  ›  {}  —  sub-columns (Enter: open student  Esc: back) ", cat)
+        format!(" 📋 Raw Details  ›  {}  —  type a score · Space: mark · f: fill ", cat)
     } else {
         format!(" 📋 Raw Details  ›  {}  (→ / Enter: focus table) ", cat)
     };
@@ -1205,19 +1209,22 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Rows
     let rows: Vec<Row> = data.raw_scores.iter().enumerate().map(|(r_idx, record)| {
-        let mut cells = vec![
-            Cell::from(format!("{}", r_idx + 1)).style(Style::default().fg(theme.inactive_tab)),
-        ];
-
         let sid = record.get("Student ID")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let mut sid_style = Style::default().fg(theme.info);
+        let marked = app.marks.contains(&sid);
+        let mut cells = vec![if marked {
+            Cell::from(format!("▸{}", r_idx + 1)).style(Style::default().fg(theme.purple).add_modifier(Modifier::BOLD))
+        } else {
+            Cell::from(format!(" {}", r_idx + 1)).style(Style::default().fg(theme.inactive_tab))
+        }];
+
+        let mut sid_style = Style::default().fg(if marked { theme.purple } else { theme.info });
         if app.raw_right_focused && r_idx == app.cursor_row && app.cursor_col == 0 {
             sid_style = Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
         }
-        cells.push(Cell::from(sid).style(sid_style));
+        cells.push(Cell::from(sid.clone()).style(sid_style));
 
         let name = record.get("Name")
             .map(|v| match v {
@@ -1233,31 +1240,11 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
         cells.push(Cell::from("│").style(sep_style));
 
         for (sc_offset, sc) in visible_sub.iter().enumerate() {
-            let cell_val = record.get(sc).unwrap_or(&serde_json::Value::Null);
-            let text = match cell_val {
-                serde_json::Value::Null => "".to_string(),
-                serde_json::Value::Number(n) => format!("{}", n.as_f64().unwrap_or(0.0)),
-                serde_json::Value::String(s) => s.clone(),
-                _ => cell_val.to_string(),
-            };
-
             let abs_col = frozen_count + scroll_offset + sc_offset;
             let is_cursor = app.raw_right_focused && r_idx == app.cursor_row && abs_col == app.cursor_col;
-            let display_text = if is_attendance {
-                att_symbol(&text).to_string()
-            } else {
-                text.clone()
-            };
-            let style = if is_attendance {
-                att_cell_style(&text, is_cursor, &theme)
-            } else if text.trim() == ABSENT && !is_cursor {
-                Style::default().fg(theme.warning).add_modifier(Modifier::BOLD)
-            } else if is_cursor {
-                Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme.fg)
-            };
-            cells.push(Cell::from(display_text).style(style));
+            let editing_here = app.editing && app.raw_selected_student.is_none()
+                && app.editing_row == r_idx && app.editing_column == *sc;
+            cells.push(score_cell(app, record, &sid, sc, is_attendance, is_cursor, editing_here));
         }
 
         if show_total {
@@ -1305,6 +1292,55 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(table, area, &mut table_state);
 }
 
+/// One score cell in Raw Details (table or student popup): the unsaved value if there is one
+/// (underlined, red when above the max), or the inline editor's text while editing it.
+fn score_cell(
+    app: &App,
+    record: &std::collections::HashMap<String, serde_json::Value>,
+    sid: &str,
+    column: &str,
+    is_attendance: bool,
+    is_cursor: bool,
+    editing_here: bool,
+) -> Cell<'static> {
+    let theme = app.theme;
+    if editing_here {
+        if let Some(ta) = app.edit_textarea.as_ref() {
+            let (_, cur) = ta.cursor();
+            let mut text: Vec<char> = ta.lines()[0].chars().collect();
+            text.insert(cur.min(text.len()), '▏');
+            return Cell::from(text.into_iter().collect::<String>())
+                .style(Style::default().fg(theme.bg).bg(theme.purple).add_modifier(Modifier::BOLD));
+        }
+    }
+    let pending = app.edits.get(sid, column);
+    let text = match pending {
+        Some(p) => p.value.clone(),
+        None => crate::edits::cell_text(record.get(column).unwrap_or(&serde_json::Value::Null)),
+    };
+    let display_text = if is_attendance { att_symbol(&text).to_string() } else { text.clone() };
+    let mut style = if is_attendance {
+        att_cell_style(&text, is_cursor, &theme)
+    } else if text.trim() == ABSENT && !is_cursor {
+        Style::default().fg(theme.warning).add_modifier(Modifier::BOLD)
+    } else if is_cursor {
+        Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.fg)
+    };
+    if pending.is_some() {
+        style = style.add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
+        if !is_cursor && !is_attendance {
+            style = style.fg(theme.warning);
+        }
+        if crate::edits::is_over_max(&text, app.max_of(column)) {
+            style = style.fg(theme.grade_f);
+        }
+    }
+    let display_text = if pending.is_some() && is_attendance && text.is_empty() { "·".to_string() } else { display_text };
+    Cell::from(display_text).style(style)
+}
+
 fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme;
     let data = match &app.course_data {
@@ -1333,7 +1369,7 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
     let (tab_label, hint) = if app.active_tab == 2 {
         ("Analytics", "(Esc: back)")
     } else {
-        ("Raw Details", "(Enter: edit  Esc: back)")
+        ("Raw Details", "(type a score · Enter: edit  Esc: back)")
     };
 
     let block = Block::default()
@@ -1418,29 +1454,10 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
     cells.push(Cell::from("│").style(sep_style_popup));
 
     for (sc_offset, sc) in visible_sub.iter().enumerate() {
-        let cell_val = record.get(sc).unwrap_or(&serde_json::Value::Null);
-        let text = match cell_val {
-            serde_json::Value::Null => "".to_string(),
-            serde_json::Value::Number(n) => format!("{}", n.as_f64().unwrap_or(0.0)),
-            serde_json::Value::String(s) => s.clone(),
-            _ => cell_val.to_string(),
-        };
-
         let abs_col = frozen_count + scroll_offset + sc_offset;
         let is_cursor = abs_col == app.cursor_col;
-        let display_text = if is_attendance_popup {
-            att_symbol(&text).to_string()
-        } else {
-            text.clone()
-        };
-        let style = if is_attendance_popup {
-            att_cell_style(&text, is_cursor, &theme)
-        } else if is_cursor {
-            Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.fg)
-        };
-        cells.push(Cell::from(display_text).style(style));
+        let editing_here = app.editing && app.editing_column == *sc;
+        cells.push(score_cell(app, record, &sid, sc, is_attendance_popup, is_cursor, editing_here));
     }
 
     if show_total {
@@ -2320,13 +2337,44 @@ fn footer_line(app: &App) -> (Line<'static>, u8) {
                 Span::raw("Quit"),
             ],
             AppState::Dashboard => {
-                if app.editing {
+                if app.confirm_leave.is_some() {
                     vec![
-                        Span::raw(" Editing Score: "),
-                        Span::styled(" [Type Value] ", Style::default().fg(theme.active_tab).bold()),
-                        Span::raw("  "),
-                        Span::styled(" [Enter] ", Style::default().fg(theme.success).bold()),
+                        Span::raw(" Unsaved changes: "),
+                        Span::styled(" [S] ", Style::default().fg(theme.success).bold()),
                         Span::raw("Save  "),
+                        Span::styled(" [D] ", Style::default().fg(theme.grade_f).bold()),
+                        Span::raw("Discard  "),
+                        Span::styled(" [Esc] ", Style::default().fg(theme.key_accent).bold()),
+                        Span::raw("Keep editing"),
+                    ]
+                } else if app.editing {
+                    let mut v = vec![
+                        Span::raw(format!(" Editing {}: ", app.editing_column)),
+                        Span::styled(" [Enter] ", Style::default().fg(theme.success).bold()),
+                        Span::raw("Keep & next  "),
+                        Span::styled(" [▲/▼] ", Style::default().fg(theme.active_tab).bold()),
+                        Span::raw("Keep & move  "),
+                        Span::styled(" [Esc] ", Style::default().fg(theme.grade_f).bold()),
+                        Span::raw("Cancel  "),
+                    ];
+                    if let (Some(data), Some(ta)) = (app.course_data.as_ref(), app.edit_textarea.as_ref()) {
+                        let (score, grade) = calculate_instant_score_and_grade(
+                            data, &app.editing_student_id, &app.editing_column, &ta.lines()[0]);
+                        v.push(Span::styled(
+                            format!(" → final {:.1} ({}) ", score, grade.trim()),
+                            Style::default().fg(theme.info).bold(),
+                        ));
+                    }
+                    v
+                } else if let Some(fill) = app.fill.as_ref() {
+                    vec![
+                        Span::raw(format!(" Fill {}: ", fill.column)),
+                        Span::styled(" [Tab] ", Style::default().fg(theme.active_tab).bold()),
+                        Span::raw("Next field  "),
+                        Span::styled(" [Space/◀/▶] ", Style::default().fg(theme.active_tab).bold()),
+                        Span::raw("Choose  "),
+                        Span::styled(" [Enter] ", Style::default().fg(theme.success).bold()),
+                        Span::raw("Fill  "),
                         Span::styled(" [Esc] ", Style::default().fg(theme.grade_f).bold()),
                         Span::raw("Cancel"),
                     ]
@@ -2340,28 +2388,6 @@ fn footer_line(app: &App) -> (Line<'static>, u8) {
                         Span::styled(" [Esc] ", Style::default().fg(theme.grade_f).bold()),
                         Span::raw("Cancel"),
                     ]
-                } else if app.editing_bulk_fill {
-                    if app.bulk_fill_is_attendance {
-                        vec![
-                            Span::raw(" Fill Column (Attendance): "),
-                            Span::styled(" [▲/▼] ", Style::default().fg(theme.active_tab).bold()),
-                            Span::raw("Navigate  "),
-                            Span::styled(" [Enter] ", Style::default().fg(theme.success).bold()),
-                            Span::raw("Fill All  "),
-                            Span::styled(" [Esc] ", Style::default().fg(theme.grade_f).bold()),
-                            Span::raw("Cancel"),
-                        ]
-                    } else {
-                        vec![
-                            Span::raw(" Fill Column: "),
-                            Span::styled(" [Type Value] ", Style::default().fg(theme.active_tab).bold()),
-                            Span::raw("  "),
-                            Span::styled(" [Enter] ", Style::default().fg(theme.success).bold()),
-                            Span::raw("Fill All  "),
-                            Span::styled(" [Esc] ", Style::default().fg(theme.grade_f).bold()),
-                            Span::raw("Cancel"),
-                        ]
-                    }
                 } else if app.editing_weights || app.editing_boundaries {
                     vec![
                         Span::raw(" Editing Configurations: "),
@@ -2375,7 +2401,18 @@ fn footer_line(app: &App) -> (Line<'static>, u8) {
                         Span::raw("Cancel"),
                     ]
                 } else {
-                    let mut leg = vec![
+                    let mut leg = Vec::new();
+                    if !app.edits.is_empty() {
+                        leg.push(Span::styled(format!(" [Ctrl+S] Save {} ", app.edits.len()), Style::default().fg(theme.bg).bg(theme.warning).bold()));
+                        leg.push(Span::raw("  "));
+                        leg.push(Span::styled(" [u] ", Style::default().fg(theme.warning).bold()));
+                        leg.push(Span::raw("Undo  "));
+                    }
+                    if !app.marks.is_empty() {
+                        leg.push(Span::styled(" [m] ", Style::default().fg(theme.purple).bold()));
+                        leg.push(Span::raw(format!("Clear {} marks  ", app.marks.len())));
+                    }
+                    leg.extend([
                         Span::styled(" [Tab] ", Style::default().fg(theme.key_accent).bold()),
                         Span::raw("Next Tab  "),
                         Span::styled(" [Esc] ", Style::default().fg(theme.key_accent).bold()),
@@ -2384,7 +2421,7 @@ fn footer_line(app: &App) -> (Line<'static>, u8) {
                         Span::raw(if app.show_left_panel { "Hide Panel  " } else { "Show Panel  " }),
                         Span::styled(" [e] ", Style::default().fg(theme.key_accent).bold()),
                         Span::raw("Export CSV  "),
-                    ];
+                    ]);
                     if app.active_tab == 0 {
                         if app.summary_right_focused {
                             if app.summary_category_index == 0 {
@@ -2413,16 +2450,22 @@ fn footer_line(app: &App) -> (Line<'static>, u8) {
                             // L2: student popup
                             leg.push(Span::styled(" [◀/▶] ", Style::default().fg(theme.active_tab).bold()));
                             leg.push(Span::raw("Move  "));
-                            leg.push(Span::styled(" [Enter] ", Style::default().fg(theme.success).bold()));
-                            leg.push(Span::raw("Edit Score  "));
+                            leg.push(Span::styled(" [0-9/Enter] ", Style::default().fg(theme.success).bold()));
+                            leg.push(Span::raw("Edit  "));
+                            leg.push(Span::styled(" [-] ", Style::default().fg(theme.warning).bold()));
+                            leg.push(Span::raw(format!("{}  ", ABSENT)));
                             leg.push(Span::styled(" [Esc] ", Style::default().fg(theme.warning).bold()));
                             leg.push(Span::raw("Back  "));
                         } else if app.raw_right_focused {
                             // L1: right table focused
                             leg.push(Span::styled(" [▲/▼/◀/▶] ", Style::default().fg(theme.active_tab).bold()));
                             leg.push(Span::raw("Move  "));
-                            leg.push(Span::styled(" [Enter] ", Style::default().fg(theme.success).bold()));
-                            leg.push(Span::raw("Open Student  "));
+                            leg.push(Span::styled(" [0-9/Enter] ", Style::default().fg(theme.success).bold()));
+                            leg.push(Span::raw("Edit  "));
+                            leg.push(Span::styled(" [-] ", Style::default().fg(theme.warning).bold()));
+                            leg.push(Span::raw(format!("{}  ", ABSENT)));
+                            leg.push(Span::styled(" [Space/⇧▲▼] ", Style::default().fg(theme.purple).bold()));
+                            leg.push(Span::raw("Mark  "));
                             leg.push(Span::styled(" [f] ", Style::default().fg(theme.title).bold()));
                             leg.push(Span::raw("Fill Column  "));
                             leg.push(Span::styled(" [←/Esc] ", Style::default().fg(theme.warning).bold()));
@@ -2728,108 +2771,6 @@ fn calculate_instant_score_and_grade(
     (final_score, grade)
 }
 
-fn draw_edit_overlay(f: &mut Frame, app: &mut App) {
-    let area = centered_rect(45, 35, f.area());
-    f.render_widget(Clear, area);
-    
-    let theme = app.theme;
-
-    // Split vertically: 3 lines for input, remaining for student info & grades
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(0),
-        ])
-        .split(area);
-
-    if let Some(ref mut ta) = app.edit_textarea {
-        // Set purple border (theme.purple) for the input box
-        ta.set_block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(theme.purple))
-                .title(format!(" Edit Score: {} ", app.editing_column))
-                .title_style(Style::default().fg(theme.purple).bold())
-        );
-        f.render_widget(ta.widget(), chunks[0]);
-    }
-
-    // Retrieve typed value from textarea
-    let mut new_value_str = String::new();
-    if let Some(ref ta) = app.edit_textarea {
-        if !ta.lines().is_empty() {
-            new_value_str = ta.lines()[0].clone();
-        }
-    }
-
-    // Retrieve selected student's Final Score and Grade dynamically
-    let mut final_score = 0.0;
-    let mut grade = String::from("F");
-    let mut student_name = String::new();
-    let mut warning_line = None;
-    if let Some(ref data) = app.course_data {
-        if let Some(student) = data.student_grades.iter().find(|s| {
-            s.get("Student ID").and_then(|v| v.as_str()) == Some(&app.editing_student_id)
-        }) {
-            student_name = student.get("Name")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .unwrap_or_default();
-        }
-
-        let res = calculate_instant_score_and_grade(data, &app.editing_student_id, &app.editing_column, &new_value_str);
-        final_score = res.0;
-        grade = res.1;
-
-        // Check if value exceeds max score
-        if let Some(&max_score) = data.max_scores.get(&app.editing_column) {
-            if let Some(val) = new_value_str.trim().parse::<f64>().ok() {
-                if val > max_score {
-                    warning_line = Some(Line::from(vec![
-                        Span::styled(" ⚠️ Warning: Score exceeds max (", Style::default().fg(theme.warning).bold()),
-                        Span::styled(format!("{:.1}", max_score), Style::default().fg(theme.warning).bold()),
-                        Span::styled(" pts)!", Style::default().fg(theme.warning).bold()),
-                    ]));
-                }
-            }
-        }
-    }
-
-    let grade_color = grade_color_for(grade.trim(), &theme);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.purple)) // Match purple border
-        .style(Style::default().bg(theme.panel_bg))
-        .title(format!(" Student: {} ({}) ", format_thai_name(&student_name, 22), app.editing_student_id))
-        .title_style(Style::default().fg(theme.key_accent).bold());
-
-    let mut info_text = vec![
-        Line::from(vec![
-            Span::raw(" Current Final Score: "),
-            Span::styled(format!("{:.2}", final_score), Style::default().fg(theme.active_tab).bold()),
-        ]),
-        Line::from(vec![
-            Span::raw(" Current Grade:       "),
-            Span::styled(format!(" {} ", grade), Style::default().fg(theme.bg).bg(grade_color).bold()),
-        ]),
-    ];
-
-    if let Some(w_line) = warning_line {
-        info_text.push(Line::raw("")); // Spacer
-        info_text.push(w_line);
-    }
-
-    let paragraph = Paragraph::new(info_text)
-        .block(block)
-        .alignment(Alignment::Left);
-
-    f.render_widget(paragraph, chunks[1]);
-}
-
 fn draw_settings_overlay(f: &mut Frame, app: &mut App) {
     let theme = app.theme;
     let area = centered_rect(55, 60, f.area());
@@ -2969,120 +2910,159 @@ fn draw_attendance_picker(f: &mut Frame, app: &mut App) {
     f.render_widget(list, area);
 }
 
-fn draw_bulk_fill_overlay(f: &mut Frame, app: &mut App) {
-    let theme = app.theme;
-    let area = centered_rect(45, 25, f.area());
-    f.render_widget(Clear, area);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Double)
-        .border_style(Style::default().fg(theme.warning))
-        .style(Style::default().bg(theme.panel_bg))
-        .title(format!(
-            " Fill Column: {}  ({} students) ",
-            app.bulk_fill_column, app.bulk_fill_student_count
-        ))
-        .title_style(Style::default().fg(theme.key_accent).bold());
-
-    f.render_widget(block, area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // top margin
-            Constraint::Length(1), // warning line
-            Constraint::Length(3), // input box
-            Constraint::Length(3), // button/footer
-        ])
-        .split(area);
-
-    let warning = Paragraph::new(Line::from(Span::styled(
-        " ⚠️ This overwrites every student's current value for this column ",
-        Style::default().fg(theme.warning),
-    )));
-    f.render_widget(warning, chunks[1]);
-
-    if let Some(ref mut ta) = app.bulk_fill_textarea {
-        ta.set_block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(theme.purple))
-                .title(" New Value (applies to all rows) ")
-                .title_style(Style::default().fg(theme.purple).bold())
-        );
-        let input_area = Rect {
-            x: chunks[2].x + 1,
-            width: chunks[2].width.saturating_sub(2),
-            ..chunks[2]
-        };
-        f.render_widget(ta.widget(), input_area);
-    }
-
-    let button_block = Block::default()
-        .borders(Borders::TOP)
-        .border_style(Style::default().fg(theme.border));
-    let button_text = " [Enter] ▶ Fill All Students    [Esc] Cancel ";
-    let button_p = Paragraph::new(button_text)
-        .block(button_block)
-        .style(Style::default().fg(theme.success).bold())
-        .alignment(Alignment::Center);
-    f.render_widget(button_p, chunks[3]);
+/// A centred rect of fixed size (clamped to the screen).
+fn fixed_centered(width: u16, height: u16, r: Rect) -> Rect {
+    let w = width.min(r.width.saturating_sub(2));
+    let h = height.min(r.height.saturating_sub(2));
+    Rect { x: r.x + (r.width - w) / 2, y: r.y + (r.height - h) / 2, width: w, height: h }
 }
 
-fn draw_bulk_fill_attendance_picker(f: &mut Frame, app: &mut App) {
-    let theme = app.theme;
-    let area = centered_rect(36, 46, f.area());
-    f.render_widget(Clear, area);
+/// Text with a ▏ cursor, for single-line inputs drawn inside a Line.
+fn input_text(ta: &tui_textarea::TextArea, focused: bool) -> String {
+    let mut chars: Vec<char> = ta.lines()[0].chars().collect();
+    if focused {
+        let (_, cur) = ta.cursor();
+        chars.insert(cur.min(chars.len()), '▏');
+    }
+    chars.into_iter().collect()
+}
 
-    let title = format!(
-        " Fill Column: {}  ({} students) ",
-        app.bulk_fill_column, app.bulk_fill_student_count
-    );
+fn draw_fill_dialog(f: &mut Frame, app: &mut App) {
+    let theme = app.theme;
+    let Some(fill) = app.fill.as_ref() else { return };
+    let n_students = app.course_data.as_ref().map(|d| d.raw_scores.len()).unwrap_or(0);
+    let max_text = app.max_of(&fill.column).map(|m| format!(" ({:.0} pts)", m)).unwrap_or_default();
+
+    let label = |field: crate::app::FillField, text: &str| {
+        if fill.focus == field {
+            Span::styled(format!("▶ {}", text), Style::default().fg(theme.active_tab).add_modifier(Modifier::BOLD))
+        } else {
+            Span::styled(format!("  {}", text), Style::default().fg(theme.key_accent))
+        }
+    };
+    let radio = |on: bool, text: String| {
+        Span::styled(
+            format!("{} {}   ", if on { "(•)" } else { "( )" }, text),
+            if on { Style::default().fg(theme.success).add_modifier(Modifier::BOLD) } else { Style::default().fg(theme.fg) },
+        )
+    };
+    use crate::app::{FillField, FillTarget};
+
+    let mut lines = vec![Line::from("")];
+    let mut target_spans = vec![label(FillField::Target, "Students: ")];
+    for t in fill.targets() {
+        let text = match t {
+            FillTarget::All => format!("All {}", n_students),
+            FillTarget::Marked => format!("Marked {}", app.marks.len()),
+            FillTarget::Rows => "Rows".to_string(),
+            FillTarget::Group => "Class Group".to_string(),
+        };
+        target_spans.push(radio(fill.target == t, text));
+    }
+    lines.push(Line::from(target_spans));
+    match fill.target {
+        FillTarget::Rows => lines.push(Line::from(vec![
+            label(FillField::Rows, "Rows:     "),
+            Span::styled(format!("[{}]", input_text(&fill.rows, fill.focus == FillField::Rows)), Style::default().fg(theme.info)),
+            Span::styled("  e.g. 1-10, 15  (the # column)", Style::default().fg(theme.inactive_tab)),
+        ])),
+        FillTarget::Group => {
+            let mut spans = vec![label(FillField::Groups, "Groups:   ")];
+            for (i, (g, on)) in fill.groups.iter().enumerate() {
+                let mut st = if *on { Style::default().fg(theme.success).bold() } else { Style::default().fg(theme.fg) };
+                if fill.focus == FillField::Groups && i == fill.group_cursor {
+                    st = st.add_modifier(Modifier::REVERSED);
+                }
+                spans.push(Span::styled(format!("[{}] {}", if *on { "x" } else { " " }, g), st));
+                spans.push(Span::raw("   "));
+            }
+            lines.push(Line::from(spans));
+        }
+        _ => lines.push(Line::from("")),
+    }
+    lines.push(Line::from(vec![
+        label(FillField::OnlyEmpty, ""),
+        Span::styled(
+            format!("[{}] Only empty cells", if fill.only_empty { "x" } else { " " }),
+            if fill.only_empty { Style::default().fg(theme.success).bold() } else { Style::default().fg(theme.fg) },
+        ),
+    ]));
+    let mut value_spans = vec![label(FillField::Value, "Value:    ")];
+    if fill.is_attendance {
+        for (i, (code, name)) in [("P", "Present"), ("L", "Late"), ("X", "Excused"), ("A", "Absent"), ("", "Clear")].iter().enumerate() {
+            let text = if code.is_empty() { name.to_string() } else { format!("{} {}", code, name) };
+            value_spans.push(radio(i == fill.attendance_index, text));
+        }
+    } else {
+        value_spans.push(Span::styled(
+            format!("[{:<8}]", input_text(&fill.value, fill.focus == FillField::Value)),
+            Style::default().fg(theme.info).bold(),
+        ));
+        value_spans.push(Span::styled(format!("{}  number, - for {}", max_text, ABSENT), Style::default().fg(theme.inactive_tab)));
+    }
+    lines.push(Line::from(value_spans));
+    lines.push(Line::from(""));
+    lines.push(match app.fill_rows() {
+        Ok(rows) => Line::from(Span::styled(
+            format!("  → {} cell{} will be set (unsaved until Ctrl+S)", rows.len(), if rows.len() == 1 { "" } else { "s" }),
+            Style::default().fg(theme.success).bold(),
+        )),
+        Err(msg) => Line::from(Span::styled(format!("  ⚠ {}", msg), Style::default().fg(theme.grade_f).bold())),
+    });
+
+    let area = fixed_centered(84, lines.len() as u16 + 2, f.area());
+    f.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
         .border_style(Style::default().fg(theme.warning))
         .style(Style::default().bg(theme.panel_bg))
-        .title(title)
+        .title(format!(" Fill Column: {}{} ", fill.column, max_text))
         .title_style(Style::default().fg(theme.key_accent).bold());
+    f.render_widget(Paragraph::new(lines).block(block), area);
+}
 
-    let options: &[(&str, &str, Color)] = &[
-        ("P", "Present", theme.success),
-        ("L", "Late",    theme.warning),
-        ("X", "Excused", theme.key_accent),
-        ("A", "Absent",  theme.grade_f),
-        ("",  "Clear",   theme.inactive_tab),
+fn draw_confirm_leave(f: &mut Frame, app: &mut App) {
+    let theme = app.theme;
+    let Some(action) = app.confirm_leave else { return };
+    let over = app.edits.over_max(|c| app.max_of(c));
+    let verb = match action {
+        crate::app::LeaveAction::Quit => "quit",
+        crate::app::LeaveAction::CourseSelect => "leave course",
+    };
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!(
+                "  {} unsaved score{}{}.",
+                app.edits.len(),
+                if app.edits.len() == 1 { "" } else { "s" },
+                if over > 0 { format!(" ({} above max)", over) } else { String::new() }
+            ),
+            Style::default().fg(theme.warning).bold(),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  [S] ", Style::default().fg(theme.success).bold()),
+            Span::raw(format!("Save and {}   ", verb)),
+            Span::styled("[D] ", Style::default().fg(theme.grade_f).bold()),
+            Span::raw(format!("Discard and {}", verb)),
+        ]),
+        Line::from(vec![
+            Span::styled("  [Esc] ", Style::default().fg(theme.key_accent).bold()),
+            Span::raw("Keep editing"),
+        ]),
     ];
-    let mut items: Vec<ListItem> = options.iter().enumerate().map(|(i, &(code, label, opt_color))| {
-        let selected = i == app.bulk_fill_attendance_index;
-        let bullet = if selected { "●" } else { "○" };
-        let tag = if code.is_empty() {
-            String::new()
-        } else {
-            format!("  [{}]", code)
-        };
-        let line = Line::from(vec![
-            Span::raw("  "),
-            Span::styled(format!("{} {}{}", bullet, label, tag),
-                if selected {
-                    Style::default().fg(opt_color).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(theme.fg)
-                }),
-            Span::raw("  "),
-        ]);
-        ListItem::new(line)
-    }).collect();
-
-    items.push(ListItem::new(Line::from(Span::styled(
-        " ⚠ overwrites every student  ·  P L X A / C  ·  ↑↓ nav  ·  Enter  ·  Esc  ",
-        Style::default().fg(theme.inactive_tab),
-    ))));
-
-    let list = List::new(items).block(block);
-    f.render_widget(list, area);
+    let area = fixed_centered(56, lines.len() as u16 + 2, f.area());
+    f.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme.warning))
+        .style(Style::default().bg(theme.panel_bg))
+        .title(" Unsaved changes ")
+        .title_style(Style::default().fg(theme.warning).bold());
+    f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 // Helper to center overlay rects on the terminal screen
@@ -3191,6 +3171,65 @@ mod tests {
         (0..height)
             .map(|y| (0..width).map(|x| buf[(x, y)].symbol().to_string()).collect())
             .collect()
+    }
+
+    fn screen(app: &mut App, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| (0..width).map(|x| buf[(x, y)].symbol().to_string()).collect())
+            .collect()
+    }
+
+    fn raw_details_app() -> App {
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        let mut app = App::new(tx);
+        app.state = AppState::Dashboard;
+        app.course_data = Some(serde_json::from_str(include_str!("../tests/fixtures/course.json")).unwrap());
+        app.active_tab = 1;
+        app.raw_category_index = app.get_categories().iter().position(|c| c == "homework").unwrap();
+        app.sync_raw_category();
+        app.raw_right_focused = true;
+        app.cursor_col = 2;
+        app
+    }
+
+    fn key(app: &mut App, code: crossterm::event::KeyCode) {
+        app.update(crate::app::AppEvent::Key(crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE)));
+    }
+
+    #[test]
+    fn unsaved_edits_marks_editor_fill_and_prompt_render() {
+        use crossterm::event::KeyCode;
+        let mut app = raw_details_app();
+        key(&mut app, KeyCode::Char(' '));
+        for c in "12".chars() { key(&mut app, KeyCode::Char(c)); }
+        key(&mut app, KeyCode::Enter);
+        for c in "8.".chars() { key(&mut app, KeyCode::Char(c)); }
+        app.info_msg = None; // the 3-second "above the maximum" note would cover the legend
+        let s = screen(&mut app, 140, 30);
+        if std::env::var("SHOW").is_ok() { eprintln!("{}", s.join("\n")); }
+        let all = s.join("\n");
+        assert!(all.contains("● 1 unsaved"));
+        assert!(all.contains("▸1"), "marked row");
+        assert!(all.contains("8.▏"), "inline editor in the cell");
+        assert!(all.contains("Editing hw1"));
+
+        key(&mut app, KeyCode::Esc);
+        key(&mut app, KeyCode::Char('f'));
+        let s = screen(&mut app, 140, 30);
+        if std::env::var("SHOW").is_ok() { eprintln!("{}", s.join("\n")); }
+        let all = s.join("\n");
+        assert!(all.contains("Fill Column: hw1") && all.contains("Marked 1") && all.contains("Class Group"));
+
+        key(&mut app, KeyCode::Esc);
+        key(&mut app, KeyCode::Char('q'));
+        let s = screen(&mut app, 140, 30);
+        if std::env::var("SHOW").is_ok() { eprintln!("{}", s.join("\n")); }
+        let all = s.join("\n");
+        assert!(all.contains("1 unsaved score (1 above max)"));
+        assert!(all.contains("Save and quit"));
     }
 
     #[test]
