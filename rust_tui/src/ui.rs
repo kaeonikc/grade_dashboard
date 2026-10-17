@@ -1030,9 +1030,79 @@ fn at_category_default(data: &crate::types::CourseData, cat: &str, col: &str) ->
     }
 }
 
-fn score_col_width(data: &crate::types::CourseData, cat: &str, col: &str) -> u16 {
-    let w = UnicodeWidthStr::width(col);
-    if at_category_default(data, cat, col) { (w.max(4) + 2) as u16 } else { (w + 2).max(12) as u16 }
+/// Each score column's width. A column at its category's default (a lab) is only as wide as what it shows: its name,
+/// its widest score, an unsaved value, or the editor while you type in it. Other columns keep 12 cells for "(35 pts)".
+pub(crate) fn sub_col_widths(app: &App, cat: &str, cols: &[String]) -> Vec<u16> {
+    let Some(data) = app.course_data.as_ref() else { return vec![12; cols.len()] };
+    let is_attendance = cat.to_lowercase().contains("attendance");
+    cols.iter().map(|col| {
+        if is_attendance {
+            return 2;
+        }
+        let name = UnicodeWidthStr::width(col.as_str());
+        if !at_category_default(data, cat, col) {
+            return (name + 2).max(12) as u16;
+        }
+        let mut w = name.max(2);
+        for record in &data.raw_scores {
+            let sid = record.get("Student ID").and_then(|v| v.as_str()).unwrap_or("");
+            let text = match app.edits.get(sid, col) {
+                Some(p) => p.value.clone(),
+                None => crate::edits::cell_text(record.get(col.as_str()).unwrap_or(&serde_json::Value::Null)),
+            };
+            w = w.max(UnicodeWidthStr::width(text.as_str()));
+        }
+        if app.editing && app.editing_column == *col {
+            if let Some(ta) = app.edit_textarea.as_ref() {
+                w = w.max(UnicodeWidthStr::width(ta.lines()[0].as_str()) + 1); // + the ▏ cursor
+            }
+        }
+        w as u16
+    }).collect()
+}
+
+/// Width of the row-number column ("▸12").
+fn num_col_width(data: &crate::types::CourseData) -> u16 {
+    format!("{}", data.raw_scores.len()).len().max(1) as u16 + 2
+}
+
+/// (where surnames start, Name column width): first names padded to the longest + 2, then the longest surname + 2
+/// (display widths, so Thai combining vowels count 0), at least 20.
+fn name_layout(data: &crate::types::CourseData) -> (usize, u16) {
+    let names = || data.raw_scores.iter().filter_map(|r| r.get("Name").and_then(|v| v.as_str()));
+    let first = names()
+        .map(|n| n.split_whitespace().next().map(UnicodeWidthStr::width).unwrap_or(0))
+        .max()
+        .unwrap_or(12);
+    let surname = names()
+        .map(|n| { let mut it = n.split_whitespace(); it.next(); UnicodeWidthStr::width(it.collect::<Vec<_>>().join(" ").as_str()) })
+        .max()
+        .unwrap_or(8);
+    let target = first + 2;
+    (target, (target + surname + 2).max(20) as u16)
+}
+
+/// How many score columns, from `start`, fit beside the frozen columns (#, ID, Name) and Total in a table whose
+/// inside is `inner_width` cells: the rest scroll sideways, so ID and Name are never squeezed. At least one.
+pub(crate) fn fitting_sub_cols(app: &App, cat: &str, start: usize, inner_width: usize) -> usize {
+    let Some(data) = app.course_data.as_ref() else { return 1 };
+    let cols = data.data_mapping.get(cat).cloned().unwrap_or_default();
+    if start >= cols.len() {
+        return 0;
+    }
+    let popup = app.raw_selected_student.is_some();
+    // frozen widths + Total (14) + one space between every two columns (column_spacing 1)
+    let (frozen, gaps) = if popup { (9 + 1, 3) } else { (num_col_width(data) as usize + 9 + 1, 4) };
+    let mut used = frozen + name_layout(data).1 as usize + 14 + gaps;
+    let mut n = 0;
+    for w in sub_col_widths(app, cat, &cols[start..]) {
+        if n > 0 && used + w as usize + 1 > inner_width {
+            break;
+        }
+        used += w as usize + 1;
+        n += 1;
+    }
+    n
 }
 
 fn score_col_header(data: &crate::types::CourseData, cat: &str, col: &str) -> String {
@@ -1143,7 +1213,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
     app.table_visible_rows = (area.height as usize).saturating_sub(5).max(1);
 
     // +1 for the ▸ of a marked row
-    let num_col_width = format!("{}", data.raw_scores.len()).len().max(1) as u16 + 2;
+    let num_col_width = num_col_width(data);
 
     let sub_cols = data.data_mapping.get(&cat).cloned().unwrap_or_default();
     let show_total = true;
@@ -1151,20 +1221,8 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
     // 3 visual cells: emoji (2-wide) + 1 space, or circled-number (1-wide) + 2 spaces
 
 
-    // Compute name alignment from actual data (display widths so Thai combining vowels are 0-width)
-    let max_first_display = data.raw_scores.iter()
-        .filter_map(|r| r.get("Name").and_then(|v| v.as_str()))
-        .map(|n| n.split_whitespace().next().map(|p| UnicodeWidthStr::width(p)).unwrap_or(0))
-        .max()
-        .unwrap_or(12);
-    let max_surname_display = data.raw_scores.iter()
-        .filter_map(|r| r.get("Name").and_then(|v| v.as_str()))
-        .map(|n| { let mut it = n.split_whitespace(); it.next(); UnicodeWidthStr::width(it.collect::<Vec<_>>().join(" ").as_str()) })
-        .max()
-        .unwrap_or(8);
-    // +2: minimum gap of 2 spaces after the longest first name
-    let alignment_target = max_first_display + 2;
-    let name_col_width = (alignment_target + max_surname_display + 2).max(20) as u16;
+    // Name alignment from the actual data (display widths so Thai combining vowels are 0-width)
+    let (alignment_target, name_col_width) = name_layout(data);
 
     let border_color = if app.raw_right_focused { category_color(&cat, &theme) } else { theme.border };
     let each = pts_each_label(data, &cat);
@@ -1188,14 +1246,12 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
             .right_aligned(),
         );
 
-    // Build visible column indices: frozen (0,1) + scrollable sub-cols
+    // Build visible column indices: frozen (0,1) + the scrollable sub-cols that fit (ID and Name keep their width)
     let frozen_count = 2usize;
-    let scroll_offset = app.scroll_col_offset.saturating_sub(frozen_count);
-    let scroll_end = std::cmp::min(scroll_offset + sub_cols.len(), sub_cols.len());
-    let visible_sub: &[String] = &sub_cols[scroll_offset..scroll_end];
-    let sub_col_widths: Vec<u16> = visible_sub.iter().map(|sc| {
-        if is_attendance { 2u16 } else { score_col_width(data, &cat, sc) }
-    }).collect();
+    let scroll_offset = app.scroll_col_offset.saturating_sub(frozen_count).min(sub_cols.len());
+    let fit = fitting_sub_cols(app, &cat, scroll_offset, area.width.saturating_sub(2) as usize);
+    let visible_sub: &[String] = &sub_cols[scroll_offset..scroll_offset + fit];
+    let sub_col_widths: Vec<u16> = sub_col_widths(app, &cat, visible_sub);
 
     // Header
     let sep_style = Style::default().fg(theme.border).add_modifier(Modifier::DIM);
@@ -1413,26 +1469,13 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
     let is_attendance_popup = cat.to_lowercase().contains("attendance");
 
 
-    let max_first_display_popup = data.raw_scores.iter()
-        .filter_map(|r| r.get("Name").and_then(|v| v.as_str()))
-        .map(|n| n.split_whitespace().next().map(|p| UnicodeWidthStr::width(p)).unwrap_or(0))
-        .max()
-        .unwrap_or(12);
-    let max_surname_display_popup = data.raw_scores.iter()
-        .filter_map(|r| r.get("Name").and_then(|v| v.as_str()))
-        .map(|n| { let mut it = n.split_whitespace(); it.next(); UnicodeWidthStr::width(it.collect::<Vec<_>>().join(" ").as_str()) })
-        .max()
-        .unwrap_or(8);
-    let alignment_target_popup = max_first_display_popup + 2;
-    let name_col_width_popup = (alignment_target_popup + max_surname_display_popup + 2).max(20) as u16;
+    let (alignment_target_popup, name_col_width_popup) = name_layout(data);
 
     let frozen_count = 2usize;
-    let scroll_offset = app.scroll_col_offset.saturating_sub(frozen_count);
-    let scroll_end = std::cmp::min(scroll_offset + sub_cols.len(), sub_cols.len());
-    let visible_sub: Vec<String> = sub_cols[scroll_offset..scroll_end].to_vec();
-    let sub_col_widths_popup: Vec<u16> = visible_sub.iter().map(|sc| {
-        if is_attendance_popup { 2u16 } else { score_col_width(data, &cat, sc) }
-    }).collect();
+    let scroll_offset = app.scroll_col_offset.saturating_sub(frozen_count).min(sub_cols.len());
+    let fit = fitting_sub_cols(app, &cat, scroll_offset, area.width.saturating_sub(2) as usize);
+    let visible_sub: Vec<String> = sub_cols[scroll_offset..scroll_offset + fit].to_vec();
+    let sub_col_widths_popup: Vec<u16> = sub_col_widths(app, &cat, &visible_sub);
 
     // Header
     let sep_style_popup = Style::default().fg(theme.border).add_modifier(Modifier::DIM);
@@ -3272,8 +3315,6 @@ mod tests {
         let data = app.course_data.as_mut().unwrap();
         data.default_pts.insert("homework".into(), 10.0);
         data.max_scores.insert("hw3".into(), 20.0);
-        assert_eq!(score_col_width(data, "homework", "hw1"), 6);
-        assert_eq!(score_col_width(data, "homework", "hw3"), 12);
         let s = screen(&mut app, 140, 30);
         if std::env::var("SHOW").is_ok() { eprintln!("{}", s.join("\n")); }
         let all = s.join("\n");
@@ -3282,7 +3323,46 @@ mod tests {
         assert!(all.contains("(20 pts)"), "a column off the default keeps them");
         let head = s.iter().find(|l| l.contains("hw1")).unwrap();
         let (a, b) = (head.find("hw1").unwrap(), head.find("hw2").unwrap());
-        assert_eq!(head[a..b].chars().count(), 7, "6 wide + 1 spacing: {head}");
+        assert_eq!(head[a..b].chars().count(), 4, "as wide as `hw1` (scores are ≤ 3) + 1 spacing: {head}");
+        assert_eq!(sub_col_widths(&app, "homework", &["hw1".into(), "hw3".into()]), vec![3, 12]);
+    }
+
+    #[test]
+    fn score_columns_scroll_instead_of_squeezing_id_and_name() {
+        use crossterm::event::KeyCode;
+        let mut app = raw_details_app();
+        let data = app.course_data.as_mut().unwrap();
+        let cols: Vec<String> = (1..=10).map(|i| i.to_string()).collect();
+        for (i, c) in cols.iter().enumerate() {
+            data.max_scores.insert(c.clone(), 10.0);
+            for (r, rec) in data.raw_scores.iter_mut().enumerate() {
+                rec.insert(c.clone(), serde_json::json!(if (r + i) % 3 == 0 { 9.5 } else { 10.0 }));
+            }
+        }
+        data.data_mapping.insert("lab".into(), cols);
+        data.default_pts.insert("lab".into(), 10.0);
+        app.raw_selected_category = Some("lab".into());
+        app.cursor_col = 2;
+        app.scroll_col_offset = 2;
+
+        let name = app.course_data.as_ref().unwrap().raw_scores[0]["Name"].as_str().unwrap().to_string();
+        let surname = name.split_whitespace().last().unwrap().to_string();
+        // wide window: all ten labs, each as wide as "9.5"
+        let all = screen(&mut app, 140, 30).join("\n");
+        assert!(all.contains("Raw Details  ›  lab · 10 pts each") && all.contains(&surname));
+        assert!(all.contains(" 9   10  Total"), "lab 9 and 10 shown, 3 wide:\n{all}");
+        // narrow window: Name keeps its width, the labs that don't fit scroll
+        app.width = 90;
+        let s = screen(&mut app, 90, 30);
+        if std::env::var("SHOW").is_ok() { eprintln!("{}", s.join("\n")); }
+        let all = s.join("\n");
+        let head = |s: &[String]| s.iter().find(|l| l.contains(" ID ")).unwrap().clone();
+        assert!(all.contains(&surname), "Name not squeezed:\n{all}");
+        assert!(head(&s).contains("│ 1 ") && !head(&s).contains(" 10 "), "lab 10 scrolled out of view");
+        for _ in 0..9 { key(&mut app, KeyCode::Right); }
+        let s = screen(&mut app, 90, 30);
+        let all = s.join("\n");
+        assert!(head(&s).contains(" 10 ") && all.contains(&surname), "cursor on lab 10 scrolls it into view:\n{all}");
     }
 
     #[tokio::test]

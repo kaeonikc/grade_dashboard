@@ -1195,21 +1195,20 @@ impl App {
                 return;
             }
 
-            let is_attendance = self.raw_selected_category.as_deref()
-                .map(|c| c.to_lowercase().contains("attendance") || c.to_lowercase().contains("att"))
-                .unwrap_or(false);
-            let right_inner = self.raw_table_inner_width();
-            // Frozen cols: # (2) + ID (9) + Name (≈32) + sep (1) + 4 spacing gaps = 48
-            let scrollable_width = right_inner.saturating_sub(48);
-            // col width: sub_col_width(2) + column_spacing(1)
-            let col_width: usize = if is_attendance { 3 } else { 13 };
-            let visible_scrollable_cols = (scrollable_width / col_width).max(1);
-
             if self.cursor_col < self.scroll_col_offset {
                 self.scroll_col_offset = self.cursor_col;
-            } else if self.cursor_col >= self.scroll_col_offset + visible_scrollable_cols {
-                self.scroll_col_offset = self.cursor_col - visible_scrollable_cols + 1;
+                return;
             }
+            // Same widths as the drawing (ui::fitting_sub_cols): move the first visible column right until the
+            // cursor's column fits beside ID, Name and Total.
+            let cat = self.raw_selected_category.clone().unwrap_or_default();
+            let inner = self.raw_table_inner_width();
+            let cursor_sub = self.cursor_col - 2;
+            let mut start = self.scroll_col_offset.saturating_sub(2);
+            while start < cursor_sub && start + crate::ui::fitting_sub_cols(self, &cat, start, inner) <= cursor_sub {
+                start += 1;
+            }
+            self.scroll_col_offset = start + 2;
             return;
         }
 
