@@ -24,6 +24,7 @@ import yaml
 
 from src.cells import classify
 from src.csvio import CsvText, fmt_value, read_csv_text, write_csv_text
+from src.points import category_default, defaults, header_for, resolve
 
 SENTINELS = {"max", "max score", "full score", "full"}
 
@@ -57,19 +58,21 @@ def parse_item(item):
 
 
 def category_items(value) -> list:
-    """The list of entries of one data_mapping category (plain list, or {total_pts:, columns: [...]})."""
+    """The list of entries of one data_mapping category (plain list, or {total_pts:, pts_each:, columns: [...]})."""
     if isinstance(value, dict) and "columns" in value:
         value = value.get("columns") or []
     return list(value) if isinstance(value, list) else []
 
 
 def mapping(config: dict) -> dict:
-    """{category: [(column, points or None)]} for every score category (attendance left out)."""
+    """{category: [(column, points or None)]} for every score category (attendance left out). A column without its
+    own points gets the category default (pts_each, or lab's built-in 10: src/points.py)."""
     out = {}
     for cat, value in (config.get("data_mapping") or {}).items():
         if str(cat) == "attendance":
             continue
-        out[str(cat)] = [parse_item(i) for i in category_items(value)]
+        default = category_default(cat, value)
+        out[str(cat)] = [(name, resolve(pts, default)) for name, pts in map(parse_item, category_items(value))]
     return out
 
 
@@ -234,23 +237,34 @@ class Changes:
     removed: list = field(default_factory=list)    # src.columns.Unmapped: taken out of config.yaml, still in a file
     follow_config: list = field(default_factory=list)  # (category, file, column, header pts, config pts): you
                                                        # changed the config's points, so the header follows
+    reshape: list = field(default_factory=list)    # (category, file, header, canonical header): same points, only
+                                                   # the form differs (`4 (10pts)` → `4` at the category default)
 
     def empty(self) -> bool:
         return not (self.unmapped or self.conflicts or self.missing or self.no_points or self.stale or self.removed
-                    or self.follow_config)
+                    or self.follow_config or self.reshape)
 
 
 def find_changes(course) -> Changes:
     from src.columns import points_side, unmapped
     course = Path(course)
-    cfg_map = mapping(raw_config(course))
+    cfg = raw_config(course)
+    cfg_map, dflt = mapping(cfg), defaults(cfg)
     ch = Changes()
     kinds = {(u.category, u.name): u for u in unmapped(course)}
     for cat, path in data_files(course).items():
         doc = read_csv_text(path)
         cols = cfg_map[cat]
         mapped = {name: pts for name, pts in cols}
-        present = {name: hp for _, name, hp in score_columns(doc)}
+        # a bare header (`4`) means the category default
+        present = {name: resolve(hp, dflt.get(cat)) for _, name, hp in score_columns(doc)}
+        for i, name, hp in score_columns(doc):
+            if name not in mapped or mapped[name] is None or present[name] is None:
+                continue
+            if abs(present[name] - mapped[name]) < 1e-9:
+                want = header_for(name, mapped[name], dflt.get(cat))
+                if doc.header[i].strip() != want:
+                    ch.reshape.append((cat, path.name, doc.header[i], want))
         for name, hp in present.items():
             if name not in mapped:
                 u = kinds.get((cat, name))

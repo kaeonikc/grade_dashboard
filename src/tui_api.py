@@ -501,6 +501,7 @@ def get_course_data(course_path, use_weighted=True):
             "data_mapping": config.get("data_mapping", {}),
             "warnings": warnings,
             "max_scores": clean_max_scores,
+            "default_pts": {cat: float(v) for cat, v in config.get("default_pts", {}).items()},
             "summary_columns": summary_cols,
             "student_grades": student_grades,
             "raw_columns": raw_display_cols,

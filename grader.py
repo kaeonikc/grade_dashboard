@@ -15,6 +15,7 @@ sys.path.insert(0, str(script_path.parent))
 
 from src.data_loader import load_config, load_course_data, get_course_file_prefix, backup_csv_before_write
 from src.calculators import calculate_final_grades
+from src.points import category_default, fmt_pts, header_for, resolve
 
 _UNSAFE_PATH_CHARS = re.compile(r'[/\\:*?"<>|\x00-\x1f]')
 _WHITESPACE_RUN = re.compile(r'\s+')
@@ -455,16 +456,16 @@ def normalize_col_key(name: str) -> str:
     """
     return re.sub(r'[\s_]+', ' ', str(name).strip()).casefold()
 
-def create_empty_category_csv(category: str, columns: list, student_registry: pd.DataFrame, csv_path: Path, default_max: float = 100.0):
+def create_empty_category_csv(category: str, columns: list, student_registry: pd.DataFrame, csv_path: Path,
+                              default_max: float = 100.0, default: float | None = None):
+    """`default` is the category's default points (pts_each / lab's 10): columns at it get a bare header."""
     headers = ['Student ID', 'Name']
     total_pts = 0.0
     for col in columns:
         clean_name, pts = parse_config_col(col)
-        pts_val = pts if pts is not None else default_max
+        pts_val = float(resolve(pts, default) if resolve(pts, default) is not None else default_max)
         total_pts += pts_val
-        
-        pts_str = str(int(pts_val)) if pts_val.is_integer() else str(pts_val)
-        headers.append(f"{clean_name} ({pts_str}pts)")
+        headers.append(header_for(clean_name, pts_val, default))
         
     # Append the total column header
     total_pts_str = str(int(total_pts)) if total_pts.is_integer() else str(total_pts)
@@ -655,6 +656,7 @@ def mkdb_course(config_file: str = None, input_alias: str = None):
         total_pts, columns = parse_category_mapping(mapping_item)
         if not isinstance(columns, list):
             continue
+        default = category_default(category, mapping_item)
         csv_path = data_dir / f"{prefix}_{category}.csv"
         if csv_path.exists():
             # mkdb is for scaffolding brand-new databases; a file already
@@ -677,6 +679,7 @@ def mkdb_course(config_file: str = None, input_alias: str = None):
         unspecified_cols = 0
         for col in columns:
             _, pts = parse_config_col(col)
+            pts = resolve(pts, default)
             if pts is not None:
                 specified_total += pts
             else:
@@ -697,7 +700,7 @@ def mkdb_course(config_file: str = None, input_alias: str = None):
                       f"but the sum of specified columns is {specified_total}pts.")
         
         try:
-            create_empty_category_csv(category, columns, student_registry, csv_path, default_max)
+            create_empty_category_csv(category, columns, student_registry, csv_path, default_max, default)
             print(f"✅ Created {csv_path.name} successfully with default max score {default_max}.")
         except Exception as e:
             print(f"❌ Error writing {csv_path.name}: {e}")
@@ -707,7 +710,8 @@ def mkdb_course(config_file: str = None, input_alias: str = None):
     _refresh_totals(course_dir, "mkdb")
     print("🚀 All databases created successfully!")
 
-def update_course(input_file: str = None, config_file: str = None, purge_empty_orphans: bool = False):
+def update_course(input_file: str = None, config_file: str = None, purge_empty_orphans: bool = False,
+                  yes: bool = False):
     # 1. Raw excel file update mode (if input_file is supplied)
     if input_file:
         input_path = Path(input_file)
@@ -897,6 +901,14 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
     course_dir = cfg_path.resolve().parent.parent
     info_dir = course_dir / "course_info"
     data_dir = course_dir / "data"
+
+    # You changed pts_each while bare-header columns hold scores: ask before they count out of the new value.
+    from src.columns import settle_default_changes
+    from src.history import Entry
+    pts_entry = Entry(course_dir, "grader", "update-points")
+    settle_default_changes(course_dir, _ask, pts_entry, yes=yes)
+    if pts_entry.close():
+        print(f"  (undo with: grader undo {pts_entry.id})")
     
     # Load config yaml
     try:
@@ -947,6 +959,7 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
         total_pts, columns = parse_category_mapping(mapping_item)
         if not isinstance(columns, list):
             continue
+        default = category_default(category, mapping_item)
         csv_path = data_dir / f"{prefix}_{category}.csv"
 
         # Calculate target_total based on category weight or manual total_pts
@@ -960,6 +973,7 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
         unspecified_cols = 0
         for col in columns:
             _, pts = parse_config_col(col)
+            pts = resolve(pts, default)
             if pts is not None:
                 specified_total += pts
             else:
@@ -982,11 +996,12 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
         # If database CSV doesn't exist, create it
         if not csv_path.exists():
             print(f"✨ Score database {csv_path.name} does not exist. Creating it...")
-            create_empty_category_csv(category, columns, student_registry, csv_path, default_max)
+            create_empty_category_csv(category, columns, student_registry, csv_path, default_max, default)
             continue
             
         try:
-            df = pd.read_csv(csv_path)
+            # As text: a column with blanks would otherwise come back as floats and be written as `9.0`.
+            df = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
             df.columns = df.columns.astype(str).str.strip()
         except Exception as e:
             print(f"❌ Error reading {csv_path.name}: {e}. Skipping.")
@@ -1058,21 +1073,23 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
         # holds data.
         final_headers = ['Student ID', 'Name']
         total_pts = 0.0
+        shortened = []  # `4 (10pts)` → `4`: same points, at the category default (one line per file below)
         for key in desired_keys:
             clean_name, config_col_item = desired_base_mapping[key]
             _, pts = parse_config_col(config_col_item)
-            pts_val = pts if pts is not None else default_max
+            pts = resolve(pts, default)
+            pts_val = float(pts if pts is not None else default_max)
             total_pts += pts_val
 
-            pts_str = str(int(pts_val)) if pts_val.is_integer() else str(pts_val)
-            new_header = f"{clean_name} ({pts_str}pts)"
+            new_header = header_for(clean_name, pts_val, default)
 
             if key in csv_columns_info:
                 # Column already exists (matched by normalized name).
                 orig_header = csv_columns_info[key][0]
+                orig_pts = resolve(parse_pts(orig_header)[1], default)  # a bare header holds the default
                 if orig_header == new_header:
                     final_headers.append(orig_header)
-                elif points_side(course_dir, category, clean_name, parse_pts(orig_header)[1], pts) == "file":
+                elif points_side(course_dir, category, clean_name, orig_pts, pts) == "file":
                     # You changed the points in the CSV header, not in the config: keep them; `grader sync` asks.
                     final_headers.append(orig_header)
                     print(f"  ℹ️ '{orig_header}': points changed in the file, not in config.yaml; kept. "
@@ -1083,7 +1100,10 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
                     final_headers.append(orig_header)
                 else:
                     student_rows.rename(columns={orig_header: new_header}, inplace=True)
-                    print(f"  📝 Updated max points header for '{clean_name}' from '{orig_header}' to '{new_header}'")
+                    if orig_pts is not None and abs(orig_pts - pts_val) < 1e-9:
+                        shortened.append((orig_header, new_header))
+                    else:
+                        print(f"  📝 Updated max points header for '{clean_name}' from '{orig_header}' to '{new_header}'")
                     final_headers.append(new_header)
             elif new_header in student_rows.columns:
                 # A column with this exact name already exists even though it
@@ -1094,6 +1114,11 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
                 student_rows[new_header] = ""
                 final_headers.append(new_header)
                 print(f"  ✚ Added new column '{new_header}' to {csv_path.name}")
+
+        if shortened:
+            (o, n), more = shortened[0], ", …" if len(shortened) > 1 else ""
+            each = f": {fmt_pts(default)} pts each" if default is not None else ""
+            print(f"  📝 [{category}] {len(shortened)} header(s) reshaped ('{o}' → '{n}'{more}){each}")
 
         # Keep orphaned columns in the file (just not part of the calculated
         # schema) rather than dropping them on the column reindex below.
@@ -1298,6 +1323,7 @@ def sync_cmd(course: str = None, yes: bool = False):
     from src.history import Entry
     from src.sync import (_fmt_pts, category_items, config_file, data_files, find_changes, parse_item, parse_pts,
                           raw_config, set_category, sync_course)
+    from src.points import at_default, defaults
     from src.csvio import atomic_write_bytes
 
     target_dir = _resolve_course_for_history(course)
@@ -1306,13 +1332,19 @@ def sync_cmd(course: str = None, yes: bool = False):
         sys.exit(1)
     target_dir = target_dir.resolve()
     from src import attendance
+    from src.columns import save_base, settle_default_changes, settle_removed
+    entry = Entry(target_dir, "grader", "sync")
+    print(f"🔄 Sync: {target_dir.name}")
+    # You changed pts_each while bare-header columns hold scores: ask first (it can put the old value back).
+    settle_default_changes(target_dir, _ask, entry, yes=yes)
     ch = find_changes(target_dir)
     att = attendance.plan(target_dir)
-    print(f"🔄 Sync: {target_dir.name}")
     att_todo = att is not None and (att.has_changes() or att.empty_past or att.first_run)
-    from src.columns import save_base, settle_removed
     if ch.empty() and not att_todo:
         save_base(target_dir)
+        if entry.close():
+            print(f"✅ Synced. Undo with: grader undo {entry.id}")
+            return
         print("✅ Everything is in sync: every total matches its cells, every column is in config.yaml"
               + (", and the attendance xlsx and csv agree." if att is not None else "."))
         return
@@ -1330,9 +1362,9 @@ def sync_cmd(course: str = None, yes: bool = False):
 
     cfg = raw_config(target_dir)
     dm = cfg.get("data_mapping") or {}
+    dflt = defaults(cfg)
     new_values: dict = {}
     header_fixes: list = []  # (category, column, points)
-    entry = Entry(target_dir, "grader", "sync")
 
     # You edited config.yaml: the files follow it (src/columns.py tells which side changed).
     for cat, fname, col, hp, cp in ch.follow_config:
@@ -1349,18 +1381,23 @@ def sync_cmd(course: str = None, yes: bool = False):
             new_values[cat] = copy.deepcopy(dm.get(cat))
         return new_values[cat]
 
+    def entry_for(cat, key, pts):
+        return key if at_default(pts, dflt.get(cat)) else {key: pts}  # bare at the category default
+
     def set_points(cat, col, pts):
         value = items_of(cat)
         lst = value["columns"] if isinstance(value, dict) and "columns" in value else value
         for i, item in enumerate(lst):
             if parse_item(item)[0] == col:
-                lst[i] = {col: pts}
+                key = next(iter(item)) if isinstance(item, dict) else item  # keeps `5` a number in the YAML
+                lst[i] = entry_for(cat, key, pts)
                 return
 
     def add_column(cat, col, pts):
         value = items_of(cat)
         lst = value["columns"] if isinstance(value, dict) and "columns" in value else value
-        lst.append({col: pts})
+        key = int(col) if col.isdigit() and str(int(col)) == col else col  # lab `11`, like `1`…`10`
+        lst.append(entry_for(cat, key, pts))
 
     if ch.unmapped:
         print("Columns in a file but not in config.yaml (they don't count yet):")
@@ -1419,10 +1456,26 @@ def sync_cmd(course: str = None, yes: bool = False):
         doc = read_csv_text(path)
         for i, h in enumerate(doc.header):
             if parse_pts(h)[0] == col and not h.strip().lower().startswith("total"):
-                doc.header[i] = f"{col} ({_fmt_pts(pts)}pts)"
+                doc.header[i] = header_for(col, pts, dflt.get(cat))
         entry.capture(path)
         write_csv_text(path, doc)
         print(f"  ✍️  {path.name}: header of '{col}' set to {_fmt_pts(pts)} pts")
+    # Same points, other form: `4 (10pts)` → `4` at the category default (or back, when the default is gone).
+    reshaped: dict = {}
+    for cat, fname, old, new in ch.reshape:
+        path = files.get(cat)
+        if path:
+            reshaped.setdefault(path, []).append((old, new))
+    for path, pairs in reshaped.items():
+        doc = read_csv_text(path)
+        for old, new in pairs:
+            i = doc.col(old)
+            if i is not None:
+                doc.header[i] = new
+        entry.capture(path)
+        write_csv_text(path, doc)
+        (o, n), more = pairs[0], ", …" if len(pairs) > 1 else ""
+        print(f"  📝 {path.name}: {len(pairs)} header(s) reshaped ('{o}' → '{n}'{more})")
     done = sync_course(target_dir, entry=entry)
     for name, n in done.items():
         print(f"  🔁 {name}: total column refreshed ({n} cell(s))")
@@ -1769,6 +1822,8 @@ if __name__ == "__main__":
                                 help="Remove category-CSV columns no longer referenced by config.yaml, "
                                      "but only when every student's value in that column is blank. "
                                      "Orphan columns holding any real score are always left alone.")
+    parser_update.add_argument("-y", "--yes", action="store_true",
+                               help="Don't ask; when you changed pts_each, keep the new value")
 
     # Undo / history commands
     parser_undo = subparsers.add_parser("undo", help="Restore files from history/ (newest change not undone yet, or ID)")
@@ -1805,7 +1860,8 @@ if __name__ == "__main__":
         if args.input:
             update_course(input_file=args.input)
         else:
-            update_course(config_file=args.config_file, purge_empty_orphans=args.purge_empty_orphans)
+            update_course(config_file=args.config_file, purge_empty_orphans=args.purge_empty_orphans,
+                          yes=args.yes)
     elif args.command == "undo":
         undo_course(args.entry, args.course, args.yes)
     elif args.command == "sync":

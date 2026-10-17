@@ -1,5 +1,5 @@
 ---
-contract: 2
+contract: 3
 ---
 
 # grade_dashboard ↔ exam_projects
@@ -13,6 +13,9 @@ Contract 2 (2026-10-12) adds three things:
 - every score file's `total` column is kept in step with its cells;
 - exams are sent as raw scores, part by part;
 - `exam submit scores` detects your hand edits.
+
+Contract 3 (2026-10-18) adds **default points per category** (`pts_each`, lab = 10 built in): a column at its
+category's default has a bare header (`4`, not `4 (10pts)`). See "Points" below.
 
 ## Who owns what
 
@@ -66,6 +69,20 @@ Student ID,Name,final_mcq (35pts),final_fill (10pts),bonus (2pts),total (45pts)
 - **Points.** A column's points are in its header and, for the columns that count, in `config.yaml` `data_mapping`.
   `grader sync` reports any disagreement: when you changed the config, the header follows; when the header changed
   (by hand, or by `exam submit scores`), it asks which one wins.
+- **Default points.** A category can give its columns one value: `lab: {pts_each: 10, columns: [1, 2, …]}`. A
+  category named `lab` has 10 without it. A column's points are its own config value (`- 5: 20`), else the
+  default. A column **at the default has a bare header** (`4`), which means "the default"; any other column keeps
+  `name (Npts)`. Both tools write this canonical header; `grader update/sync` reshape old ones (`4 (10pts)` → `4`).
+
+  | column | points | category default | header |
+  |---|---|---|---|
+  | `4` | 10 | 10 | `4` |
+  | `5` | 20 | 10 | `5 (20pts)` |
+  | `hw1` | 15 | (none) | `hw1 (15pts)` |
+  | `final_mcq` | 35 | 35 | `final_mcq` |
+  | `final_mcq` | 35 | (none) | `final_mcq (35pts)` |
+
+  Implementations: `grade_dashboard/src/points.py:header_for` and `exam_projects/cli/exam_cli/gradebook.py:header_for`.
 - **Columns that count** are the ones `data_mapping` lists for the category. A column that is only in the file
   (added by hand, or added by `exam submit scores`) doesn't count until `grader sync` adds it to the config, which
   it does only after asking you.

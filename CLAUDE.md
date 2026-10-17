@@ -41,6 +41,11 @@ Two supported formats — the loader tries the column-header format first, then 
 
 If no max is found for a column, it defaults to 100.
 
+The config's points are loaded first and a header's `(Npts)` overrides them. A column at its category's default
+(`pts_each`, or `lab` = 10 built in) has a **bare header** (`4`), so its max comes only from the config. The rule
+(`category_default`, `header_for`) lives in `src/points.py`, and `src/sync.py:mapping()` returns resolved points.
+exam_projects has a copy (INTEGRATION.md "Default points"). See SPEC_default_points.md.
+
 ### Grade calculation (calculators.py)
 1. Each category's raw scores are summed and divided by the possible max (respecting `drop_lowest_homework` rule if set) to produce a percentage.
 2. The percentage is multiplied by the category weight × 100 to get weighted points.

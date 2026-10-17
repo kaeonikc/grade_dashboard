@@ -6,6 +6,8 @@ import yaml
 import pandas as pd
 from pathlib import Path
 
+from src.points import category_default, defaults, resolve
+
 def backup_csv_before_write(csv_path, tool: str = "grade-tui", action: str = "edit", note: str = "",
                             cells: int | None = None) -> None:
     """
@@ -123,16 +125,18 @@ def load_config(course_path: str) -> dict:
                         print(f"⚠️ Warning: Could not auto-detect attendance headers: {e}", file=sys.stderr)
             config['data_mapping']['attendance'] = attendance_cols
 
-    # Clean data_mapping columns
+    # Clean data_mapping columns (pts_each / the built-in lab default are kept in default_pts, src/points.py)
     config['total_pts'] = {}
+    config['default_pts'] = defaults(config)
     if 'data_mapping' in config:
         new_mapping = {}
         for category, columns in config['data_mapping'].items():
             if isinstance(columns, dict) and 'columns' in columns:
-                try:
-                    config['total_pts'][category] = float(columns.get('total_pts', 0.0))
-                except (ValueError, TypeError):
-                    pass
+                if columns.get('total_pts') is not None:
+                    try:
+                        config['total_pts'][category] = float(columns['total_pts'])
+                    except (ValueError, TypeError):
+                        pass
                 cols_list = columns.get('columns', [])
             else:
                 cols_list = columns
@@ -173,9 +177,11 @@ def load_course_data(course_path: str) -> tuple[pd.DataFrame, dict]:
             config_dm = raw_config.get('data_mapping', {})
             for category, columns in config_dm.items():
                 cols_list = columns.get('columns', []) if isinstance(columns, dict) else columns
+                default = category_default(category, columns)
                 if isinstance(cols_list, list):
                     for col in cols_list:
                         clean_name, pts = parse_config_col(col)
+                        pts = resolve(pts, default)  # a bare header (`4`) keeps this value
                         if pts is not None:
                             max_scores[clean_name] = pts
     except Exception:

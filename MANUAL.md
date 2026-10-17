@@ -130,6 +130,9 @@ data_mapping:                     # category → its score columns, with points
   midterm:
     - midterm_mcq: 35             # same as "midterm_mcq (35pts)"
     - midterm_showsol: 5
+  lab:                            # 10 labs, 10 pts each (lab has 10 built in, so pts_each is optional here)
+    pts_each: 10
+    columns: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
   final:
     - final_exam: 25
 
@@ -158,6 +161,10 @@ rules:
   one column).
 - Optional: a category can be written as `{total_pts: 30, columns: [...]}` to fix its total; a warning shows if the
   columns don't add up to it.
+- **Same points for every column:** `pts_each: N` (in the `{…, columns: [...]}` form) gives each column without its
+  own points N. A category named `lab` gets 10 without it. A column at that default has a **bare header** in the CSV
+  (`4`, not `4 (10pts)`), and grade-tui says `lab · 10 pts each` once in the table title and keeps those columns
+  narrow. A column with other points (`- 5: 20`) keeps `5 (20pts)`.
 
 After changing `data_mapping`, run `grader update` from inside the course folder. It adds the new columns to the
 score files and never deletes a score.
@@ -182,7 +189,12 @@ Student ID,Name,midterm_mcq (35pts),midterm_showsol (5pts),total (40pts)
 ```
 
 - The points come from the header `(Npts)` and from `data_mapping` in the config. `grader sync` tells you if the
-  two ever disagree.
+  two ever disagree. A bare header (`4`) means the category's `pts_each` (lab: 10).
+- `grader update` and `grader sync` turn old headers at the default into bare ones (`4 (10pts)` → `4`) without
+  touching a score, and print one line per file. `grader undo` puts them back.
+- If you change `pts_each` after scores are in, `grader update` / `grader sync` ask first: `[lab] 10 → 20 pts each;
+  42 students' scores in 1, 2, 3, 4, … now count out of 20. [y] keep 20 / [n] put 10 back in config.yaml`.
+  `--yes` (or no terminal) keeps the new value. grade-tui follows the config without asking.
 - `total` is the plain sum of the category's columns (empty, `ขส` and invalid count 0). It's **recalculated for
   you**: when grade-tui opens a course, after every edit in grade-tui, after `exam submit scores`, and by
   `grader sync` after you edit the file by hand. Don't type into it.
@@ -516,7 +528,7 @@ the same way: whichever side you edited wins. If you changed a header's points b
 | `grader init --course_name N --term 2026_S1 --course_id C` | create one without a class list |
 | `grader mkdb [config.yaml]` | create the missing score files from `data_mapping` |
 | `grader update -i <class list.xls>` | merge a newer class list into the roster |
-| `grader update [config.yaml] [--purge-empty-orphans]` | align the score files with the config |
+| `grader update [config.yaml] [--purge-empty-orphans] [--yes]` | align the score files with the config |
 | `grader sync [--course DIR] [--yes]` | after editing CSVs or the attendance sheet by hand: refresh totals, add your new columns to the config, sync the attendance xlsx ↔ csv (asks) |
 | `grader history [--course DIR] [-n N]` | list saved versions |
 | `grader undo [ID] [--course DIR] [--yes]` | restore a saved version |

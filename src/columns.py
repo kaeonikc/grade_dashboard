@@ -13,7 +13,9 @@ Without that file yet (a course from before this existed), the earlier configs k
 course_info/*_config.yaml.bak are used instead.
 
 The same memory decides points that differ between a header and the config: the side that still has the
-remembered value is the one you didn't touch, so the other side wins.
+remembered value is the one you didn't touch, so the other side wins. A bare header (`4`) holds the category
+default (src/points.py), so when you change pts_each, `grader update` / `grader sync` ask before the scores
+already in those columns count out of the new value (`settle_default_changes`).
 """
 
 from __future__ import annotations
@@ -27,7 +29,8 @@ import yaml
 
 from src.cells import classify
 from src.csvio import atomic_write_bytes, read_csv_text, write_csv_text
-from src.sync import _fmt_pts, data_files, mapping, raw_config, score_columns
+from src.points import at_default, defaults, fmt_pts, header_for
+from src.sync import config_file, data_files, mapping, raw_config, score_columns, set_category
 
 BASE = "config_sync.json"
 
@@ -175,10 +178,11 @@ def rename_column(course, path: Path, name: str, target: str, entry) -> None:
     if name not in cols:
         return
     i, pts = cols[name]
-    cat_pts = None
-    for cat, items in mapping(raw_config(course)).items():
+    cfg = raw_config(course)
+    cat_pts, default = None, None
+    for cat, items in mapping(cfg).items():
         if data_files(course).get(cat) == path:
-            cat_pts = dict(items).get(target)
+            cat_pts, default = dict(items).get(target), defaults(cfg).get(cat)
     pts = cat_pts if cat_pts is not None else pts
     entry.capture(path)
     if target in cols:
@@ -191,7 +195,7 @@ def rename_column(course, path: Path, name: str, target: str, entry) -> None:
         for r in doc.rows:
             r.pop(i)
     else:
-        doc.header[i] = f"{target} ({_fmt_pts(pts)}pts)" if pts is not None else target
+        doc.header[i] = header_for(target, pts, default)
     write_csv_text(path, doc)
 
 
@@ -245,3 +249,77 @@ def settle_removed(course, ask, entry, yes: bool = False, say=print) -> Settled:
             out.kept.setdefault(u.category, set()).add(u.name)
             say(f"  📌 {u.name}: kept in {u.path.name} (not counted; won't be proposed for config.yaml)")
     return out
+
+
+# ---- pts_each changed under bare headers ---------------------------------------------------------------------------
+@dataclass
+class DefaultChange:
+    category: str
+    path: Path
+    old: float           # the points those columns had when the files were last aligned
+    new: float | None    # the category default now
+    columns: list        # bare-header columns that have scores
+    students: int        # rows with a score in any of them
+
+
+def default_changes(course) -> list[DefaultChange]:
+    """Categories whose default changed while bare-header columns at it already hold scores. A bare header can't
+    show the old value, so the scores would silently count out of the new one."""
+    course = Path(course)
+    before, _, exact = remembered(course)
+    if not exact:
+        return []
+    cfg = raw_config(course)
+    cfg_map, dflt = mapping(cfg), defaults(cfg)
+    out = []
+    for cat, path in data_files(course).items():
+        new = dflt.get(cat)
+        cols = dict(cfg_map.get(cat, []))
+        doc = read_csv_text(path)
+        olds, names, rows = set(), [], set()
+        for i, name, hp in score_columns(doc):
+            if hp is not None or name not in cols:
+                continue
+            old, now = before.get(cat, {}).get(name), cols[name]
+            if old is None or (now is not None and abs(old - now) < 1e-9):
+                continue
+            if now is not None and not at_default(now, new):
+                continue  # its own config value changed: the header follows (SPEC_config_columns.md #5)
+            if filled_cells(doc, i) == 0:
+                continue
+            olds.add(old)
+            names.append(name)
+            rows |= {r for r, row in enumerate(doc.rows) if i < len(row) and classify(row[i])[0] != "empty"}
+        if names and len(olds) == 1:
+            out.append(DefaultChange(cat, path, olds.pop(), new, names, len(rows)))
+    return out
+
+
+def settle_default_changes(course, ask, entry, yes: bool = False, say=print) -> list[DefaultChange]:
+    """Asks about each default_changes(): [y] keep the new value / [n] put the old pts_each back in config.yaml.
+    `--yes` or no terminal = keep the new value. Returns the ones put back."""
+    course = Path(course)
+    restored = []
+    for c in default_changes(course):
+        new = f"{fmt_pts(c.new)}" if c.new is not None else "no default"
+        cols = ", ".join(c.columns[:4]) + (", …" if len(c.columns) > 4 else "")
+        out_of = f"count out of {fmt_pts(c.new)}" if c.new is not None else "have no points"
+        q = (f"  [{c.category}] {fmt_pts(c.old)} → {new} pts each; {c.students} students' scores in {cols} now "
+             f"{out_of}. [y] keep {new} / [n] put {fmt_pts(c.old)} back in config.yaml? [y]")
+        ans = "y" if yes else (ask(q, "y") or "y").strip().lower()[:1]
+        if ans != "n":
+            say(f"  ✔️  [{c.category}] {new} pts each, as in config.yaml")
+            continue
+        path = config_file(course)
+        value = raw_config(course)["data_mapping"][c.category]
+        if isinstance(value, dict) and "columns" in value:
+            value = dict(value)
+        else:
+            value = {"columns": list(value or [])}
+        value["pts_each"] = int(c.old) if float(c.old).is_integer() else c.old
+        value = {"pts_each": value.pop("pts_each"), **value}
+        entry.capture(path)
+        atomic_write_bytes(path, set_category(path, c.category, value).encode("utf-8"))
+        restored.append(c)
+        say(f"  ↩️  [{c.category}] pts_each: {fmt_pts(c.old)} put back in {path.name}")
+    return restored

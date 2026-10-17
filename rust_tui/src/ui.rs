@@ -1012,6 +1012,37 @@ fn total_with_pct(total: f64, max: f64) -> String {
 }
 
 /// The maximum of a category: sessions for attendance, else the sum of its columns' points.
+/// " · 10 pts each" for a category whose columns share default points (pts_each / lab's 10), else "".
+fn pts_each_label(data: &crate::types::CourseData, cat: &str) -> String {
+    match data.default_pts.get(cat) {
+        Some(d) if d.fract() == 0.0 => format!(" · {} pts each", *d as i64),
+        Some(d) => format!(" · {} pts each", d),
+        None => String::new(),
+    }
+}
+
+/// A score column worth its category's default points: the title says the points once, so its header shows only
+/// the name and the column is only as wide as a score (SPEC_default_points.md).
+fn at_category_default(data: &crate::types::CourseData, cat: &str, col: &str) -> bool {
+    match (data.default_pts.get(cat), data.max_scores.get(col)) {
+        (Some(d), Some(m)) => (d - m).abs() < 1e-9,
+        _ => false,
+    }
+}
+
+fn score_col_width(data: &crate::types::CourseData, cat: &str, col: &str) -> u16 {
+    let w = UnicodeWidthStr::width(col);
+    if at_category_default(data, cat, col) { (w.max(4) + 2) as u16 } else { (w + 2).max(12) as u16 }
+}
+
+fn score_col_header(data: &crate::types::CourseData, cat: &str, col: &str) -> String {
+    match data.max_scores.get(col) {
+        Some(_) if at_category_default(data, cat, col) => format!("{}\n", col),
+        Some(m) => format!("{}\n({:.0} pts)", col, m),
+        None => format!("{}\n", col),
+    }
+}
+
 fn category_max(data: &crate::types::CourseData, sub_cols: &[String], is_attendance: bool) -> f64 {
     if is_attendance {
         sub_cols.len() as f64
@@ -1136,10 +1167,11 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
     let name_col_width = (alignment_target + max_surname_display + 2).max(20) as u16;
 
     let border_color = if app.raw_right_focused { category_color(&cat, &theme) } else { theme.border };
+    let each = pts_each_label(data, &cat);
     let title_text = if app.raw_right_focused {
-        format!(" 📋 Raw Details  ›  {}  —  type a score · Space: mark · f: fill ", cat)
+        format!(" 📋 Raw Details  ›  {}{}  —  type a score · Space: mark · f: fill ", cat, each)
     } else {
-        format!(" 📋 Raw Details  ›  {}  (→ / Enter: focus table) ", cat)
+        format!(" 📋 Raw Details  ›  {}{}  (→ / Enter: focus table) ", cat, each)
     };
 
     let block = Block::default()
@@ -1162,7 +1194,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
     let scroll_end = std::cmp::min(scroll_offset + sub_cols.len(), sub_cols.len());
     let visible_sub: &[String] = &sub_cols[scroll_offset..scroll_end];
     let sub_col_widths: Vec<u16> = visible_sub.iter().map(|sc| {
-        if is_attendance { 2u16 } else { (sc.len() + 2).max(12) as u16 }
+        if is_attendance { 2u16 } else { score_col_width(data, &cat, sc) }
     }).collect();
 
     // Header
@@ -1177,12 +1209,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
         let header_text = if is_attendance {
             format!("{}\n", circled_number(scroll_offset + sc_index + 1))
         } else {
-            let max_text = if let Some(max_s) = data.max_scores.get(sc) {
-                format!("\n({:.0} pts)", max_s)
-            } else {
-                "\n".to_string()
-            };
-            format!("{}{}", sc, max_text)
+            score_col_header(data, &cat, sc)
         };
         header_cells.push(
             Cell::from(header_text)
@@ -1378,8 +1405,8 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(category_color(&cat, &theme)))
         .title(format!(
-            " 📋 {}  ›  {}  ›  {}  ({})  {} ",
-            tab_label, cat, name, sid, hint
+            " 📋 {}  ›  {}{}  ›  {}  ({})  {} ",
+            tab_label, cat, pts_each_label(data, &cat), name, sid, hint
         ))
         .title_style(Style::default().fg(category_color(&cat, &theme)).bold());
 
@@ -1404,7 +1431,7 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
     let scroll_end = std::cmp::min(scroll_offset + sub_cols.len(), sub_cols.len());
     let visible_sub: Vec<String> = sub_cols[scroll_offset..scroll_end].to_vec();
     let sub_col_widths_popup: Vec<u16> = visible_sub.iter().map(|sc| {
-        if is_attendance_popup { 2u16 } else { (sc.len() + 2).max(12) as u16 }
+        if is_attendance_popup { 2u16 } else { score_col_width(data, &cat, sc) }
     }).collect();
 
     // Header
@@ -1418,12 +1445,7 @@ fn draw_student_popup(f: &mut Frame, app: &mut App, area: Rect) {
         let header_text = if is_attendance_popup {
             format!("{}\n", circled_number(scroll_offset + sc_index + 1))
         } else {
-            let max_text = if let Some(max_s) = data.max_scores.get(sc) {
-                format!("\n({:.0} pts)", max_s)
-            } else {
-                "\n".to_string()
-            };
-            format!("{}{}", sc, max_text)
+            score_col_header(data, &cat, sc)
         };
         header_cells.push(
             Cell::from(header_text)
@@ -3239,6 +3261,28 @@ mod tests {
         let all = s.join("\n");
         assert!(all.contains("1 unsaved score (1 above max)"));
         assert!(all.contains("Save and quit"));
+    }
+
+    #[test]
+    fn columns_at_the_category_default_show_the_points_once_in_the_title() {
+        let mut app = raw_details_app();
+        let before = screen(&mut app, 140, 30).join("\n");
+        assert!(before.contains("(10 pts)") && !before.contains("pts each"));
+
+        let data = app.course_data.as_mut().unwrap();
+        data.default_pts.insert("homework".into(), 10.0);
+        data.max_scores.insert("hw3".into(), 20.0);
+        assert_eq!(score_col_width(data, "homework", "hw1"), 6);
+        assert_eq!(score_col_width(data, "homework", "hw3"), 12);
+        let s = screen(&mut app, 140, 30);
+        if std::env::var("SHOW").is_ok() { eprintln!("{}", s.join("\n")); }
+        let all = s.join("\n");
+        assert!(all.contains("Raw Details  ›  homework · 10 pts each"));
+        assert!(!all.contains("(10 pts)"), "no per-column points at the default");
+        assert!(all.contains("(20 pts)"), "a column off the default keeps them");
+        let head = s.iter().find(|l| l.contains("hw1")).unwrap();
+        let (a, b) = (head.find("hw1").unwrap(), head.find("hw2").unwrap());
+        assert_eq!(head[a..b].chars().count(), 7, "6 wide + 1 spacing: {head}");
     }
 
     #[tokio::test]

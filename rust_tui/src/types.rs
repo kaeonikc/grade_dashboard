@@ -151,6 +151,10 @@ pub struct CourseData {
     pub data_mapping: HashMap<String, Vec<String>>,
     pub warnings: Vec<String>,
     pub max_scores: HashMap<String, f64>,
+    /// category → default points of its columns (pts_each, or lab's built-in 10). Older tui_api.py versions don't
+    /// send it.
+    #[serde(default)]
+    pub default_pts: HashMap<String, f64>,
     pub summary_columns: Vec<String>,
     pub student_grades: Vec<HashMap<String, serde_json::Value>>,
     pub raw_columns: Vec<String>,
