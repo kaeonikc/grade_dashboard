@@ -124,3 +124,23 @@ def test_raw_scores_show_cells_as_written(course):
     assert by_id["69000002"]["midterm_mcq"] == "ขส"
     assert by_id["69000001"]["hw1"] == 30
     assert [r["Student ID"] for r in data["raw_scores"]] == [r["Student ID"] for r in data["student_grades"]]
+
+
+def test_cli_save_returns_fresh_course_data_in_the_same_call(course):
+    """One python start per save: the reply carries the reloaded course, so the TUI needs no second call."""
+    tui_api.get_course_data(course)
+    payload = json.dumps({"edits": [edit("69000002", "hw1", "21", "15")]})
+    out = subprocess.run(API + ["apply-edits", str(course)], input=payload, capture_output=True, text=True)
+    r = json.loads(out.stdout)
+    assert r["saved"] == 1, out.stdout + out.stderr
+    data = r["course_data"]
+    assert data["status"] == "success"
+    row = next(x for x in data["raw_scores"] if x["Student ID"] == "69000002")
+    assert row["hw1"] == 21
+
+
+def test_cli_save_with_nothing_written_sends_no_course_data(course):
+    payload = json.dumps({"edits": [edit("69000002", "hw1", "21", "99")]})  # conflict
+    out = subprocess.run(API + ["apply-edits", str(course)], input=payload, capture_output=True, text=True)
+    r = json.loads(out.stdout)
+    assert r["saved"] == 0 and "course_data" not in r

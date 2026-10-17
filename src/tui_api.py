@@ -1139,7 +1139,11 @@ if __name__ == "__main__":
         except ValueError as e:
             print(json.dumps({"status": "error", "message": f"Bad edits JSON on stdin: {e}"}))
             sys.exit(1)
-        print(json.dumps(apply_edits(sys.argv[2], payload.get("edits", []))))
+        result = apply_edits(sys.argv[2], payload.get("edits", []))
+        if result.get("status") == "success" and result.get("saved"):
+            # The reloaded course rides along, so grade-tui needs one python start per save, not two
+            result["course_data"] = get_course_data(sys.argv[2])
+        print(json.dumps(result))
     elif cmd == "update-config":
         if len(sys.argv) < 5:
             print(json.dumps({"status": "error", "message": "Missing arguments (path, weights_json, boundaries_json)"}))

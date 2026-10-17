@@ -310,6 +310,41 @@ impl App {
         self.raw_selected_student = Some(raw_idx);
     }
 
+    /// New course data from a load or a save: keeps the cursor/category when `preserve_nav_on_reload`.
+    fn apply_course_data(&mut self, data: CourseData) {
+        self.course_data = Some(data);
+        self.state = AppState::Dashboard;
+        if let Some(msg) = self.error_after_reload.take() {
+            self.error = Some(msg);
+        }
+        if self.preserve_nav_on_reload {
+            self.preserve_nav_on_reload = false;
+            // Clamp cursor_row if student count shrank
+            let max_rows = self.course_data.as_ref()
+                .map(|d| d.raw_scores.len())
+                .unwrap_or(0);
+            if max_rows > 0 && self.cursor_row >= max_rows {
+                self.cursor_row = max_rows - 1;
+            }
+            self.sync_raw_category();
+        } else {
+            self.cursor_row = 0;
+            self.cursor_col = 0;
+            self.scroll_row_offset = 0;
+            self.scroll_col_offset = 0;
+            self.raw_selected_category = None;
+            self.raw_selected_student = None;
+            self.raw_category_index = 0;
+            self.raw_right_focused = false;
+            self.analytics_category_index = 0;
+            self.analytics_right_focused = false;
+            self.summary_category_index = 0;
+            self.summary_right_focused = false;
+            self.sync_raw_category();
+        }
+    
+    }
+
     pub fn load_courses(&mut self) {
         self.loading = true;
         self.loading_msg = "Scanning directory for courses...".to_string();
@@ -1215,38 +1250,7 @@ impl App {
             AppEvent::CourseDataLoaded(res) => {
                 self.loading = false;
                 match res {
-                    Ok(data) => {
-                        self.course_data = Some(data);
-                        self.state = AppState::Dashboard;
-                        if let Some(msg) = self.error_after_reload.take() {
-                            self.error = Some(msg);
-                        }
-                        if self.preserve_nav_on_reload {
-                            self.preserve_nav_on_reload = false;
-                            // Clamp cursor_row if student count shrank
-                            let max_rows = self.course_data.as_ref()
-                                .map(|d| d.raw_scores.len())
-                                .unwrap_or(0);
-                            if max_rows > 0 && self.cursor_row >= max_rows {
-                                self.cursor_row = max_rows - 1;
-                            }
-                            self.sync_raw_category();
-                        } else {
-                            self.cursor_row = 0;
-                            self.cursor_col = 0;
-                            self.scroll_row_offset = 0;
-                            self.scroll_col_offset = 0;
-                            self.raw_selected_category = None;
-                            self.raw_selected_student = None;
-                            self.raw_category_index = 0;
-                            self.raw_right_focused = false;
-                            self.analytics_category_index = 0;
-                            self.analytics_right_focused = false;
-                            self.summary_category_index = 0;
-                            self.summary_right_focused = false;
-                            self.sync_raw_category();
-                        }
-                    }
+                    Ok(data) => self.apply_course_data(data),
                     Err(e) => {
                         self.error = Some(e);
                     }
@@ -1257,7 +1261,8 @@ impl App {
                 let sent = std::mem::take(&mut self.saving);
                 let leave = self.leave_after_save.take();
                 match res {
-                    Ok(report) => {
+                    Ok(mut report) => {
+                        let fresh = report.course_data.take();
                         self.edits.settle(&sent, &report);
                         self.marks.clear();
                         if report.conflicts.is_empty() {
@@ -1281,7 +1286,18 @@ impl App {
                             ));
                         }
                         self.preserve_nav_on_reload = true;
-                        self.load_course_data();
+                        match fresh {
+                            // Swap in the reloaded course together with settling the edits: no gap
+                            // where the old values show, and no second python start.
+                            Some(data) => self.apply_course_data(*data),
+                            None if report.saved > 0 => self.load_course_data(),
+                            None => {
+                                self.preserve_nav_on_reload = false;
+                                if let Some(msg) = self.error_after_reload.take() {
+                                    self.error = Some(msg);
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
                         self.error = Some(format!("Save failed, nothing written: {}", e));
@@ -2084,12 +2100,38 @@ mod tests {
             conflicts: vec![crate::types::Conflict {
                 student_id: sid1.clone(), column: "hw1".into(), reason: "changed".into(), disk_value: Some("3".into()),
             }],
-            message: "Saved 1 cell (1 file).".into(),
+            message: "Saved 1 cell (1 file).".into(), course_data: None,
         })));
         assert_eq!(app.edits.len(), 1, "the conflict stays unsaved");
         assert_eq!(app.edits.get(&sid1, "hw1").unwrap().original, "3");
         assert!(app.marks.is_empty(), "a save clears marks");
         assert!(app.error_after_reload.as_deref().unwrap().contains(&sid1));
+    }
+
+    fn fixture_with(row: usize, col: &str, value: serde_json::Value) -> CourseData {
+        let mut data: CourseData = serde_json::from_str(include_str!("../tests/fixtures/course.json")).unwrap();
+        data.raw_scores[row].insert(col.to_string(), value);
+        data
+    }
+
+    #[tokio::test]
+    async fn save_reply_with_course_data_swaps_in_without_a_second_load() {
+        let mut app = course_app("homework", "hw1", 0);
+        type_str(&mut app, "5");
+        press(&mut app, KeyCode::Enter);
+        press_mod(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert!(app.loading);
+        assert_eq!(pending(&app, 0, "hw1").as_deref(), Some("5"), "still shown while saving");
+
+        app.update(AppEvent::EditsSaved(Ok(SaveReport {
+            status: "success".into(), saved: 1, files: vec![], conflicts: vec![],
+            message: "Saved 1 cell (1 file).".into(),
+            course_data: Some(Box::new(fixture_with(0, "hw1", serde_json::json!(5.0)))),
+        })));
+        assert!(!app.loading, "no second python call");
+        assert!(app.edits.is_empty());
+        assert_eq!(app.cell_value(0, "hw1"), "5", "new value at once: no flash of the old one");
+        assert_eq!((app.active_tab, app.cursor_row, app.raw_right_focused), (1, 1, true), "navigation kept");
     }
 
     #[tokio::test]
@@ -2101,7 +2143,7 @@ mod tests {
         press(&mut app, KeyCode::Char('s'));
         assert!(app.loading && !app.quit);
         app.update(AppEvent::EditsSaved(Ok(SaveReport {
-            status: "success".into(), saved: 1, files: vec![], conflicts: vec![], message: "Saved 1 cell (1 file).".into(),
+            status: "success".into(), saved: 1, files: vec![], conflicts: vec![], message: "Saved 1 cell (1 file).".into(), course_data: None,
         })));
         assert!(app.quit && app.edits.is_empty());
     }

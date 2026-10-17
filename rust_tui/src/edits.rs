@@ -262,6 +262,7 @@ mod tests {
                 Conflict { student_id: "3".into(), column: "x".into(), reason: "not found".into(), disk_value: None },
             ],
             message: String::new(),
+            course_data: None,
         };
         e.settle(&sent, &report);
         assert!(e.get("1", "hw1").is_none());

@@ -81,6 +81,9 @@ The old Enter → modal score popup (`draw_edit_overlay`) is replaced by inline 
   save.
 - On success, the info line reads `Saved 14 cells (3 files).` The course reloads with navigation kept
   (`preserve_nav_on_reload`), and the unsaved list and marks clear.
+- *(Added after use.)* The `apply-edits` reply carries the reloaded course (`course_data`), so a save is one python
+  start, not two, and the edits settle in the same step the new data arrives: no flash of the old values. While saving,
+  the footer shows `⏳ Saving N cells…` instead of an overlay; score edits wait until it finishes.
 - On conflicts, the info line reads `Saved 12 cells · 2 changed on disk, not saved: 69200003 hw1, 69200017 hw2`.
   Those 2 stay unsaved, and their "started from" value updates to the current file value, so a second Ctrl+S writes
   them on purpose.

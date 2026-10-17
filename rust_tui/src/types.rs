@@ -203,6 +203,9 @@ pub struct SaveReport {
     pub conflicts: Vec<Conflict>,
     #[serde(default)]
     pub message: String,
+    /// The reloaded course, sent along when cells were written (one python start per save).
+    #[serde(default)]
+    pub course_data: Option<Box<CourseData>>,
 }
 
 /// A cell the save skipped: `reason` is "changed" (the file no longer holds the original) or "not found".

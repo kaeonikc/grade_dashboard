@@ -228,7 +228,7 @@ rust_tui/src/app.rs  App::update()
 | `get-course-data` | `<path> [weighted]` (default true) | `status`, `course_id`, `weights`, `grade_boundaries`, `student_grades[]`, `raw_scores[]`, `grade_distribution`, `roundup_summary` |
 | `update-score` | `<path> <student_id> <col> <value>` | `status`, `message` (legacy; grade-tui uses apply-edits) |
 | `update-config` | `<path> <weights_json\|null> <boundaries_json\|null>` | `status`, `message` |
-| `apply-edits` | `<path>`, stdin `{"edits": [{student_id, column, value, original}]}` | `status`, `saved`, `files`, `conflicts[]` (`reason`: changed / not found), `message` |
+| `apply-edits` | `<path>`, stdin `{"edits": [{student_id, column, value, original}]}` | `status`, `saved`, `files`, `conflicts[]` (`reason`: changed / not found), `message`; the CLI adds `course_data` (as get-course-data) when cells were written |
 | `export-reports` | `<path> [weighted]` (default true) | `status`, `message` |
 
 ### Rust TUI key bindings

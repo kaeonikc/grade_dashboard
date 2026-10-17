@@ -42,7 +42,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_footer(f, app, chunks[2], footer_rows, footer_kind);
 
     // 4. Overlays
-    if app.loading {
+    // A save shows in the footer and leaves the table in view; other loads use the overlay
+    if app.loading && app.saving.is_empty() {
         draw_loading_overlay(f, app);
     } else if app.confirm_leave.is_some() {
         draw_confirm_leave(f, app);
@@ -2309,7 +2310,15 @@ fn footer_line(app: &App) -> (Line<'static>, u8) {
     let theme = app.theme;
     
     // Bottom status line showing helpful messages or key legends
-    let (status_line, is_special) = if let Some(ref info) = app.info_msg {
+    let (status_line, is_special) = if !app.saving.is_empty() {
+        (
+            Line::from(vec![
+                Span::styled(" ⏳ ", Style::default().fg(theme.bg).bg(theme.warning).bold()),
+                Span::styled(format!(" {} ", app.loading_msg), Style::default().fg(theme.warning).bold()),
+            ]),
+            1
+        )
+    } else if let Some(ref info) = app.info_msg {
         (
             Line::from(vec![
                 Span::styled(" ℹ️ INFO ", Style::default().fg(theme.bg).bg(theme.success).bold()),
@@ -3230,6 +3239,19 @@ mod tests {
         let all = s.join("\n");
         assert!(all.contains("1 unsaved score (1 above max)"));
         assert!(all.contains("Save and quit"));
+    }
+
+    #[tokio::test]
+    async fn saving_shows_in_the_footer_not_as_a_blocking_overlay() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = raw_details_app();
+        key(&mut app, KeyCode::Char('5'));
+        key(&mut app, KeyCode::Enter);
+        app.update(crate::app::AppEvent::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)));
+        assert!(app.loading);
+        let all = screen(&mut app, 140, 30).join("\n");
+        assert!(!all.contains("Please Wait"), "no overlay over the table");
+        assert!(all.contains("Saving 1 cell"));
     }
 
     #[test]
