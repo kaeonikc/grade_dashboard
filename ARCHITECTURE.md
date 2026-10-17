@@ -4,7 +4,7 @@
 
 A local grading tool for university courses. Instructors drop CSV/XLSX score sheets into a course folder, define weights and grade boundaries in a YAML config, and launch either a Streamlit web dashboard or a Rust terminal UI (TUI) to review grade distributions, inspect round-up effects, edit scores, and export reports.
 
-The design is deliberately flat: no database, no server, no framework beyond Streamlit. Data is read fresh on every load from plain files in the `courses/` directory tree. The Rust TUI shares the same Python calculation backend via a JSON-over-subprocess bridge, keeping all grading logic in one place.
+The design is deliberately flat: no database, no server, no framework beyond Streamlit. Data is read fresh on every load from plain files in the `courses/` directory tree. The Rust TUI shares the same Python calculation backend via a JSON-over-subprocess bridge, keeping all grading logic in one place. The TUI keeps one `tui_api.py serve` worker running per session (one JSON request/reply line each, ids matched), so pandas loads once; if the worker dies it is restarted, else the call falls back to a one-shot `python3 tui_api.py <cmd>`.
 
 ## Entry Points
 
@@ -82,7 +82,7 @@ grade_dashboard/
           │                          │
 ┌─────────┴────────────────────────────────────────────────────────────┐
 │                         src/tui_api.py                               │
-│   JSON-over-subprocess bridge (CLI: get-courses | get-course-data |  │
+│   JSON bridge: `serve` worker or one-shot CLI (get-courses | get-course-data | │
 │   apply-edits | update-config | export-reports)                      │
 └─────────────────────────────────┬────────────────────────────────────┘
                                   ▲  stdout JSON

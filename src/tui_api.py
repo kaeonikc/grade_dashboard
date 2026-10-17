@@ -1094,72 +1094,92 @@ def run_export(course_path, use_weighted=True):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-if __name__ == "__main__":
-    # Command line runner for debugging
-    if len(sys.argv) < 2:
-        print(json.dumps({"status": "error", "message": "No command provided"}))
-        sys.exit(1)
-        
-    cmd = sys.argv[1]
-    
+def _error(message):
+    return {"status": "error", "message": message}
+
+
+def _weighted(args, i):
+    return args[i].lower() in ("true", "1", "yes") if len(args) > i else True
+
+
+def run_command(cmd, args, stdin_text=""):
+    """One bridge command -> its JSON-able reply. Shared by the one-shot CLI and `serve`."""
     if cmd == "get-courses":
-        print(json.dumps(get_courses()))
-    elif cmd == "get-course-data":
-        if len(sys.argv) < 3:
-            print(json.dumps({"status": "error", "message": "Missing course path"}))
-            sys.exit(1)
-        course_path = sys.argv[2]
-        use_weighted = True
-        if len(sys.argv) > 3:
-            use_weighted = sys.argv[3].lower() in ['true', '1', 'yes']
-        print(json.dumps(get_course_data(course_path, use_weighted)))
-    elif cmd == "update-score":
-        if len(sys.argv) < 6:
-            print(json.dumps({"status": "error", "message": "Missing arguments (path, student_id, col, val)"}))
-            sys.exit(1)
-        course_path = sys.argv[2]
-        student_id = sys.argv[3]
-        col_name = sys.argv[4]
-        value = sys.argv[5]
-        print(json.dumps(update_student_score(course_path, student_id, col_name, value)))
-    elif cmd == "bulk-update-score":
-        if len(sys.argv) < 5:
-            print(json.dumps({"status": "error", "message": "Missing arguments (path, col, val)"}))
-            sys.exit(1)
-        course_path = sys.argv[2]
-        col_name = sys.argv[3]
-        value = sys.argv[4]
-        print(json.dumps(update_column_score(course_path, col_name, value)))
-    elif cmd == "apply-edits":
-        if len(sys.argv) < 3:
-            print(json.dumps({"status": "error", "message": "Missing course path"}))
-            sys.exit(1)
+        return get_courses()
+    if cmd == "get-course-data":
+        if len(args) < 1:
+            return _error("Missing course path")
+        return get_course_data(args[0], _weighted(args, 1))
+    if cmd == "update-score":
+        if len(args) < 4:
+            return _error("Missing arguments (path, student_id, col, val)")
+        return update_student_score(args[0], args[1], args[2], args[3])
+    if cmd == "bulk-update-score":
+        if len(args) < 3:
+            return _error("Missing arguments (path, col, val)")
+        return update_column_score(args[0], args[1], args[2])
+    if cmd == "apply-edits":
+        if len(args) < 1:
+            return _error("Missing course path")
         try:
-            payload = json.loads(sys.stdin.read() or "{}")
+            payload = json.loads(stdin_text or "{}")
         except ValueError as e:
-            print(json.dumps({"status": "error", "message": f"Bad edits JSON on stdin: {e}"}))
-            sys.exit(1)
-        result = apply_edits(sys.argv[2], payload.get("edits", []))
+            return _error(f"Bad edits JSON on stdin: {e}")
+        result = apply_edits(args[0], payload.get("edits", []))
         if result.get("status") == "success" and result.get("saved"):
-            # The reloaded course rides along, so grade-tui needs one python start per save, not two
-            result["course_data"] = get_course_data(sys.argv[2])
-        print(json.dumps(result))
-    elif cmd == "update-config":
-        if len(sys.argv) < 5:
-            print(json.dumps({"status": "error", "message": "Missing arguments (path, weights_json, boundaries_json)"}))
-            sys.exit(1)
-        course_path = sys.argv[2]
-        weights_dict = json.loads(sys.argv[3]) if sys.argv[3] and sys.argv[3] != "null" else None
-        boundaries_dict = json.loads(sys.argv[4]) if sys.argv[4] and sys.argv[4] != "null" else None
-        print(json.dumps(update_course_config(course_path, weights_dict, boundaries_dict)))
-    elif cmd == "export-reports":
-        if len(sys.argv) < 3:
-            print(json.dumps({"status": "error", "message": "Missing course path"}))
-            sys.exit(1)
-        course_path = sys.argv[2]
-        use_weighted = True
-        if len(sys.argv) > 3:
-            use_weighted = sys.argv[3].lower() in ['true', '1', 'yes']
-        print(json.dumps(run_export(course_path, use_weighted)))
+            # The reloaded course rides along, so grade-tui needs one call per save, not two
+            result["course_data"] = get_course_data(args[0])
+        return result
+    if cmd == "update-config":
+        if len(args) < 3:
+            return _error("Missing arguments (path, weights_json, boundaries_json)")
+        weights_dict = json.loads(args[1]) if args[1] and args[1] != "null" else None
+        boundaries_dict = json.loads(args[2]) if args[2] and args[2] != "null" else None
+        return update_course_config(args[0], weights_dict, boundaries_dict)
+    if cmd == "export-reports":
+        if len(args) < 1:
+            return _error("Missing course path")
+        return run_export(args[0], _weighted(args, 1))
+    return _error(f"Unknown command {cmd}")
+
+
+def serve(inp=None, out=None):
+    """
+    `tui_api.py serve`: grade-tui's long-running worker, so pandas loads once per session
+    instead of once per command. One JSON request per line in ({"id", "cmd", "args", "stdin"}),
+    one JSON reply per line out (starting with the request's "id"), until stdin closes
+    (grade-tui exited). Anything a command
+    prints goes to stderr, so it can't corrupt the reply stream.
+    """
+    inp = inp or sys.stdin
+    out = out or sys.stdout
+    for line in inp:
+        line = line.strip()
+        if not line:
+            continue
+        real_stdout = sys.stdout
+        req_id = None
+        try:
+            req = json.loads(line)
+            req_id = req.get("id")
+            sys.stdout = sys.stderr
+            reply = run_command(req.get("cmd", ""), [str(a) for a in req.get("args", [])], req.get("stdin") or "")
+        except Exception as e:
+            reply = _error(f"{type(e).__name__}: {e}")
+        finally:
+            sys.stdout = real_stdout
+        # "id" goes first, so grade-tui can match a reply to its request without parsing it all
+        out.write(json.dumps({"id": req_id, **reply}) + "\n")
+        out.flush()
+
+
+if __name__ == "__main__":
+    # One-shot CLI (debugging, fallback) or `serve` (grade-tui's worker)
+    if len(sys.argv) < 2:
+        print(json.dumps(_error("No command provided")))
+        sys.exit(1)
+    cmd = sys.argv[1]
+    if cmd == "serve":
+        serve()
     else:
-        print(json.dumps({"status": "error", "message": f"Unknown command {cmd}"}))
+        print(json.dumps(run_command(cmd, sys.argv[2:], sys.stdin.read() if cmd == "apply-edits" else "")))
