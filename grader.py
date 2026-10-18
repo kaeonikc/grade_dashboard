@@ -1794,6 +1794,37 @@ grade_boundaries:
     print("✅ Seeded edge cases: over-max scores, missing scores, invalid attendance codes, at-risk students.")
 
 
+def _web_course(sub, course: str = None) -> Path:
+    """COURSE, else the folder we're in when it is a course folder, else a usage error (exit 2)."""
+    if course is None:
+        if not Path("course_info").is_dir():
+            sub.error(f"no course folder here; give one, e.g. {sub.prog} courses/9_ฟิสิกส์จำลอง_grading")
+        return Path.cwd()
+    if not (Path(course) / "course_info").is_dir():
+        print(f"❌ {course} is not a course folder (no course_info/).")
+        sys.exit(1)
+    return Path(course)
+
+
+def web_push(sub, args):
+    """`grader web-push` (src/webpush.py). A refusal prints its message and exits 1, having written nothing."""
+    from src import webpush
+    from src.webdrive import Refused, drive_root
+    course = _web_course(sub, args.course)
+    try:
+        webpush.push(course, drive_root(args.drive_root), force=args.force)
+    except Refused as e:
+        print(e)
+        sys.exit(1)
+    except Exception as e:
+        if args.debug:
+            import traceback
+            traceback.print_exc()
+        else:
+            print(f"❌ Unexpected error: {e}. Run again with --debug for the details.")
+        sys.exit(1)
+
+
 def run_dashboard():
     from src.dashboard import run
     run()
@@ -1847,6 +1878,27 @@ if __name__ == "__main__":
     # Dashboard command
     parser_dashboard = subparsers.add_parser("dashboard", help="Launch the grade dashboard")
 
+    # grade_web (web/SPEC.md "Mac commands")
+    parser_web_push = subparsers.add_parser(
+        "web-push", help="Copy a course to Google Drive for the grade_web app (phone or browser)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Copy a course to Google Drive (My Drive/grade_web/<course folder>/) so the grade_web app can\n"
+                    "open it. Reads the course and never writes into it. Refuses while web edits are waiting to be\n"
+                    "pulled, so nothing made on the phone is lost.",
+        epilog="examples:\n"
+               "  grader web-push                                   # inside 9_ฟิสิกส์จำลอง_grading/\n"
+               "  grader web-push courses/9_ฟิสิกส์จำลอง_grading\n"
+               "  grader web-pull                                   # later: see what the web changed")
+    parser_web_push.add_argument("--force", action="store_true",
+                                 help="Push even if web edits are waiting to be pulled. They are kept in "
+                                      "grade_web/<course>/archive/ marked as discarded, never deleted")
+    parser_web_push.add_argument("--drive-root", metavar="DIR",
+                                 help='Your "My Drive" folder (default: $GRADE_WEB_DRIVE_ROOT, else the Google '
+                                      "Drive for Desktop folder of your @g.cmru.ac.th account)")
+    parser_web_push.add_argument("--debug", action="store_true", help="Show the full traceback on unexpected errors")
+    parser_web_push.add_argument("course", nargs="?", metavar="COURSE",
+                                 help="Course folder (default: the folder you're in, if it has course_info/)")
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -1872,6 +1924,8 @@ if __name__ == "__main__":
         mock_course()
     elif args.command == "dashboard":
         run_dashboard()
+    elif args.command == "web-push":
+        web_push(parser_web_push, args)
     else:
         # Default behavior: show help
         parser.print_help()

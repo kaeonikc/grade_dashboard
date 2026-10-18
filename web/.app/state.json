@@ -15,7 +15,7 @@
       "title": "**CMRU spike, thin end to end**: a \"hello\" Apps Script web app that also lists the folder names under `My Drive/grade_web/` (phone → Apps Script → Drive). Plus `spikeRoundTrip_()`, run once from the editor on a fake Thai + BOM + CRLF CSV"
     },
     {
-      "status": "todo",
+      "status": "passed",
       "attempts": 0,
       "id": "T2",
       "title": "**`grader web-push`**: read-only checks, staging copy, `build_course_json`, copy the pushed set, stale-file removal, `--force` discard archive, Drive-root resolution through `Path.home()` (fake HOME in tests) and the test guard, cwd default, `--debug` (one-line error without it). Fixture F1 and its integrity test"

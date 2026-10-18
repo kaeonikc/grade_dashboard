@@ -7,3 +7,5 @@
 {"ts": "2026-10-18T17:08:39", "event": "gate_approved", "role": "user", "note": "spec"}
 {"ts": "2026-10-18T17:08:39", "event": "phase", "role": "lead", "note": "build"}
 {"ts": "2026-10-18T17:18:27", "event": "task_started", "role": "engineer", "note": "T1"}
+{"ts": "2026-10-18T22:17:12", "event": "task_started", "role": "engineer", "note": "T2"}
+{"ts": "2026-10-18T22:30:15", "event": "task_passed", "role": "engineer", "note": "T2"}
