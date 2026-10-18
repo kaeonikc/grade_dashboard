@@ -1,0 +1,495 @@
+{
+ "course": {
+  "format": 1,
+  "course_id": "MOCK3",
+  "course_name": "ไฟฟ้าจำลอง",
+  "term": "2027_S1",
+  "folder": "9_ไฟฟ้าจำลอง_grading",
+  "prefix": "9_ไฟฟ้าจำลอง",
+  "category_order": [
+   "attendance",
+   "lab",
+   "quiz",
+   "homework",
+   "project",
+   "final",
+   "participation",
+   "extra"
+  ],
+  "weights": {
+   "attendance": 0.1,
+   "lab": 0.15,
+   "quiz": 0.1,
+   "homework": 0.2,
+   "project": 0.1,
+   "final": 0.3,
+   "participation": 0.05,
+   "extra": 0.0
+  },
+  "grade_boundaries": {
+   "A": 80,
+   "B+": 75,
+   "B": 70,
+   "C+": 65,
+   "C": 60,
+   "D+": 55,
+   "D": 50
+  },
+  "rules": {
+   "drop_lowest_homework": true
+  },
+  "data_mapping": {
+   "lab": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "10",
+    "11",
+    "12"
+   ],
+   "quiz": [
+    "q1",
+    "q2",
+    "q3",
+    "q4"
+   ],
+   "homework": [
+    "hw1",
+    "hw2",
+    "hw3"
+   ],
+   "project": [
+    "p1",
+    "p2"
+   ],
+   "extra": [
+    "x1"
+   ],
+   "final": [
+    "final_exam"
+   ],
+   "attendance": [
+    "a1",
+    "a2",
+    "a3",
+    "a4"
+   ]
+  },
+  "total_pts": {
+   "homework": 50.0
+  },
+  "max_scores": {
+   "1": 10.0,
+   "2": 10.0,
+   "3": 10.0,
+   "4": 10.0,
+   "5": 20.0,
+   "6": 10.0,
+   "7": 10.0,
+   "8": 10.0,
+   "9": 10.0,
+   "10": 10.0,
+   "11": 10.0,
+   "12": 10.0,
+   "q1": 4.0,
+   "q2": 4.0,
+   "q3": 4.0,
+   "q4": 6.0,
+   "hw1": 15.0,
+   "final_exam": 30.0
+  },
+  "roster": "course_info/9_ไฟฟ้าจำลอง_student_info.csv",
+  "files": [
+   "data/9_ไฟฟ้าจำลอง_attendance.csv",
+   "data/9_ไฟฟ้าจำลอง_extra.csv",
+   "data/9_ไฟฟ้าจำลอง_final.csv",
+   "data/9_ไฟฟ้าจำลอง_homework.csv",
+   "data/9_ไฟฟ้าจำลอง_lab.csv",
+   "data/9_ไฟฟ้าจำลอง_project.csv",
+   "data/9_ไฟฟ้าจำลอง_quiz.csv"
+  ],
+  "columns": [
+   {
+    "name": "a1",
+    "header": "a1",
+    "file": "data/9_ไฟฟ้าจำลอง_attendance.csv",
+    "category": "attendance"
+   },
+   {
+    "name": "a2",
+    "header": "a2",
+    "file": "data/9_ไฟฟ้าจำลอง_attendance.csv",
+    "category": "attendance"
+   },
+   {
+    "name": "a3",
+    "header": "a3",
+    "file": "data/9_ไฟฟ้าจำลอง_attendance.csv",
+    "category": "attendance"
+   },
+   {
+    "name": "a4",
+    "header": "a4",
+    "file": "data/9_ไฟฟ้าจำลอง_attendance.csv",
+    "category": "attendance"
+   },
+   {
+    "name": "1",
+    "header": "1",
+    "file": "data/9_ไฟฟ้าจำลอง_lab.csv",
+    "category": "lab"
+   },
+   {
+    "name": "2",
+    "header": "2",
+    "file": "data/9_ไฟฟ้าจำลอง_lab.csv",
+    "category": "lab"
+   },
+   {
+    "name": "3",
+    "header": "3",
+    "file": "data/9_ไฟฟ้าจำลอง_lab.csv",
+    "category": "lab"
+   },
+   {
+    "name": "4",
+    "header": "4",
+    "file": "data/9_ไฟฟ้าจำลอง_lab.csv",
+    "category": "lab"
+   },
+   {
+    "name": "5",
+    "header": "5 (20pts)",
+    "file": "data/9_ไฟฟ้าจำลอง_lab.csv",
+    "category": "lab"
+   },
+   {
+    "name": "6",
+    "header": "6",
+    "file": "data/9_ไฟฟ้าจำลอง_lab.csv",
+    "category": "lab"
+   },
+   {
+    "name": "7",
+    "header": "7",
+    "file": "data/9_ไฟฟ้าจำลอง_lab.csv",
+    "category": "lab"
+   },
+   {
+    "name": "8",
+    "header": "8",
+    "file": "data/9_ไฟฟ้าจำลอง_lab.csv",
+    "category": "lab"
+   },
+   {
+    "name": "9",
+    "header": "9",
+    "file": "data/9_ไฟฟ้าจำลอง_lab.csv",
+    "category": "lab"
+   },
+   {
+    "name": "10",
+    "header": "10",
+    "file": "data/9_ไฟฟ้าจำลอง_lab.csv",
+    "category": "lab"
+   },
+   {
+    "name": "11",
+    "header": "11",
+    "file": "data/9_ไฟฟ้าจำลอง_lab.csv",
+    "category": "lab"
+   },
+   {
+    "name": "12",
+    "header": "12",
+    "file": "data/9_ไฟฟ้าจำลอง_lab.csv",
+    "category": "lab"
+   },
+   {
+    "name": "q1",
+    "header": "q1",
+    "file": "data/9_ไฟฟ้าจำลอง_quiz.csv",
+    "category": "quiz"
+   },
+   {
+    "name": "q2",
+    "header": "q2",
+    "file": "data/9_ไฟฟ้าจำลอง_quiz.csv",
+    "category": "quiz"
+   },
+   {
+    "name": "q3",
+    "header": "q3",
+    "file": "data/9_ไฟฟ้าจำลอง_quiz.csv",
+    "category": "quiz"
+   },
+   {
+    "name": "q4",
+    "header": "q4 (6pts)",
+    "file": "data/9_ไฟฟ้าจำลอง_quiz.csv",
+    "category": "quiz"
+   },
+   {
+    "name": "hw1",
+    "header": "hw1 (15pts)",
+    "file": "data/9_ไฟฟ้าจำลอง_homework.csv",
+    "category": "homework"
+   },
+   {
+    "name": "hw2",
+    "header": "hw2",
+    "file": "data/9_ไฟฟ้าจำลอง_homework.csv",
+    "category": "homework"
+   },
+   {
+    "name": "hw3",
+    "header": "hw3",
+    "file": "data/9_ไฟฟ้าจำลอง_homework.csv",
+    "category": "homework"
+   },
+   {
+    "name": "p1",
+    "header": "p1",
+    "file": "data/9_ไฟฟ้าจำลอง_project.csv",
+    "category": "project"
+   },
+   {
+    "name": "p2",
+    "header": "p2",
+    "file": "data/9_ไฟฟ้าจำลอง_project.csv",
+    "category": "project"
+   },
+   {
+    "name": "final_exam",
+    "header": "final_exam (30pts)",
+    "file": "data/9_ไฟฟ้าจำลอง_final.csv",
+    "category": "final"
+   },
+   {
+    "name": "x1",
+    "header": "x1",
+    "file": "data/9_ไฟฟ้าจำลอง_extra.csv",
+    "category": "extra"
+   }
+  ]
+ },
+ "expected": [
+  {
+   "student_id": "9900000201",
+   "name": "นายไฟ ทดลอง",
+   "pct": {
+    "attendance": 9.5,
+    "lab": 12.09,
+    "quiz": 7.78,
+    "homework": 1.8,
+    "project": 9.0,
+    "final": 21,
+    "participation": 0.0,
+    "extra": 0.0
+   },
+   "coursework_total": 41,
+   "final_score": 62,
+   "grade": "C"
+  },
+  {
+   "student_id": "9900000202",
+   "name": "นางสาวแสง ทดลอง",
+   "pct": {
+    "attendance": 7.5,
+    "lab": 11.88,
+    "quiz": 10.0,
+    "homework": 1.5,
+    "project": 10.0,
+    "final": 18,
+    "participation": 0.0,
+    "extra": 0.0
+   },
+   "coursework_total": 41,
+   "final_score": 59,
+   "grade": "D+"
+  },
+  {
+   "student_id": "9900000203",
+   "name": "นายมืด ว่างเปล่า",
+   "pct": {
+    "attendance": 0.0,
+    "lab": 0.0,
+    "quiz": 0.0,
+    "homework": 0.0,
+    "project": 0.0,
+    "final": 10,
+    "participation": 0.0,
+    "extra": 0.0
+   },
+   "coursework_total": 0,
+   "final_score": 10,
+   "grade": "F"
+  },
+  {
+   "student_id": "9900000204",
+   "name": "นางสาวต่ำ สุดท้าย",
+   "pct": {
+    "attendance": 9.5,
+    "lab": 14.25,
+    "quiz": 7.78,
+    "homework": 5.6,
+    "project": 5.5,
+    "final": 25,
+    "participation": 0.0,
+    "extra": 0.0
+   },
+   "coursework_total": 43,
+   "final_score": 68,
+   "grade": "C+"
+  },
+  {
+   "student_id": "9900000205",
+   "name": "นายรหัส ครบชุด",
+   "pct": {
+    "attendance": 9.5,
+    "lab": 15.0,
+    "quiz": 4.44,
+    "homework": 2.0,
+    "project": 9.0,
+    "final": 27,
+    "participation": 0.0,
+    "extra": 0.0
+   },
+   "coursework_total": 40,
+   "final_score": 67,
+   "grade": "C+"
+  },
+  {
+   "student_id": "99000002061",
+   "name": "นางสาวสิบเอ็ด หลัก",
+   "pct": {
+    "attendance": 7.5,
+    "lab": 5.78,
+    "quiz": 5.83,
+    "homework": 4.4,
+    "project": 2.0,
+    "final": 13,
+    "participation": 0.0,
+    "extra": 0.0
+   },
+   "coursework_total": 26,
+   "final_score": 39,
+   "grade": "F"
+  }
+ ],
+ "variants": [
+  {
+   "name": "s10_1_weights_edit",
+   "expected": [
+    {
+     "student_id": "9900000201",
+     "name": "นายไฟ ทดลอง",
+     "pct": {
+      "attendance": 9.5,
+      "lab": 16.12,
+      "quiz": 7.78,
+      "homework": 1.35,
+      "project": 9.0,
+      "final": 21,
+      "participation": 0.0,
+      "extra": 0.0
+     },
+     "coursework_total": 44,
+     "final_score": 65,
+     "grade": "C+"
+    },
+    {
+     "student_id": "9900000202",
+     "name": "นางสาวแสง ทดลอง",
+     "pct": {
+      "attendance": 7.5,
+      "lab": 15.85,
+      "quiz": 10.0,
+      "homework": 1.12,
+      "project": 10.0,
+      "final": 18,
+      "participation": 0.0,
+      "extra": 0.0
+     },
+     "coursework_total": 45,
+     "final_score": 63,
+     "grade": "C"
+    },
+    {
+     "student_id": "9900000203",
+     "name": "นายมืด ว่างเปล่า",
+     "pct": {
+      "attendance": 0.0,
+      "lab": 0.0,
+      "quiz": 0.0,
+      "homework": 0.0,
+      "project": 0.0,
+      "final": 10,
+      "participation": 0.0,
+      "extra": 0.0
+     },
+     "coursework_total": 0,
+     "final_score": 10,
+     "grade": "F"
+    },
+    {
+     "student_id": "9900000204",
+     "name": "นางสาวต่ำ สุดท้าย",
+     "pct": {
+      "attendance": 9.5,
+      "lab": 19.0,
+      "quiz": 7.78,
+      "homework": 0.75,
+      "project": 5.5,
+      "final": 25,
+      "participation": 0.0,
+      "extra": 0.0
+     },
+     "coursework_total": 43,
+     "final_score": 68,
+     "grade": "C+"
+    },
+    {
+     "student_id": "9900000205",
+     "name": "นายรหัส ครบชุด",
+     "pct": {
+      "attendance": 9.5,
+      "lab": 20.0,
+      "quiz": 4.44,
+      "homework": 1.5,
+      "project": 9.0,
+      "final": 27,
+      "participation": 0.0,
+      "extra": 0.0
+     },
+     "coursework_total": 45,
+     "final_score": 72,
+     "grade": "B"
+    },
+    {
+     "student_id": "99000002061",
+     "name": "นางสาวสิบเอ็ด หลัก",
+     "pct": {
+      "attendance": 7.5,
+      "lab": 7.71,
+      "quiz": 5.83,
+      "homework": 0.9,
+      "project": 2.0,
+      "final": 13,
+      "participation": 0.0,
+      "extra": 0.0
+     },
+     "coursework_total": 24,
+     "final_score": 37,
+     "grade": "F"
+    }
+   ]
+  }
+ ]
+}

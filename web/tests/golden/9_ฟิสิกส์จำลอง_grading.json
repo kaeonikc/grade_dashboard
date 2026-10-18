@@ -1,0 +1,248 @@
+{
+ "course": {
+  "format": 1,
+  "course_id": "MOCK",
+  "course_name": "ฟิสิกส์จำลอง",
+  "term": "2027_S1",
+  "folder": "9_ฟิสิกส์จำลอง_grading",
+  "prefix": "9_ฟิสิกส์จำลอง",
+  "category_order": [
+   "attendance",
+   "homework",
+   "midterm",
+   "final"
+  ],
+  "weights": {
+   "attendance": 0.1,
+   "homework": 0.2,
+   "midterm": 0.3,
+   "final": 0.4
+  },
+  "grade_boundaries": {
+   "A": 80,
+   "B+": 75,
+   "B": 70,
+   "C+": 65,
+   "C": 60,
+   "D+": 55,
+   "D": 50
+  },
+  "rules": {
+   "drop_lowest_homework": true
+  },
+  "data_mapping": {
+   "attendance": [
+    "13 Jan 2027",
+    "20 Jan 2027",
+    "27 Jan 2027"
+   ],
+   "homework": [
+    "hw1",
+    "hw2",
+    "hw3"
+   ],
+   "midterm": [
+    "midterm_exam"
+   ],
+   "final": [
+    "final_exam"
+   ]
+  },
+  "total_pts": {},
+  "max_scores": {
+   "hw1": 10.0,
+   "hw2": 10.0,
+   "hw3": 10.0,
+   "midterm_exam": 30.0,
+   "final_exam": 40.0
+  },
+  "roster": "course_info/9_ฟิสิกส์จำลอง_student_info.csv",
+  "files": [
+   "data/9_ฟิสิกส์จำลอง_attendance.csv",
+   "data/9_ฟิสิกส์จำลอง_final.csv",
+   "data/9_ฟิสิกส์จำลอง_homework.csv",
+   "data/9_ฟิสิกส์จำลอง_midterm.csv"
+  ],
+  "columns": [
+   {
+    "name": "13 Jan 2027",
+    "header": "13 Jan 2027",
+    "file": "data/9_ฟิสิกส์จำลอง_attendance.csv",
+    "category": "attendance"
+   },
+   {
+    "name": "20 Jan 2027",
+    "header": "20 Jan 2027",
+    "file": "data/9_ฟิสิกส์จำลอง_attendance.csv",
+    "category": "attendance"
+   },
+   {
+    "name": "27 Jan 2027",
+    "header": "27 Jan 2027",
+    "file": "data/9_ฟิสิกส์จำลอง_attendance.csv",
+    "category": "attendance"
+   },
+   {
+    "name": "hw1",
+    "header": "hw1 (10pts)",
+    "file": "data/9_ฟิสิกส์จำลอง_homework.csv",
+    "category": "homework"
+   },
+   {
+    "name": "hw2",
+    "header": "hw2 (10pts)",
+    "file": "data/9_ฟิสิกส์จำลอง_homework.csv",
+    "category": "homework"
+   },
+   {
+    "name": "hw3",
+    "header": "hw3 (10pts)",
+    "file": "data/9_ฟิสิกส์จำลอง_homework.csv",
+    "category": "homework"
+   },
+   {
+    "name": "midterm_exam",
+    "header": "midterm_exam (30pts)",
+    "file": "data/9_ฟิสิกส์จำลอง_midterm.csv",
+    "category": "midterm"
+   },
+   {
+    "name": "final_exam",
+    "header": "final_exam (40pts)",
+    "file": "data/9_ฟิสิกส์จำลอง_final.csv",
+    "category": "final"
+   }
+  ]
+ },
+ "expected": [
+  {
+   "student_id": "9900000001",
+   "name": "นายสมมติ ทดสอบ",
+   "pct": {
+    "attendance": 6.0,
+    "homework": 8.0,
+    "midterm": 21,
+    "final": 0
+   },
+   "coursework_total": 14,
+   "final_score": 35,
+   "grade": "F"
+  },
+  {
+   "student_id": "9900000002",
+   "name": "นางสาวตัวอย่าง ใจดี",
+   "pct": {
+    "attendance": 3.33,
+    "homework": 17.0,
+    "midterm": 18,
+    "final": 0
+   },
+   "coursework_total": 21,
+   "final_score": 39,
+   "grade": "F"
+  },
+  {
+   "student_id": "9900000003",
+   "name": "นายทดลอง มีชื่อ",
+   "pct": {
+    "attendance": 6.67,
+    "homework": 5.0,
+    "midterm": 0,
+    "final": 0
+   },
+   "coursework_total": 12,
+   "final_score": 12,
+   "grade": "F"
+  }
+ ],
+ "variants": [
+  {
+   "name": "s4_1_detail",
+   "expected": [
+    {
+     "student_id": "9900000001",
+     "name": "นายสมมติ ทดสอบ",
+     "pct": {
+      "attendance": 9.33,
+      "homework": 17.0,
+      "midterm": 21,
+      "final": 0
+     },
+     "coursework_total": 27,
+     "final_score": 48,
+     "grade": "F"
+    },
+    {
+     "student_id": "9900000002",
+     "name": "นางสาวตัวอย่าง ใจดี",
+     "pct": {
+      "attendance": 3.33,
+      "homework": 17.0,
+      "midterm": 18,
+      "final": 0
+     },
+     "coursework_total": 21,
+     "final_score": 39,
+     "grade": "F"
+    },
+    {
+     "student_id": "9900000003",
+     "name": "นายทดลอง มีชื่อ",
+     "pct": {
+      "attendance": 6.67,
+      "homework": 5.0,
+      "midterm": 0,
+      "final": 0
+     },
+     "coursework_total": 12,
+     "final_score": 12,
+     "grade": "F"
+    }
+   ]
+  },
+  {
+   "name": "s4_2_typed_final",
+   "expected": [
+    {
+     "student_id": "9900000001",
+     "name": "นายสมมติ ทดสอบ",
+     "pct": {
+      "attendance": 9.33,
+      "homework": 17.0,
+      "midterm": 21,
+      "final": 28
+     },
+     "coursework_total": 27,
+     "final_score": 76,
+     "grade": "B+"
+    },
+    {
+     "student_id": "9900000002",
+     "name": "นางสาวตัวอย่าง ใจดี",
+     "pct": {
+      "attendance": 3.33,
+      "homework": 17.0,
+      "midterm": 18,
+      "final": 0
+     },
+     "coursework_total": 21,
+     "final_score": 39,
+     "grade": "F"
+    },
+    {
+     "student_id": "9900000003",
+     "name": "นายทดลอง มีชื่อ",
+     "pct": {
+      "attendance": 6.67,
+      "homework": 5.0,
+      "midterm": 0,
+      "final": 0
+     },
+     "coursework_total": 12,
+     "final_score": 12,
+     "grade": "F"
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,138 @@
+{
+ "course": {
+  "format": 1,
+  "course_id": "MOCK4",
+  "course_name": "ดาราศาสตร์จำลอง",
+  "term": "2027_S1",
+  "folder": "9_ดาราศาสตร์จำลอง_grading",
+  "prefix": "9_ดาราศาสตร์จำลอง",
+  "category_order": [
+   "homework",
+   "quiz",
+   "midterm",
+   "final"
+  ],
+  "weights": {
+   "homework": 0.3,
+   "quiz": 0.2,
+   "midterm": 0.2,
+   "final": 0.3
+  },
+  "grade_boundaries": {
+   "A": 80,
+   "B+": 75,
+   "B": 70,
+   "C+": 65,
+   "C": 60,
+   "D+": 55,
+   "D": 50
+  },
+  "rules": {
+   "drop_lowest_homework": true
+  },
+  "data_mapping": {
+   "homework": [
+    "hw1"
+   ],
+   "quiz": [
+    "quiz1",
+    "quiz2"
+   ],
+   "midterm": [
+    "midterm_exam"
+   ],
+   "final": [
+    "final_exam"
+   ]
+  },
+  "total_pts": {},
+  "max_scores": {
+   "hw1": 20.0,
+   "midterm_exam": 50.0,
+   "final_exam": 50.0,
+   "quiz1": 10.0,
+   "quiz2": 5.0
+  },
+  "roster": "course_info/9_ดาราศาสตร์จำลอง_student_info.csv",
+  "files": [
+   "data/9_ดาราศาสตร์จำลอง_final.csv",
+   "data/9_ดาราศาสตร์จำลอง_homework.csv",
+   "data/9_ดาราศาสตร์จำลอง_midterm.csv",
+   "data/9_ดาราศาสตร์จำลอง_quiz.csv"
+  ],
+  "columns": [
+   {
+    "name": "hw1",
+    "header": "hw1 (20pts)",
+    "file": "data/9_ดาราศาสตร์จำลอง_homework.csv",
+    "category": "homework"
+   },
+   {
+    "name": "quiz1",
+    "header": "quiz1",
+    "file": "data/9_ดาราศาสตร์จำลอง_quiz.csv",
+    "category": "quiz"
+   },
+   {
+    "name": "quiz2",
+    "header": "quiz2",
+    "file": "data/9_ดาราศาสตร์จำลอง_quiz.csv",
+    "category": "quiz"
+   },
+   {
+    "name": "midterm_exam",
+    "header": "midterm_exam (50pts)",
+    "file": "data/9_ดาราศาสตร์จำลอง_midterm.csv",
+    "category": "midterm"
+   },
+   {
+    "name": "final_exam",
+    "header": "final_exam (50pts)",
+    "file": "data/9_ดาราศาสตร์จำลอง_final.csv",
+    "category": "final"
+   }
+  ]
+ },
+ "expected": [
+  {
+   "student_id": "9900000301",
+   "name": "นายดาว เหนือ",
+   "pct": {
+    "homework": 27.0,
+    "quiz": 17.33,
+    "midterm": 17,
+    "final": 27
+   },
+   "coursework_total": 45,
+   "final_score": 89,
+   "grade": "A"
+  },
+  {
+   "student_id": "9900000302",
+   "name": "นางสาวเดือน เพ็ญ",
+   "pct": {
+    "homework": 17.25,
+    "quiz": 14.67,
+    "midterm": 12,
+    "final": 21
+   },
+   "coursework_total": 32,
+   "final_score": 65,
+   "grade": "C+"
+  },
+  {
+   "student_id": "9900000303",
+   "name": "นายฟ้า คราม",
+   "pct": {
+    "homework": 0.0,
+    "quiz": 2.67,
+    "midterm": 5,
+    "final": 12
+   },
+   "coursework_total": 3,
+   "final_score": 20,
+   "grade": "F"
+  }
+ ],
+ "variants": []
+}

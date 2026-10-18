@@ -27,7 +27,7 @@
       "title": "**`grader web-pull`**: net change, classification against the Mac, preview, `--yes` through `apply_edits(entry=e)` + `update_course_config` in **one** history entry, Mac-wins config rule, archive on Drive + copy in history, idempotent, `-y`/`--yes`, `--debug`. Optional `entry=None` (backward compatible) added to `apply_edits`/`_sync_total`/`_sync_attendance`/`attendance.auto_sync`"
     },
     {
-      "status": "in_progress",
+      "status": "passed",
       "attempts": 0,
       "id": "T4",
       "title": "**Grade math in JS + golden parity**: `classify`, `sameCell`, `mergeCourse`, `fillDefaultMax`, `computeGrades` (with per-student `dropped`), `letterGrade`, `round2`, plus CSV parse (`csv.js`, read side). `make_golden.py` (using T2's `build_course_json` + `get_course_data`) writes the golden files, variants, `csv_rows.json` and `canonical.json`. Fixtures F2-F4"

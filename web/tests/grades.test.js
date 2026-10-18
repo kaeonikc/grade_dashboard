@@ -161,7 +161,7 @@ test('round2 is numpy rint', () => {
   const G = H.Grades();
   assert.strictEqual(G.round2(0.625), 0.62);
   assert.strictEqual(G.round2(0.125), 0.12);
-  assert.strictEqual(G.round2(2.675), 2.67);
+  assert.strictEqual(G.round2(2.675), 2.68); // 2.675*100 == 267.5 exactly; np.round and pandas give 2.68
   assert.strictEqual(G.round2(0.875), 0.88);
   assert.strictEqual(G.round2(9.333333333333334), 9.33);
   assert.strictEqual(G.round2(7.000000000000001), 7);

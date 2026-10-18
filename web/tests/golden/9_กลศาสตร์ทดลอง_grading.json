@@ -1,0 +1,391 @@
+{
+ "course": {
+  "format": 1,
+  "course_id": "MOCK2",
+  "course_name": "กลศาสตร์ทดลอง",
+  "term": "2027_S1",
+  "folder": "9_กลศาสตร์ทดลอง_grading",
+  "prefix": "9_กลศาสตร์ทดลอง",
+  "category_order": [
+   "attendance",
+   "homework",
+   "project",
+   "midterm",
+   "final"
+  ],
+  "weights": {
+   "attendance": 0.1,
+   "homework": 0.2,
+   "project": 0.05,
+   "midterm": 0.3,
+   "final": 0.4
+  },
+  "grade_boundaries": {
+   "A": 80,
+   "B+": 75,
+   "B": 70,
+   "C+": 65,
+   "C": 60,
+   "D+": 55,
+   "D": 50
+  },
+  "rules": {
+   "drop_lowest_homework": false
+  },
+  "data_mapping": {
+   "attendance": [
+    "13 Jan 2027",
+    "20 Jan 2027",
+    "27 Jan 2027"
+   ],
+   "homework": [
+    "hw1",
+    "hw2",
+    "hw3"
+   ],
+   "project": [
+    "project1"
+   ],
+   "midterm": [
+    "midterm_exam"
+   ],
+   "final": [
+    "final_exam"
+   ]
+  },
+  "total_pts": {},
+  "max_scores": {
+   "hw1": 10.0,
+   "hw2": 10.0,
+   "hw3": 10.0,
+   "project1": 8.0,
+   "midterm_exam": 30.0,
+   "final_exam": 40.0
+  },
+  "roster": "course_info/9_กลศาสตร์ทดลอง_student_info.csv",
+  "files": [
+   "data/9_กลศาสตร์ทดลอง_attendance.csv",
+   "data/9_กลศาสตร์ทดลอง_final.csv",
+   "data/9_กลศาสตร์ทดลอง_homework.csv",
+   "data/9_กลศาสตร์ทดลอง_midterm.csv",
+   "data/9_กลศาสตร์ทดลอง_project.csv"
+  ],
+  "columns": [
+   {
+    "name": "13 Jan 2027",
+    "header": "13 Jan 2027",
+    "file": "data/9_กลศาสตร์ทดลอง_attendance.csv",
+    "category": "attendance"
+   },
+   {
+    "name": "20 Jan 2027",
+    "header": "20 Jan 2027",
+    "file": "data/9_กลศาสตร์ทดลอง_attendance.csv",
+    "category": "attendance"
+   },
+   {
+    "name": "27 Jan 2027",
+    "header": "27 Jan 2027",
+    "file": "data/9_กลศาสตร์ทดลอง_attendance.csv",
+    "category": "attendance"
+   },
+   {
+    "name": "hw1",
+    "header": "hw1 (10pts)",
+    "file": "data/9_กลศาสตร์ทดลอง_homework.csv",
+    "category": "homework"
+   },
+   {
+    "name": "hw2",
+    "header": "hw2 (10pts)",
+    "file": "data/9_กลศาสตร์ทดลอง_homework.csv",
+    "category": "homework"
+   },
+   {
+    "name": "hw3",
+    "header": "hw3 (10pts)",
+    "file": "data/9_กลศาสตร์ทดลอง_homework.csv",
+    "category": "homework"
+   },
+   {
+    "name": "project1",
+    "header": "project1 (8pts)",
+    "file": "data/9_กลศาสตร์ทดลอง_project.csv",
+    "category": "project"
+   },
+   {
+    "name": "midterm_exam",
+    "header": "midterm_exam (30pts)",
+    "file": "data/9_กลศาสตร์ทดลอง_midterm.csv",
+    "category": "midterm"
+   },
+   {
+    "name": "final_exam",
+    "header": "final_exam (40pts)",
+    "file": "data/9_กลศาสตร์ทดลอง_final.csv",
+    "category": "final"
+   }
+  ]
+ },
+ "expected": [
+  {
+   "student_id": "9900000101",
+   "name": "นายกล้า ทดสอบ",
+   "pct": {
+    "attendance": 10.0,
+    "homework": 10.0,
+    "project": 0.0,
+    "midterm": 24,
+    "final": 36
+   },
+   "coursework_total": 20,
+   "final_score": 80,
+   "grade": "A"
+  },
+  {
+   "student_id": "9900000102",
+   "name": "นางสาวแก้ว ทดสอบ",
+   "pct": {
+    "attendance": 10.0,
+    "homework": 10.0,
+    "project": 0.0,
+    "midterm": 24,
+    "final": 35
+   },
+   "coursework_total": 20,
+   "final_score": 79,
+   "grade": "B+"
+  },
+  {
+   "student_id": "9900000103",
+   "name": "นายขวัญ สมมุติ",
+   "pct": {
+    "attendance": 10.0,
+    "homework": 10.0,
+    "project": 0.62,
+    "midterm": 24,
+    "final": 30
+   },
+   "coursework_total": 21,
+   "final_score": 75,
+   "grade": "B+"
+  },
+  {
+   "student_id": "9900000104",
+   "name": "นางสาวคำ ลองดู",
+   "pct": {
+    "attendance": 2.67,
+    "homework": 4.33,
+    "project": 0.0,
+    "midterm": 25,
+    "final": 22
+   },
+   "coursework_total": 7,
+   "final_score": 54,
+   "grade": "D"
+  },
+  {
+   "student_id": "9900000105",
+   "name": "นายงาม ใจเย็น",
+   "pct": {
+    "attendance": 6.67,
+    "homework": 64.67,
+    "project": 5.0,
+    "midterm": 30,
+    "final": 40
+   },
+   "coursework_total": 77,
+   "final_score": 147,
+   "grade": "A"
+  },
+  {
+   "student_id": "9900000106",
+   "name": "นายสมมติ, ทดสอบหก",
+   "pct": {
+    "attendance": 6.0,
+    "homework": 2.67,
+    "project": 0.0,
+    "midterm": 0,
+    "final": 0
+   },
+   "coursework_total": 9,
+   "final_score": 9,
+   "grade": "F"
+  },
+  {
+   "student_id": "9900000107",
+   "name": "นางสาว \"ฝน\" ตัวอย่าง",
+   "pct": {
+    "attendance": 0.0,
+    "homework": 5.5,
+    "project": 1.25,
+    "midterm": 0,
+    "final": 0
+   },
+   "coursework_total": 7,
+   "final_score": 7,
+   "grade": "F"
+  },
+  {
+   "student_id": "9900000108",
+   "name": "นายเงียบ ไม่มีแถว",
+   "pct": {
+    "attendance": 0.0,
+    "homework": 0.0,
+    "project": 0.0,
+    "midterm": 0,
+    "final": 0
+   },
+   "coursework_total": 0,
+   "final_score": 0,
+   "grade": "F"
+  },
+  {
+   "student_id": "9900000109",
+   "name": "นายนอก ทะเบียน",
+   "pct": {
+    "attendance": 0.0,
+    "homework": 12.0,
+    "project": 0.0,
+    "midterm": 0,
+    "final": 0
+   },
+   "coursework_total": 12,
+   "final_score": 12,
+   "grade": "F"
+  }
+ ],
+ "variants": [
+  {
+   "name": "s10_4_boundaries_edit",
+   "expected": [
+    {
+     "student_id": "9900000101",
+     "name": "นายกล้า ทดสอบ",
+     "pct": {
+      "attendance": 10.0,
+      "homework": 10.0,
+      "project": 0.0,
+      "midterm": 24,
+      "final": 36
+     },
+     "coursework_total": 20,
+     "final_score": 80,
+     "grade": "A"
+    },
+    {
+     "student_id": "9900000102",
+     "name": "นางสาวแก้ว ทดสอบ",
+     "pct": {
+      "attendance": 10.0,
+      "homework": 10.0,
+      "project": 0.0,
+      "midterm": 24,
+      "final": 35
+     },
+     "coursework_total": 20,
+     "final_score": 79,
+     "grade": "A"
+    },
+    {
+     "student_id": "9900000103",
+     "name": "นายขวัญ สมมุติ",
+     "pct": {
+      "attendance": 10.0,
+      "homework": 10.0,
+      "project": 0.62,
+      "midterm": 24,
+      "final": 30
+     },
+     "coursework_total": 21,
+     "final_score": 75,
+     "grade": "B+"
+    },
+    {
+     "student_id": "9900000104",
+     "name": "นางสาวคำ ลองดู",
+     "pct": {
+      "attendance": 2.67,
+      "homework": 4.33,
+      "project": 0.0,
+      "midterm": 25,
+      "final": 22
+     },
+     "coursework_total": 7,
+     "final_score": 54,
+     "grade": "D"
+    },
+    {
+     "student_id": "9900000105",
+     "name": "นายงาม ใจเย็น",
+     "pct": {
+      "attendance": 6.67,
+      "homework": 64.67,
+      "project": 5.0,
+      "midterm": 30,
+      "final": 40
+     },
+     "coursework_total": 77,
+     "final_score": 147,
+     "grade": "A"
+    },
+    {
+     "student_id": "9900000106",
+     "name": "นายสมมติ, ทดสอบหก",
+     "pct": {
+      "attendance": 6.0,
+      "homework": 2.67,
+      "project": 0.0,
+      "midterm": 0,
+      "final": 0
+     },
+     "coursework_total": 9,
+     "final_score": 9,
+     "grade": "F"
+    },
+    {
+     "student_id": "9900000107",
+     "name": "นางสาว \"ฝน\" ตัวอย่าง",
+     "pct": {
+      "attendance": 0.0,
+      "homework": 5.5,
+      "project": 1.25,
+      "midterm": 0,
+      "final": 0
+     },
+     "coursework_total": 7,
+     "final_score": 7,
+     "grade": "F"
+    },
+    {
+     "student_id": "9900000108",
+     "name": "นายเงียบ ไม่มีแถว",
+     "pct": {
+      "attendance": 0.0,
+      "homework": 0.0,
+      "project": 0.0,
+      "midterm": 0,
+      "final": 0
+     },
+     "coursework_total": 0,
+     "final_score": 0,
+     "grade": "F"
+    },
+    {
+     "student_id": "9900000109",
+     "name": "นายนอก ทะเบียน",
+     "pct": {
+      "attendance": 0.0,
+      "homework": 12.0,
+      "project": 0.0,
+      "midterm": 0,
+      "final": 0
+     },
+     "coursework_total": 12,
+     "final_score": 12,
+     "grade": "F"
+    }
+   ]
+  }
+ ]
+}

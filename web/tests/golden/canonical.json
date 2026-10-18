@@ -1,0 +1,130 @@
+[
+ {
+  "input": "9",
+  "canonical": "9",
+  "classify": [
+   "num",
+   9.0
+  ]
+ },
+ {
+  "input": "08",
+  "canonical": "8",
+  "classify": [
+   "num",
+   8.0
+  ]
+ },
+ {
+  "input": "8.50",
+  "canonical": "8.5",
+  "classify": [
+   "num",
+   8.5
+  ]
+ },
+ {
+  "input": "8.0",
+  "canonical": "8",
+  "classify": [
+   "num",
+   8.0
+  ]
+ },
+ {
+  "input": ".5",
+  "canonical": "0.5",
+  "classify": [
+   "num",
+   0.5
+  ]
+ },
+ {
+  "input": "5.",
+  "canonical": "5",
+  "classify": [
+   "num",
+   5.0
+  ]
+ },
+ {
+  "input": "0",
+  "canonical": "0",
+  "classify": [
+   "num",
+   0.0
+  ]
+ },
+ {
+  "input": " 9 ",
+  "canonical": "9",
+  "classify": [
+   "num",
+   9.0
+  ]
+ },
+ {
+  "input": "ขส",
+  "canonical": "ขส",
+  "classify": [
+   "absent",
+   null
+  ]
+ },
+ {
+  "input": "",
+  "canonical": "",
+  "classify": [
+   "empty",
+   null
+  ]
+ },
+ {
+  "input": "P",
+  "canonical": "P",
+  "classify": [
+   "invalid",
+   "P"
+  ]
+ },
+ {
+  "input": "0.1",
+  "canonical": "0.1",
+  "classify": [
+   "num",
+   0.1
+  ]
+ },
+ {
+  "input": "12345678.9",
+  "canonical": "12345678.9",
+  "classify": [
+   "num",
+   12345678.9
+  ]
+ },
+ {
+  "input": "0.30000000000000004",
+  "canonical": "0.30000000000000004",
+  "classify": [
+   "num",
+   0.30000000000000004
+  ]
+ },
+ {
+  "input": "0.00001",
+  "canonical": "1e-05",
+  "classify": [
+   "num",
+   1e-05
+  ]
+ },
+ {
+  "input": "10000000000000000.0",
+  "canonical": "10000000000000000",
+  "classify": [
+   "num",
+   1e+16
+  ]
+ }
+]

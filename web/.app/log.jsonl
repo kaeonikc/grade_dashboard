@@ -12,3 +12,5 @@
 {"ts": "2026-10-18T22:30:15", "event": "task_started", "role": "engineer", "note": "T3"}
 {"ts": "2026-10-18T22:30:15", "event": "task_started", "role": "engineer", "note": "T4"}
 {"ts": "2026-10-18T22:41:31", "event": "task_passed", "role": "engineer", "note": "T3"}
+{"ts": "2026-10-18T22:44:07", "event": "user_correction", "role": "lead", "note": "Fixed wrong acceptance assertion: round2(2.675) expected 2.68 (numpy/pandas half-even on 267.5), not 2.67 (builtin round)"}
+{"ts": "2026-10-18T22:44:12", "event": "task_passed", "role": "engineer", "note": "T4"}
