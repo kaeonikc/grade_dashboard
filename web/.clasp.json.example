@@ -1,0 +1,7 @@
+{
+  "scriptId": "PASTE_SCRIPT_ID",
+  "rootDir": "apps_script",
+  "scriptExtensions": [".js"],
+  "htmlExtensions": [".html"],
+  "jsonExtensions": [".json"]
+}
