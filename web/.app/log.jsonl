@@ -4,3 +4,5 @@
 {"ts": "2026-10-18T15:49:00", "event": "user_correction", "role": "user", "note": "Typed cells: refuse bad input (8,5 -> 'use . for decimals', negatives, other text); only over-max is accepted+flagged red. Overrides interview rule 12f."}
 {"ts": "2026-10-18T15:56:18", "event": "gate_approved", "role": "user", "note": "requirements"}
 {"ts": "2026-10-18T15:56:18", "event": "phase", "role": "lead", "note": "design"}
+{"ts": "2026-10-18T17:08:39", "event": "gate_approved", "role": "user", "note": "spec"}
+{"ts": "2026-10-18T17:08:39", "event": "phase", "role": "lead", "note": "build"}

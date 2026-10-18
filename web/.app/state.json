@@ -2,12 +2,73 @@
   "name": "grade_web",
   "idea": "Phone/browser editor for grade_dashboard courses: a Google Apps Script web app over course files in a Google Drive folder (view + edit scores, take attendance, fill column, edit weights/boundaries), with an edit journal that grader web-pull merges back into the Mac copy; grader web-push copies courses to Drive. grade-tui untouched.",
   "created": "2026-10-18T15:38:31",
-  "phase": "design",
+  "phase": "build",
   "gates": {
     "requirements": "2026-10-18T15:56:18",
-    "spec": null
+    "spec": "2026-10-18T17:08:39"
   },
-  "tasks": [],
+  "tasks": [
+    {
+      "status": "todo",
+      "attempts": 0,
+      "id": "T1",
+      "title": "**CMRU spike, thin end to end**: a \"hello\" Apps Script web app that also lists the folder names under `My Drive/grade_web/` (phone → Apps Script → Drive). Plus `spikeRoundTrip_()`, run once from the editor on a fake Thai + BOM + CRLF CSV"
+    },
+    {
+      "status": "todo",
+      "attempts": 0,
+      "id": "T2",
+      "title": "**`grader web-push`**: read-only checks, staging copy, `build_course_json`, copy the pushed set, stale-file removal, `--force` discard archive, Drive-root resolution through `Path.home()` (fake HOME in tests) and the test guard, cwd default, `--debug` (one-line error without it). Fixture F1 and its integrity test"
+    },
+    {
+      "status": "todo",
+      "attempts": 0,
+      "id": "T3",
+      "title": "**`grader web-pull`**: net change, classification against the Mac, preview, `--yes` through `apply_edits(entry=e)` + `update_course_config` in **one** history entry, Mac-wins config rule, archive on Drive + copy in history, idempotent, `-y`/`--yes`, `--debug`. Optional `entry=None` (backward compatible) added to `apply_edits`/`_sync_total`/`_sync_attendance`/`attendance.auto_sync`"
+    },
+    {
+      "status": "todo",
+      "attempts": 0,
+      "id": "T4",
+      "title": "**Grade math in JS + golden parity**: `classify`, `sameCell`, `mergeCourse`, `fillDefaultMax`, `computeGrades` (with per-student `dropped`), `letterGrade`, `round2`, plus CSV parse (`csv.js`, read side). `make_golden.py` (using T2's `build_course_json` + `get_course_data`) writes the golden files, variants, `csv_rows.json` and `canonical.json`. Fixtures F2-F4"
+    },
+    {
+      "status": "todo",
+      "attempts": 0,
+      "id": "T5",
+      "title": "**Web app shell**: `listCourses` + `loadCourse` under the lock with trim, owner check, course availability (missing course.json, conflict copies, damaged journal), `older_push`, read-only course view with push time. Journal summary formatters (`fmtTime`, `fmtAgo`, `journalLine`). Server harness. clasp deploy and paste-in README, plus the README's \"Duplicate files\" and \"Damaged journal\" procedures (SPEC \"Hand-repair procedures\"). Repo hygiene test"
+    },
+    {
+      "status": "todo",
+      "attempts": 0,
+      "id": "T6",
+      "title": "**Column mode**: pick a counted column (grouped by category, attendance sessions included, no totals). Students in Raw Details order with ID/name/value. Numeric keypad input, Next, `ขส`, Clear, refusal of `8,5`/negatives/text, over-max red, `*` + \"N unsaved\" badge, clear-back removes the edit, ID/name search, last column remembered per device (`gw:ui:<folder>`)"
+    },
+    {
+      "status": "todo",
+      "attempts": 0,
+      "id": "T7",
+      "title": "**Save, draft, Undo**: `saveBatch` with the conflict check, pending marker + roll-forward, journal append, cell splice. Retry, Discard, leave-page warning, localStorage draft with age, storage-refused warning. `undoLastSave` (newest first, conflicts kept). `<J>.undo.edits` (first 10 cells + count) for the Undo dialog. Message formatters `saveResult`, `draftAge`, `undoTitle`, `undoResult` in `journal.js` (\"(N files)\" from `columns[].file`). `gas_run.js` and `e2e.sh` (all steps except 6e)"
+    },
+    {
+      "status": "todo",
+      "attempts": 0,
+      "id": "T8",
+      "title": "**Student detail and wide table**: tap a student for the full row with per-category weighted %, `dropped` mark, Coursework Total, Final Score and Grade, live from saved values + unsaved edits, editable there. Wide screens get the whole course table with the same marks and editing; narrow widths fall back to column mode"
+    },
+    {
+      "status": "todo",
+      "attempts": 0,
+      "id": "T9",
+      "title": "**Attendance and Fill**: session column with today preselected, P/L/A/X taps that move to the next student, `EA` shown and kept, no session add/rename/remove, never touching the xlsx. Fill: whole column or only empty cells (unsaved values count as filled), \"N cells will change\", 0 does nothing, validation, attendance choices P/L/A/X/Clear"
+    },
+    {
+      "status": "todo",
+      "attempts": 0,
+      "id": "T10",
+      "title": "**Weights and boundaries editor**: `saveConfig` with a journaled `config` line, number validation naming the field, fixed key sets, boundaries strictly descending in stored letter order (else `INVALID` naming the letter; never re-sorted), sum ≠ 1 warning (Save allowed), stale-config refusal. Totals recompute (weight-derived maxima included). e2e step 6e"
+    }
+  ],
   "review_loops": 0,
   "build_head": null
 }

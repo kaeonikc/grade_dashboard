@@ -2,3 +2,6 @@ node_modules/
 .clasp.json
 out/
 .app/skills.json
+# the parent .gitignore ignores SPEC.md/CLAUDE.md at any depth; this app keeps its own
+!SPEC.md
+!CLAUDE.md
