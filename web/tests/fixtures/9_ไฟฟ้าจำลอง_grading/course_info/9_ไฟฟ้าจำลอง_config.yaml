@@ -1,0 +1,13 @@
+course_id: MOCK3
+course_name: ไฟฟ้าจำลอง
+term: 2027_S1
+weights: {attendance: 0.1, lab: 0.15, quiz: 0.1, homework: 0.2, project: 0.1, final: 0.3, participation: 0.05, extra: 0.0}
+data_mapping:
+  lab: [1, 2, 3, 4, 5: 20, 6, 7, 8, 9, 10, 11, 12]
+  quiz: {pts_each: 4, columns: [q1, q2, q3, q4: 6]}
+  homework: {total_pts: 50, columns: [hw1: 10, hw2, hw3]}
+  project: [p1, p2]
+  extra: [x1]
+  final: [final_exam: 30]
+grade_boundaries: {A: 80, B+: 75, B: 70, C+: 65, C: 60, D+: 55, D: 50}
+rules: {drop_lowest_homework: true}

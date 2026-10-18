@@ -1,0 +1,13 @@
+course_id: MOCK2
+course_name: กลศาสตร์ทดลอง
+term: 2027_S1
+term_start_date: 2027-01-13
+weights: {attendance: 0.1, homework: 0.2, project: 0.05, midterm: 0.3, final: 0.4}
+data_mapping:
+  attendance: [13 Jan 2027, 20 Jan 2027, 27 Jan 2027]
+  homework: [hw1: 10, hw2: 10, hw3: 10]
+  project: [project1: 8]
+  midterm: [midterm_exam: 30]
+  final: [final_exam: 40]
+grade_boundaries: {A: 80, B+: 75, B: 70, C+: 65, C: 60, D+: 55, D: 50}
+rules: {drop_lowest_homework: false}

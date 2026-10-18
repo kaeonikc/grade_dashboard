@@ -1,0 +1,91 @@
+{
+ "archive": "archive_pull_4.jsonl",
+ "journals": {
+  "config_boundaries.jsonl": {
+   "lines": 1,
+   "valid": 1,
+   "bad": [],
+   "unpulled": 1,
+   "last_saved": "2027-01-20T13:10:00+07:00"
+  },
+  "config_weights.jsonl": {
+   "lines": 1,
+   "valid": 1,
+   "bad": [],
+   "unpulled": 1,
+   "last_saved": "2027-01-20T13:00:00+07:00"
+  },
+  "config_weights_net.jsonl": {
+   "lines": 2,
+   "valid": 2,
+   "bad": [],
+   "unpulled": 2,
+   "last_saved": "2027-01-20T13:30:00+07:00"
+  },
+  "duplicates.jsonl": {
+   "lines": 3,
+   "valid": 3,
+   "bad": [],
+   "unpulled": 3,
+   "last_saved": "2027-01-20T11:01:00+07:00"
+  },
+  "four_lines.jsonl": {
+   "lines": 4,
+   "valid": 4,
+   "bad": [],
+   "unpulled": 4,
+   "last_saved": "2027-01-20T09:15:00+07:00"
+  },
+  "from_web.jsonl": {
+   "lines": 3,
+   "valid": 3,
+   "bad": [],
+   "unpulled": 3,
+   "last_saved": "2027-01-20T09:15:02+07:00"
+  },
+  "net_change.jsonl": {
+   "lines": 4,
+   "valid": 4,
+   "bad": [],
+   "unpulled": 4,
+   "last_saved": "2027-01-20T10:15:00+07:00"
+  },
+  "seven_lines.jsonl": {
+   "lines": 7,
+   "valid": 7,
+   "bad": [],
+   "unpulled": 3,
+   "last_saved": "2027-01-20T09:45:00+07:00"
+  },
+  "three_unpulled.jsonl": {
+   "lines": 3,
+   "valid": 3,
+   "bad": [],
+   "unpulled": 3,
+   "last_saved": "2027-01-20T09:15:10+07:00"
+  },
+  "truncated.jsonl": {
+   "lines": 5,
+   "valid": 4,
+   "bad": [
+    3
+   ],
+   "unpulled": 4,
+   "last_saved": "2027-01-20T12:00:00+07:00"
+  },
+  "undo_batches.jsonl": {
+   "lines": 8,
+   "valid": 8,
+   "bad": [],
+   "unpulled": 8,
+   "last_saved": "2027-01-20T09:30:00+07:00"
+  },
+  "unknown.jsonl": {
+   "lines": 4,
+   "valid": 4,
+   "bad": [],
+   "unpulled": 4,
+   "last_saved": "2027-01-20T14:00:00+07:00"
+  }
+ }
+}

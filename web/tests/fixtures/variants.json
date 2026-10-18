@@ -1,0 +1,71 @@
+[
+ {
+  "fixture": "9_ฟิสิกส์จำลอง_grading",
+  "name": "s4_1_detail",
+  "edits": [
+   {
+    "student_id": "9900000001",
+    "column": "hw2",
+    "value": "9",
+    "original": ""
+   },
+   {
+    "student_id": "9900000001",
+    "column": "20 Jan 2027",
+    "value": "P",
+    "original": ""
+   }
+  ]
+ },
+ {
+  "fixture": "9_ฟิสิกส์จำลอง_grading",
+  "name": "s4_2_typed_final",
+  "edits": [
+   {
+    "student_id": "9900000001",
+    "column": "hw2",
+    "value": "9",
+    "original": ""
+   },
+   {
+    "student_id": "9900000001",
+    "column": "20 Jan 2027",
+    "value": "P",
+    "original": ""
+   },
+   {
+    "student_id": "9900000001",
+    "column": "final_exam",
+    "value": "28",
+    "original": ""
+   }
+  ]
+ },
+ {
+  "fixture": "9_ไฟฟ้าจำลอง_grading",
+  "name": "s10_1_weights_edit",
+  "weights": {
+   "attendance": 0.1,
+   "lab": 0.2,
+   "quiz": 0.1,
+   "homework": 0.15,
+   "project": 0.1,
+   "final": 0.3,
+   "participation": 0.05,
+   "extra": 0.0
+  }
+ },
+ {
+  "fixture": "9_กลศาสตร์ทดลอง_grading",
+  "name": "s10_4_boundaries_edit",
+  "grade_boundaries": {
+   "A": 78,
+   "B+": 75,
+   "B": 70,
+   "C+": 65,
+   "C": 60,
+   "D+": 55,
+   "D": 50
+  }
+ }
+]

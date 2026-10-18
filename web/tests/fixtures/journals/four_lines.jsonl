@@ -1,0 +1,4 @@
+{"batch":"b-20270120-091500-d4c1","seq":0,"ts":"2027-01-20T09:15:00+07:00","kind":"cell","push":"p-20270119-201500","file":"data/9_ฟิสิกส์จำลอง_attendance.csv","student_id":"9900000001","column":"20 Jan 2027","value":"P","original":""}
+{"batch":"b-20270120-091500-d4c1","seq":1,"ts":"2027-01-20T09:15:00+07:00","kind":"cell","push":"p-20270119-201500","file":"data/9_ฟิสิกส์จำลอง_attendance.csv","student_id":"9900000002","column":"20 Jan 2027","value":"A","original":""}
+{"batch":"b-20270120-091500-d4c1","seq":2,"ts":"2027-01-20T09:15:00+07:00","kind":"cell","push":"p-20270119-201500","file":"data/9_ฟิสิกส์จำลอง_homework.csv","student_id":"9900000001","column":"hw2","value":"9","original":""}
+{"batch":"b-20270120-091500-d4c1","seq":3,"ts":"2027-01-20T09:15:00+07:00","kind":"cell","push":"p-20270119-201500","file":"data/9_ฟิสิกส์จำลอง_midterm.csv","student_id":"9900000002","column":"midterm_exam","value":"20","original":"18"}

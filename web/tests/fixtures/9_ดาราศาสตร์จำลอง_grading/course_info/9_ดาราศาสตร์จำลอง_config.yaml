@@ -1,0 +1,11 @@
+course_id: MOCK4
+course_name: ดาราศาสตร์จำลอง
+term: 2027_S1
+weights: {homework: 0.3, quiz: 0.2, midterm: 0.2, final: 0.3}
+data_mapping:
+  homework: [hw1: 20]
+  quiz: [quiz1, quiz2]
+  midterm: [midterm_exam: 50]
+  final: [final_exam: 50]
+grade_boundaries: {A: 80, B+: 75, B: 70, C+: 65, C: 60, D+: 55, D: 50}
+rules: {drop_lowest_homework: true}

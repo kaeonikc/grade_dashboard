@@ -1,0 +1,1 @@
+{"batch":"b-20270120-130000-aa01","seq":0,"ts":"2027-01-20T13:00:00+07:00","kind":"config","push":"p-20270119-201500","part":"weights","value":{"attendance":0.1,"homework":0.25,"midterm":0.3,"final":0.35},"original":{"attendance":0.1,"homework":0.2,"midterm":0.3,"final":0.4}}

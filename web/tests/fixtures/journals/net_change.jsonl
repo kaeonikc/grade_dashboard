@@ -1,0 +1,4 @@
+{"batch":"b-20270120-100000-1a2b","seq":0,"ts":"2027-01-20T10:00:00+07:00","kind":"cell","push":"p-20270119-201500","file":"data/9_ฟิสิกส์จำลอง_homework.csv","student_id":"9900000001","column":"hw2","value":"9","original":""}
+{"batch":"b-20270120-100000-1a2b","seq":1,"ts":"2027-01-20T10:00:00+07:00","kind":"cell","push":"p-20270119-201500","file":"data/9_ฟิสิกส์จำลอง_homework.csv","student_id":"9900000002","column":"hw3","value":"5","original":"7"}
+{"batch":"b-20270120-101500-3c4d","seq":0,"ts":"2027-01-20T10:15:00+07:00","kind":"cell","push":"p-20270119-201500","file":"data/9_ฟิสิกส์จำลอง_homework.csv","student_id":"9900000001","column":"hw2","value":"8","original":"9"}
+{"batch":"b-20270120-101500-3c4d","seq":1,"ts":"2027-01-20T10:15:00+07:00","kind":"cell","push":"p-20270119-201500","file":"data/9_ฟิสิกส์จำลอง_homework.csv","student_id":"9900000002","column":"hw3","value":"7","original":"5"}
