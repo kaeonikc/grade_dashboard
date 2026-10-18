@@ -138,16 +138,30 @@ def fmt_time(iso: str) -> str:
     return f"{d.day} {d:%b} {d.year} {d:%H:%M}"
 
 
-def write_archive(mirror, header: dict, lines: list[dict], suffix: str = "") -> Path:
-    """A new archive/web_edits_<YYYYMMDD-HHMMSS><suffix>.jsonl (`-2`, `-3` … when the name is taken)."""
+def archive_path(mirror, suffix: str = "") -> Path:
+    """A free name archive/web_edits_<YYYYMMDD-HHMMSS><suffix>.jsonl (`-2`, `-3` … when the name is taken)."""
     folder = Path(mirror) / ARCHIVE
-    folder.mkdir(parents=True, exist_ok=True)
     base = f"web_edits_{datetime.now():%Y%m%d-%H%M%S}{suffix}"
     path, n = folder / f"{base}.jsonl", 2
     while path.exists():
         path, n = folder / f"{base}-{n}.jsonl", n + 1
+    return path
+
+
+def archive_bytes(header: dict, lines: list[dict]) -> bytes:
     text = "".join(json.dumps(o, ensure_ascii=False, separators=(",", ":")) + "\n" for o in [header] + lines)
-    atomic_write_bytes(path, text.encode("utf-8"))
+    return text.encode("utf-8")
+
+
+def save_archive(path: Path, data: bytes) -> None:
+    """Writes a new archive file (never one that exists: the name comes from archive_path)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_bytes(path, data)
+
+
+def write_archive(mirror, header: dict, lines: list[dict], suffix: str = "") -> Path:
+    path = archive_path(mirror, suffix)
+    save_archive(path, archive_bytes(header, lines))
     return path
 
 

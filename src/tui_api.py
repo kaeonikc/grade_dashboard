@@ -557,22 +557,24 @@ def _update_xlsx_attendance(xlsx_path, student_id, target_col_orig_name, val_to_
     wb.save(xlsx_path)
     return True
 
-def _sync_attendance(course_path) -> None:
-    """After an attendance edit (csv and xlsx): refresh the csv total and the sync baseline (src/attendance.py)."""
+def _sync_attendance(course_path, entry=None) -> None:
+    """After an attendance edit (csv and xlsx): refresh the csv total and the sync baseline (src/attendance.py).
+    With `entry`, the files it writes go into that history entry instead of a new one."""
     try:
         from src.attendance import auto_sync
-        auto_sync(course_path)
+        auto_sync(course_path, entry=entry)
     except Exception:
         pass  # the next open of the course (or `grader sync`) does it
 
 
-def _sync_total(course_path, csv_path) -> None:
-    """After an edit, put the file's total column right at once (not for attendance files)."""
+def _sync_total(course_path, csv_path, entry=None) -> None:
+    """After an edit, put the file's total column right at once (not for attendance files).
+    With `entry`, the file goes into that history entry instead of a new one."""
     try:
         from src.sync import category_of, sync_file
         cat = category_of(course_path, csv_path)
         if cat:
-            sync_file(course_path, cat, tool="grade-tui", action="totals")
+            sync_file(course_path, cat, entry=entry, tool="grade-tui", action="totals")
     except Exception:
         pass  # the next open of the course refreshes it
 
@@ -765,13 +767,15 @@ def _xlsx_cells(ws, col_name):
     return col_idx, rows
 
 
-def apply_edits(course_path, edits):
+def apply_edits(course_path, edits, entry=None):
     """
     Saves a batch of grade-tui edits, each {"student_id", "column", "value", "original"}.
 
     A cell is written only when the file still holds `original` (compared by meaning, see
     _same_cell); otherwise it is reported as a conflict and left alone. Every file that changes
     is captured in ONE history entry first, so one `grader undo` reverts the whole batch.
+    With `entry` (an open history.Entry, e.g. `grader web-pull`'s), everything written, the
+    totals and the attendance baseline included, is captured into it and the caller closes it.
     """
     try:
         path = Path(course_path)
@@ -849,9 +853,16 @@ def apply_edits(course_path, edits):
         # 2. One history entry for the whole batch, then write
         from src.history import course_dir_of, snapshot
         import shutil
-        course = course_dir_of(files[0])
-        if course is not None:
-            snapshot(course, files + list(xlsx_mirror), "grade-tui", "edit", note=f"{len(saved)} cells", cells=len(saved))
+        if entry is not None:
+            from src.attendance import baseline_path
+            for f in files + list(xlsx_mirror):
+                entry.capture(f)
+            if any(f.name.endswith("attendance.csv") for f in csv_docs):
+                entry.capture(baseline_path(path))
+        else:
+            course = course_dir_of(files[0])
+            if course is not None:
+                snapshot(course, files + list(xlsx_mirror), "grade-tui", "edit", note=f"{len(saved)} cells", cells=len(saved))
         for file, doc in csv_docs.items():
             shutil.copy2(file, file.with_suffix(".csv.bak"))
             write_csv_text(file, doc)
@@ -871,9 +882,9 @@ def apply_edits(course_path, edits):
         # 3. Totals and the attendance baseline follow
         for file in csv_docs:
             if file.name.endswith("attendance.csv"):
-                _sync_attendance(path)
+                _sync_attendance(path, entry)
             else:
-                _sync_total(path, file)
+                _sync_total(path, file, entry)
 
         names = sorted(f.name for f in files)
         msg = f"Saved {len(saved)} cell{'s' if len(saved) != 1 else ''} ({len(names)} file{'s' if len(names) != 1 else ''})."

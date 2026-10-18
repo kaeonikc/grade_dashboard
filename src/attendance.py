@@ -783,8 +783,9 @@ def warnings(course) -> list[str]:
     return [f"attendance: {'; '.join(bits)} — run `grader sync`"] if bits else []
 
 
-def auto_sync(course, tool: str = "grade-tui") -> list[str]:
-    """On opening a course: applies a sync that needs no question (SPEC decision 6); otherwise returns warnings."""
+def auto_sync(course, tool: str = "grade-tui", entry=None) -> list[str]:
+    """On opening a course: applies a sync that needs no question (SPEC decision 6); otherwise returns warnings.
+    With `entry`, the files go into that open history entry (the caller closes it) instead of a new one."""
     from src.history import Entry
     course = Path(course)
     try:
@@ -797,9 +798,10 @@ def auto_sync(course, tool: str = "grade-tui") -> list[str]:
             return warnings(course)
         if p.is_locked:
             return [f"attendance: {p.xlsx.name} is open in Excel; not synced"] if p.has_changes() else []
-        e = Entry(course, tool, "attendance")
+        e = entry or Entry(course, tool, "attendance")
         done = apply(p, Decisions(), e)
-        e.close(sum(done.values()) or None)
+        if entry is None:
+            e.close(sum(done.values()) or None)
         return []
     except Exception as ex:
         return [f"attendance: could not sync ({ex})"]

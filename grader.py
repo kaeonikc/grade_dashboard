@@ -1825,6 +1825,26 @@ def web_push(sub, args):
         sys.exit(1)
 
 
+def web_pull(sub, args):
+    """`grader web-pull` (src/webpull.py). Preview unless --yes; a refusal prints its message and exits 1."""
+    from src import webpull
+    from src.webdrive import Refused, drive_root
+    course = _web_course(sub, args.course)
+    try:
+        code = webpull.pull(course, drive_root(args.drive_root), yes=args.yes)
+    except Refused as e:
+        print(e)
+        sys.exit(1)
+    except Exception as e:
+        if args.debug:
+            import traceback
+            traceback.print_exc()
+        else:
+            print(f"❌ Unexpected error: {e}. Run again with --debug for the details.")
+        sys.exit(1)
+    sys.exit(code)
+
+
 def run_dashboard():
     from src.dashboard import run
     run()
@@ -1899,6 +1919,25 @@ if __name__ == "__main__":
     parser_web_push.add_argument("course", nargs="?", metavar="COURSE",
                                  help="Course folder (default: the folder you're in, if it has course_info/)")
 
+    parser_web_pull = subparsers.add_parser(
+        "web-pull", help="Bring grade_web edits back into the course (preview; --yes applies)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Bring the edits made in the grade_web app back into the course. Without --yes it only shows\n"
+                    "what would change. Cells changed on the Mac since the push keep the Mac value (listed as\n"
+                    "conflicts). Everything it writes is one history entry: grader undo puts it all back.",
+        epilog="examples:\n"
+               "  grader web-pull                 # preview, inside the course folder\n"
+               "  grader web-pull --yes           # apply\n"
+               "  grader undo                     # take the whole pull back")
+    parser_web_pull.add_argument("-y", "--yes", action="store_true",
+                                 help="Apply the changes (default: preview only, nothing written)")
+    parser_web_pull.add_argument("--drive-root", metavar="DIR",
+                                 help='Your "My Drive" folder (default: $GRADE_WEB_DRIVE_ROOT, else the Google '
+                                      "Drive for Desktop folder of your @g.cmru.ac.th account)")
+    parser_web_pull.add_argument("--debug", action="store_true", help="Show the full traceback on unexpected errors")
+    parser_web_pull.add_argument("course", nargs="?", metavar="COURSE",
+                                 help="Course folder (default: the folder you're in, if it has course_info/)")
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -1926,6 +1965,8 @@ if __name__ == "__main__":
         run_dashboard()
     elif args.command == "web-push":
         web_push(parser_web_push, args)
+    elif args.command == "web-pull":
+        web_pull(parser_web_pull, args)
     else:
         # Default behavior: show help
         parser.print_help()
