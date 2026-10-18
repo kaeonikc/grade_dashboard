@@ -1,0 +1,82 @@
+<style>
+  /* Phone first; tokens and sizes from web/SPEC.md "Accessibility (WCAG 2.1 AA)". */
+  :root {
+    --bg: #ffffff; --bg2: #f4f5f7; --text: #1b1b1f; --muted: #5b5e66; --accent: #1558b0; --on-accent: #ffffff;
+    --danger: #b3261e; --mark: #8a5a00; --line: #d5d7dd;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121316; --bg2: #1c1d21; --text: #ececf0; --muted: #a9abb3; --accent: #8ab4f8; --on-accent: #0b1b33;
+      --danger: #ff8a80; --mark: #f2c14e; --line: #3a3c42;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); font-size: 1.0625rem; line-height: 1.5;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Sukhumvit Set", Thonburi, "Noto Sans Thai",
+      "Leelawadee UI", Tahoma, sans-serif;
+  }
+  @media (min-width: 960px) { body { font-size: 0.9375rem; } }
+  main { max-width: 60rem; margin: 0 auto; padding: 0 1rem 2rem; }
+  h1 { font-size: 1.5rem; margin: 0; }
+  p { margin: 0.25rem 0; }
+  button, input { font: inherit; font-size: max(1rem, 16px); }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; box-shadow: 0 0 0 2px var(--bg); }
+  h1[tabindex="-1"]:focus { outline: none; box-shadow: none; }
+  .muted { color: var(--muted); }
+  .warn { color: var(--mark); }
+  .unsaved { color: var(--mark); font-weight: 600; }
+  .num { font-variant-numeric: tabular-nums; text-align: right; }
+  .id { font-variant-numeric: tabular-nums; }
+
+  .page-head { padding: 1rem 0 0.75rem; }
+  .btn {
+    min-height: 2.75rem; min-width: 2.75rem; padding: 0.5rem 1rem; border-radius: 0.5rem; cursor: pointer;
+    border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent);
+  }
+  .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
+  .notice { padding: 1rem 0; }
+  .notice-title { font-weight: 600; }
+
+  .courses { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+  .card {
+    display: flex; flex-direction: column; gap: 0.125rem; width: 100%; min-height: 4.5rem;
+    padding: 0.75rem 2.5rem 0.75rem 1rem;
+    border: 1px solid var(--line); border-radius: 0.75rem; background: var(--bg); color: var(--text); text-align: left;
+    position: relative;
+  }
+  .card.course { cursor: pointer; }
+  .card-title { font-weight: 600; font-size: 1.125rem; }
+  .card .chevron {
+    position: absolute; right: 1rem; top: 50%; transform: translateY(-50%); font-size: 1.5rem; color: var(--muted);
+  }
+  .card.unavailable { background: var(--bg2); padding-right: 1rem; }
+  .tag { font-weight: 600; color: var(--danger); }
+  .placeholder { background: var(--bg2); border-color: var(--bg2); margin-bottom: 0.5rem; }
+
+  .opening { padding: 2rem 0; text-align: center; }
+  .spinner {
+    width: 2rem; height: 2rem; margin: 1rem auto; border-radius: 50%;
+    border: 3px solid var(--line); border-top-color: var(--accent); animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+  .course-head {
+    position: sticky; top: 0; z-index: 1; background: var(--bg); padding: 0.5rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .course-bar { display: flex; align-items: center; gap: 0.25rem; min-width: 0; }
+  .course-name { font-size: 1.25rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .icon {
+    min-width: 2.75rem; min-height: 2.75rem; border: 0; background: none; color: var(--accent); font-size: 1.75rem;
+    cursor: pointer; border-radius: 0.5rem;
+  }
+
+  .table-wrap { overflow-x: auto; margin-top: 0.5rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { padding: 0.5rem; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  thead th { color: var(--muted); font-weight: 600; }
+  tbody th { font-weight: 400; }
+</style>

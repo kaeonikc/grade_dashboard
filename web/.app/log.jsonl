@@ -14,3 +14,6 @@
 {"ts": "2026-10-18T22:41:31", "event": "task_passed", "role": "engineer", "note": "T3"}
 {"ts": "2026-10-18T22:44:07", "event": "user_correction", "role": "lead", "note": "Fixed wrong acceptance assertion: round2(2.675) expected 2.68 (numpy/pandas half-even on 267.5), not 2.67 (builtin round)"}
 {"ts": "2026-10-18T22:44:12", "event": "task_passed", "role": "engineer", "note": "T4"}
+{"ts": "2026-10-18T22:44:37", "event": "task_started", "role": "engineer", "note": "T5"}
+{"ts": "2026-10-18T23:00:23", "event": "task_passed", "role": "engineer", "note": "T5"}
+{"ts": "2026-10-18T23:00:23", "event": "note", "role": "lead", "note": "For review: journal line validity differs: web (journal.js) accepts any JSON object; Mac (src/webdrive.journal) also requires batch+seq. SPEC says 'not valid JSON'. Align in review."}

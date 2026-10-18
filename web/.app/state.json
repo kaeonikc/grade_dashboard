@@ -33,7 +33,7 @@
       "title": "**Grade math in JS + golden parity**: `classify`, `sameCell`, `mergeCourse`, `fillDefaultMax`, `computeGrades` (with per-student `dropped`), `letterGrade`, `round2`, plus CSV parse (`csv.js`, read side). `make_golden.py` (using T2's `build_course_json` + `get_course_data`) writes the golden files, variants, `csv_rows.json` and `canonical.json`. Fixtures F2-F4"
     },
     {
-      "status": "todo",
+      "status": "passed",
       "attempts": 0,
       "id": "T5",
       "title": "**Web app shell**: `listCourses` + `loadCourse` under the lock with trim, owner check, course availability (missing course.json, conflict copies, damaged journal), `older_push`, read-only course view with push time. Journal summary formatters (`fmtTime`, `fmtAgo`, `journalLine`). Server harness. clasp deploy and paste-in README, plus the README's \"Duplicate files\" and \"Damaged journal\" procedures (SPEC \"Hand-repair procedures\"). Repo hygiene test"

@@ -1,9 +1,19 @@
 # grade_web
 
 View and edit grade_dashboard courses from an iPhone or any browser. A Google Apps Script web app on the CMRU
-account reads course copies in `My Drive/grade_web/<course>/`. The design is in `SPEC.md`.
+account reads course copies in `My Drive/grade_web/<course>/`. `grader web-push` puts a course there, and
+`grader web-pull` brings the web edits back to the Mac copy (the master). The design is in `SPEC.md`.
 
-Status: T1 spike. The web app shows `hello` and the folder names under `My Drive/grade_web/`. No student data.
+Status: the web app lists the pushed courses (name, term, push time, edits not pulled) and opens a course read-only,
+with its totals and grades. Editing and saving come next.
+
+The web app is 10 files in `apps_script/`, pushed as they are (no build step):
+
+| File | Kind in the editor |
+|---|---|
+| `appsscript.json` | manifest |
+| `Code.js`, `drive.js`, `csv.js`, `grades.js`, `journal.js` | script (`.gs` in the editor) |
+| `Index.html`, `style.html`, `client_state.html`, `client_views.html` | HTML |
 
 ## Deploy (clasp)
 
@@ -17,7 +27,7 @@ clasp show-authorized-user          # must print the CMRU account; otherwise: cl
 clasp create-script --type standalone --title grade_web --rootDir out/clasp_new
 rm -r out/clasp_new
 sed -i '' 's#"rootDir": "out/clasp_new"#"rootDir": "apps_script"#' .clasp.json
-clasp show-file-status              # must list exactly apps_script/appsscript.json, Code.js, Index.html
+clasp show-file-status              # must list exactly the 10 files in the table above
 ```
 
 `create-script` writes the starter `Code.js` and `appsscript.json` into its `--rootDir`, overwriting whatever is
@@ -48,37 +58,126 @@ clasp update-deployment <that deployment ID> --description "grade_web"
 
 Keep the deployment ID and the URL out of the repo.
 
-### Authorise, and run the T1 round-trip spike
+### Authorise
+
+The first run asks for permission: the first time you open the URL, or the first time you run a function in the
+editor. Choose the CMRU account and allow "See, edit, create and delete all of your Google Drive files" and "See your
+primary Google Account email address". Those are the only two scopes, and the web app needs nothing else.
+
+## Deploy by paste-in (when clasp or the Apps Script API is blocked)
+
+This gives the same web app as clasp. Use it only if `clasp push` is refused by the Workspace admin.
+
+1. Open https://script.google.com signed in to the CMRU account. Click **New project** and rename it `grade_web`
+   (click "Untitled project").
+2. Project Settings (gear icon): tick **Show "appsscript.json" manifest file in editor**. Back in the Editor
+   (`< >` icon), open `appsscript.json` and replace its whole content with `apps_script/appsscript.json`.
+3. Script files: open the starter `Code.gs` and replace its content with `apps_script/Code.js`. Then, for each of
+   `drive.js`, `csv.js`, `grades.js` and `journal.js`, click **+** next to Files > **Script**, type the name without
+   `.js` (`drive`, `csv`, `grades`, `journal`), and paste the file's content over the starter function.
+4. HTML files: for each of `Index.html`, `style.html`, `client_state.html` and `client_views.html`, click **+** >
+   **HTML**, type the name without `.html` (`Index`, `style`, `client_state`, `client_views`; the case matters), and
+   paste the file's content over the starter page.
+5. Save (Cmd+S). The Files list now shows exactly the 10 files of the table above.
+6. **Deploy > New deployment**. Next to "Select type", click the gear > **Web app**. Description `grade_web`,
+   Execute as **Me**, Who has access **Only myself**. Click **Deploy**, authorise (see Authorise above), and copy the
+   Web app URL.
+
+After a code change, paste the changed files again, then **Deploy > Manage deployments**, click the pencil on the
+`grade_web` deployment, choose Version **New version**, and click **Deploy**. The URL stays the same. (**New
+deployment** would make a second URL.)
+
+## Open it on the iPhone
+
+1. `clasp open-web-app`, then pick the `grade_web` deployment (not `@HEAD`). With paste-in, use the copied URL. It
+   looks like `https://script.google.com/a/macros/<domain>/s/<deployment ID>/exec`.
+2. Send the URL to the iPhone (AirDrop or Notes) and open it in Safari, signed in to the CMRU account.
+3. Expected: `grade_web`, `Courses on Drive`, and one card per pushed course with its name, `course ID · term`,
+   `Pushed {time}`, and `N edits not pulled · last saved {time}` (or `No edits waiting to be pulled`). Before any
+   `grader web-push`: `No pushed courses yet.`
+
+If deploying or opening is blocked by the Workspace admin (an error page from Google, or a policy message), stop.
+Note the exact message and don't try another account.
+
+### Another account, or signed out
+
+In a private window signed in to a different Google account, the URL shows Google's own "no permission" page or
+`Not available`. Signed out, it shows Google's sign-in page. Neither shows a course, a name, an ID or a score.
+
+### Several Google accounts in one browser
+
+Apps Script web apps often fail to open when the browser is signed in to more than one Google account: Google picks
+the default account and shows its own error page (for example "Sorry, unable to open the file at this time"). The
+app never shows another account's data, because it runs as you, opens only for you, and checks the account again.
+To open it:
+
+- Best: a Safari profile used only for the CMRU account (iOS 17 or later: Settings > Apps > Safari > New Profile).
+  Sign in there with the CMRU account only, and open the URL in that profile.
+- Or sign out of the other accounts at https://accounts.google.com in that browser.
+- Or a private window signed in to the CMRU account only. Unsaved edits can't be backed up in a private window.
+
+## Limits
+
+Only edits made in the web app are pulled. An edit made to a Drive copy any other way (the file opened in Google
+Sheets, or edited by hand) is not pulled to the Mac, and the next `grader web-push` replaces it.
+
+## Repairs by hand
+
+The web app shows a course as `Unavailable` when its Drive folder holds duplicate files or a damaged journal, and
+`grader web-push` and `grader web-pull` refuse it too. While it is unavailable, the web app writes nothing to the
+course, so you can repair it safely by following one of the procedures below. Do it by hand. No command does it for
+you.
+
+### Duplicate files
+
+You see `Drive has duplicate files: …` in the web app, or a copy like `web_edits (1).jsonl`,
+`…_homework (1).csv` or `course (1).json`, or two files with the same name at drive.google.com. Drive makes these
+copies when two devices write the same file at once.
+
+1. Wait until Drive for Desktop shows "up to date". Don't use the web app for this course until the end.
+2. If the journal has a copy (`web_edits (1).jsonl`, or a second `web_edits.jsonl`):
+   1. Copy `web_edits.jsonl` and its copy somewhere outside the course folder first (for example the Desktop), as a
+      backup.
+   2. Open both in a text editor. Append to `web_edits.jsonl` every line of the copy whose `batch` and `seq` pair
+      isn't already in it.
+   3. Sort all lines of `web_edits.jsonl` by `batch`, then by `seq` (batch IDs sort by time). Never change a line.
+   4. Save, then delete the copy (in Finder or at drive.google.com).
+
+   Put no backup inside `archive/`, because every file there is read as an archive.
+3. Any other copy (a CSV, `course.json`, `push.json`): delete the `(1)` copy. Those files are rebuilt from the Mac.
+   If you're unsure which one is right, delete the copy anyway, then run `grader web-pull` (preview, then
+   `grader web-pull --yes`) and `grader web-push` to refresh Drive. The journal carries the web edits, not the CSVs.
+4. Wait for "up to date", then reload the web app (the course opens again). Then run `grader web-pull`.
+
+### Damaged journal
+
+You see `web_edits.jsonl has damaged lines: 3, 7` in the web app, or `grader web-push` or `grader web-pull` stops
+with `web_edits.jsonl has lines that aren't valid JSON: 3, 7`. A line is damaged when it was cut off, for example by
+a sync that stopped halfway.
+
+1. Wait for "up to date". Copy `web_edits.jsonl` somewhere outside the course folder (for example the Desktop), as a
+   backup.
+2. Open it in a text editor and go to the line numbers shown. For each damaged line:
+   - If it is a cut-off copy of a complete line nearby (same `batch` and `seq`), delete it.
+   - If it has no complete twin and the JSON is obviously completable (for example a missing `"}` at the end), fix
+     it.
+   - Otherwise, delete it, and first write down its student ID, column and value from the readable part. Re-enter
+     that value by hand on the Mac after the pull.
+
+   Never edit or delete a valid line.
+3. Save, wait for "up to date", and run `grader web-pull`. It must now show the preview without the error. Then run
+   `grader web-pull --yes` and reload the web app.
+
+## The T1 round-trip spike
+
+The spike checks that Drive keeps a CSV's bytes (Thai, BOM, CRLF) through a write and a read.
 
 1. `clasp open-script` opens the editor.
-2. Pick `spikeRoundTrip` in the function menu next to Run, then click **Run**.
-3. The first run asks for permission. Choose the CMRU account and allow "See, edit, create and delete all of your
-   Google Drive files" and "See your primary Google Account email address". Those are the only two scopes, and the
-   web app needs nothing else.
-4. Read the Execution log. Report its four lines:
+2. Pick `spikeRoundTrip` in the function menu next to Run, then click **Run** (authorise the first time).
+3. Read the Execution log. Report its four lines:
    `PASS|FAIL createFile bytes …`, `PASS|FAIL setContent bytes …`, `PASS|FAIL getDataAsString text …` and
    `SPIKE PASS|SPIKE FAIL`.
 
 The spike writes one fake CSV (IDs `99…`, invented Thai names, BOM, CRLF) into `My Drive/grade_web/_spike/`, then
-trashes the file and the folder. If `grade_web/` doesn't exist yet, the spike creates it (empty).
-
-### Open it on the iPhone (M1)
-
-1. To see a folder listing before any `grader web-push`, create one or two empty folders in
-   `My Drive/grade_web/` at drive.google.com (for example `test_a`, `test_b`).
-2. `clasp open-web-app`, then pick the `grade_web` deployment (not `@HEAD`). The URL opens in the Mac browser. It
-   looks like `https://script.google.com/a/macros/<domain>/s/<deployment ID>/exec`.
-3. Send the URL to the iPhone (AirDrop or Notes) and open it in Safari, signed in to the CMRU account.
-4. Expected: `hello`, then the folder names (or `grade_web folder not found`). No student data appears.
-
-If deploying or opening is blocked by the Workspace admin (an error page from Google, or a policy message), stop.
-Note the exact message and don't try another account. The lead asks whether to use a personal account or contact
-CMRU IT.
-
-### Second account check (M3)
-
-1. In a private window, sign in to a different Google account and open the URL. Expected: Google's own "no
-   permission" page, or `Not available`. Nothing else.
-2. In a private window, signed out, open the URL. Expected: Google's sign-in page.
-
-A pass means neither shows `hello` or any folder name.
+trashes the file and the folder. If `grade_web/` doesn't exist yet, the spike creates it (empty). While `_spike`
+exists, the course list shows it as unavailable (it has no `course.json`).

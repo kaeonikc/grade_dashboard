@@ -1,0 +1,52 @@
+<script>
+'use strict';
+// Browser state (web/SPEC.md "Modules"): the course list, the open course with its grades, and the server calls.
+// Csv, Grades and Journal come from the injected modules (Index.html, ADR 004).
+
+const DRAFT_PREFIX = 'gw:draft:';
+
+const state = {
+  now: null,      // server time of the last reply: every {ago} counts from it, never from the device clock
+  courses: null,  // listCourses().courses
+  open: null,     // the loadCourse reply of the open course
+  rows: [],       // Grades.mergeCourse: students in Raw Details order
+  grades: [],     // Grades.computeGrades, one per row
+};
+
+// google.script.run as a promise. A failed call (network, server exception, time limit) rejects.
+function server(name, ...args) {
+  return new Promise((resolve, reject) => {
+    google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[name](...args);
+  });
+}
+
+// How many unsaved edits this browser holds as a draft for the course (0 when none, or storage is blocked).
+function draftCount(folder) {
+  try {
+    const draft = JSON.parse(localStorage.getItem(DRAFT_PREFIX + folder) || 'null');
+    return draft && Array.isArray(draft.edits) ? draft.edits.length : 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+function loadCourses() {
+  return server('listCourses').then((reply) => {
+    state.now = reply.now;
+    state.courses = reply.ok ? reply.courses : null;
+    return reply;
+  });
+}
+
+function openCourse(folder) {
+  return server('loadCourse', folder).then((reply) => {
+    state.now = reply.now;
+    if (reply.ok) {
+      state.open = reply;
+      state.rows = Grades.mergeCourse(reply.course, reply.roster, reply.files);
+      state.grades = Grades.computeGrades(reply.course, state.rows, []);
+    }
+    return reply;
+  });
+}
+</script>

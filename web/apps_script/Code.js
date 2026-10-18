@@ -2,20 +2,35 @@
 // Logs hold only codes, byte counts and offsets: no names, IDs or scores.
 
 const PAGE_TITLE = 'grade_web';
-const GRADE_WEB = 'grade_web';
+const JOURNAL = 'web_edits.jsonl';
+const TOP_FILES = ['course.json', 'push.json', JOURNAL];
+const LOCK_WAIT_MS = 25000;
+const NOTE_NONE = 'Nothing to undo';
+const NOTE_PULLED = 'Already pulled to the Mac; use `grader undo` there';
 
 const NOT_AVAILABLE_HTML =
   '<h1>Not available</h1><p>This page opens only for the Google account that owns it.</p>';
+
+// Unavailable reasons (Interface copy table, why.*).
+const WHY = {
+  noCourseJson: 'course.json is missing. Push the course again from the Mac: grader web-push',
+  noPushJson: 'push.json is missing. Push the course again from the Mac: grader web-push',
+  badJson: (file) => file + ' is damaged (not valid JSON). Push the course again from the Mac: grader web-push',
+  missingFile: (file) => file + ' is missing. Push the course again from the Mac: grader web-push',
+  noJournal: JOURNAL + ' is missing. Push the course again from the Mac: grader web-push',
+  copies: (names) => 'Drive has duplicate files: ' + names.join(', ') +
+    '. See the README, "Duplicate files", then reload.',
+  badJournal: (lines) => JOURNAL + ' has damaged lines: ' + lines.join(', ') +
+    '. See the README, "Damaged journal", then reload.',
+  readError: (file) => "Couldn't read " + file + ' from Drive. Try again in a minute.',
+};
 
 function doGet() {
   // Defence in depth behind "Only myself" (S2.2).
   if (Session.getActiveUser().getEmail() !== Session.getEffectiveUser().getEmail()) {
     return page_(HtmlService.createHtmlOutput(NOT_AVAILABLE_HTML));
   }
-  const template = HtmlService.createTemplateFromFile('Index');
-  const root = gradeWebFolder_();
-  template.folders = root ? folderNames_(root) : null;
-  return page_(template.evaluate());
+  return page_(HtmlService.createTemplateFromFile('Index').evaluate());
 }
 
 function page_(output) {
@@ -24,24 +39,243 @@ function page_(output) {
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
-// My Drive/grade_web, or null when it doesn't exist. DriveApp iterators include trashed items.
-function gradeWebFolder_() {
-  const it = DriveApp.getRootFolder().getFoldersByName(GRADE_WEB);
-  while (it.hasNext()) {
-    const folder = it.next();
-    if (!folder.isTrashed()) return folder;
-  }
-  return null;
+// For Index.html: the content of another .html file.
+function include_(name) {
+  return HtmlService.createHtmlOutputFromFile(name).getContent();
 }
 
-function folderNames_(folder) {
-  const names = [];
-  const it = folder.getFolders();
-  while (it.hasNext()) {
-    const child = it.next();
-    if (!child.isTrashed()) names.push(child.getName());
+// The pure modules, made on first use (file load order isn't guaranteed, ADR 004).
+let core = null;
+function core_() {
+  if (!core) {
+    const Csv = gwCsv();
+    core = { Csv: Csv, Grades: gwGrades(Csv), Journal: gwJournal() };
   }
-  return names.sort();
+  return core;
+}
+
+// For Index.html: the same module source the server and the tests run, plus the instances (ADR 004).
+function clientCore_() {
+  return [gwCsv, gwGrades, gwJournal].map(String).join('\n') +
+    '\nconst Csv = gwCsv();\nconst Grades = gwGrades(Csv);\nconst Journal = gwJournal();\n';
+}
+
+// ---- server functions (google.script.run) ----
+
+// {ok, now, courses}: every folder under grade_web, each available or not (S2.1, S2.3).
+function listCourses() {
+  return withLock_(function () {
+    const root = gradeWebFolder_();
+    if (!root) return fail_('NOT_FOUND', 'No pushed courses: run `grader web-push` on the Mac');
+    const courses = subfolders_(root).map(function (folder) {
+      const name = folder.getName();
+      try {
+        const c = openCourse_(folder);
+        return {
+          folder: name, available: true, course_id: c.course.course_id, course_name: c.course.course_name,
+          term: c.course.term, pushed_at: c.push.pushed_at, unpulled: c.summary.unpulled,
+          last_saved: c.summary.last_saved,
+          older_push: c.lines.some(function (l) { return l.push !== c.push.push_id; }),
+        };
+      } catch (e) {
+        if (!(e instanceof Unavailable_)) throw e;
+        return { folder: name, available: false, reason: e.reason };
+      }
+    });
+    return { ok: true, courses: courses };
+  });
+}
+
+// {ok, folder, course, push, roster, files, journal}: everything the browser needs to show and compute a course.
+function loadCourse(folderName) {
+  return withLock_(function () {
+    const root = gradeWebFolder_();
+    const folder = root && subfolder_(root, folderName);
+    if (!folder) return fail_('NOT_FOUND', 'No pushed course named ' + folderName);
+    try {
+      const c = openCourse_(folder);
+      const files = {};
+      c.course.files.forEach(function (rel) { files[rel] = readListed_(c, rel); });
+      return {
+        ok: true, folder: folderName, course: c.course, push: c.push, roster: readListed_(c, c.course.roster),
+        files: files, journal: journalReply_(c),
+      };
+    } catch (e) {
+      if (!(e instanceof Unavailable_)) throw e;
+      return fail_('UNAVAILABLE', e.reason);
+    }
+  });
+}
+
+// ---- locking and replies ----
+
+// Runs fn under the script lock; every reply carries the server time `now`.
+function withLock_(fn) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(LOCK_WAIT_MS);
+  } catch (e) {
+    return withNow_(fail_('BUSY', 'Another save is running; try again'));
+  }
+  try {
+    return withNow_(fn());
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function withNow_(reply) {
+  reply.now = nowIso_();
+  return reply;
+}
+
+function fail_(code, message) {
+  return { ok: false, code: code, message: message };
+}
+
+// Server clock in the script time zone, ISO 8601 with offset: 2027-01-20T09:15:02+07:00.
+function nowIso_() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ssXXX");
+}
+
+// ---- one course: trim, then the availability check ----
+
+function Unavailable_(reason) {
+  this.reason = reason;
+}
+
+// Trims the journal, then checks the course can be used (SPEC "Course availability"). Throws Unavailable_.
+// Returns {folder, course, push, dirs: {<rel dir>: [File]}, lines, summary}. The data files are only found here;
+// readListed_ reads them.
+function openCourse_(folder) {
+  trim_(folder);
+  const top = filesIn_(folder);
+  const course = readJson_(top, 'course.json', WHY.noCourseJson);
+  const push = readJson_(top, 'push.json', WHY.noPushJson);
+  const listed = [course.roster].concat(course.files);
+  const dirs = { '': top };
+  listed.forEach(function (rel) {
+    const dir = dirOf_(rel);
+    if (!(dir in dirs)) {
+      const sub = folderAt_(folder, dir);
+      dirs[dir] = sub ? filesIn_(sub) : [];
+    }
+  });
+
+  const J = core_().Journal;
+  let copies = [];
+  Object.keys(dirs).forEach(function (dir) {
+    const expected = listed.filter(function (rel) { return dirOf_(rel) === dir; }).map(baseOf_)
+      .concat(dir === '' ? TOP_FILES : []);
+    const found = J.conflictCopies(dirs[dir].map(function (f) { return f.getName(); }), expected);
+    copies = copies.concat(found.map(function (n) { return dir ? dir + '/' + n : n; }));
+  });
+  if (copies.length) throw unavailableResetTrim_(folder, WHY.copies(copies));
+
+  listed.forEach(function (rel) {
+    if (!fileIn_(dirs[dirOf_(rel)], baseOf_(rel))) throw new Unavailable_(WHY.missingFile(rel));
+  });
+
+  const journalFile = fileIn_(top, JOURNAL);
+  if (!journalFile) throw new Unavailable_(WHY.noJournal);
+  const parsed = J.parseJournal(readOrUnavailable_(journalFile, JOURNAL));
+  if (parsed.bad.length) throw unavailableResetTrim_(folder, WHY.badJournal(parsed.bad));
+  // Trimmed: every line left is unpulled (ADR 002).
+  return {
+    folder: folder, course: course, push: push, dirs: dirs, lines: parsed.lines, summary: J.summary(parsed.lines),
+  };
+}
+
+// Duplicate files and damaged journals are repaired by hand, and a repaired journal may hold lines that were
+// already pulled. Forgetting which archives were trimmed makes the next call trim against all of them again.
+function unavailableResetTrim_(folder, reason) {
+  PropertiesService.getScriptProperties().deleteProperty(trimKey_(folder));
+  return new Unavailable_(reason);
+}
+
+function readListed_(c, rel) {
+  return readOrUnavailable_(fileIn_(c.dirs[dirOf_(rel)], baseOf_(rel)), rel);
+}
+
+function readJson_(files, name, missing) {
+  const file = fileIn_(files, name);
+  if (!file) throw new Unavailable_(missing);
+  try {
+    return JSON.parse(readOrUnavailable_(file, name));
+  } catch (e) {
+    if (e instanceof Unavailable_) throw e;
+    throw new Unavailable_(WHY.badJson(name));
+  }
+}
+
+function readOrUnavailable_(file, rel) {
+  try {
+    return readText_(file);
+  } catch (e) {
+    throw new Unavailable_(WHY.readError(rel));
+  }
+}
+
+function fileIn_(files, name) {
+  return files.filter(function (f) { return f.getName() === name; })[0] || null;
+}
+
+function dirOf_(rel) {
+  return rel.split('/').slice(0, -1).join('/');
+}
+
+function baseOf_(rel) {
+  return rel.split('/').pop();
+}
+
+// The <J> part of a reply: the same two numbers web-pull prints, plus what Undo would revert.
+function journalReply_(c) {
+  const undo = core_().Journal.undoTarget(c.lines, c.push.push_id);
+  return {
+    unpulled: c.summary.unpulled, last_saved: c.summary.last_saved, undo: undo,
+    undo_note: undo ? null : pulledThisPush_(c) ? NOTE_PULLED : NOTE_NONE,
+  };
+}
+
+// True when the newest pull archive was written for the current push (pulls after a push carry its push_id).
+function pulledThisPush_(c) {
+  const archive = subfolder_(c.folder, 'archive');
+  const pulls = (archive ? filesIn_(archive) : []).filter(function (f) {
+    return /^web_edits_.*\.jsonl$/.test(f.getName()) && !/_discarded(-\d+)?\.jsonl$/.test(f.getName());
+  }).sort(function (a, b) { return a.getName() < b.getName() ? -1 : 1; });
+  if (!pulls.length) return false;
+  const newest = pulls[pulls.length - 1];
+  const header = core_().Journal.parseJournal(readOrUnavailable_(newest, 'archive/' + newest.getName())).lines[0];
+  return !!header && header.kind === 'pull' && header.push === c.push.push_id;
+}
+
+// ---- trim (ADR 002) ----
+
+function trimKey_(folder) {
+  return 'trimmed:' + folder.getId();
+}
+
+// Removes from the journal the lines whose key is in an archive file not trimmed against yet, then records those
+// archive names (a cache: trimming again changes nothing). Skipped while the journal is missing or duplicated.
+// A read failure throws Unavailable_.
+function trim_(folder) {
+  const archive = subfolder_(folder, 'archive');
+  if (!archive) return;
+  const props = PropertiesService.getScriptProperties();
+  const done = JSON.parse(props.getProperty(trimKey_(folder)) || '[]');
+  const fresh = filesIn_(archive).filter(function (f) {
+    return /\.jsonl$/.test(f.getName()) && done.indexOf(f.getName()) < 0;
+  });
+  if (!fresh.length) return;
+  const journals = filesIn_(folder).filter(function (f) { return f.getName() === JOURNAL; });
+  if (journals.length !== 1) return;
+  const J = core_().Journal;
+  const texts = fresh.map(function (f) { return readOrUnavailable_(f, 'archive/' + f.getName()); });
+  const keys = new Set(J.archivedKeys(texts));
+  const text = readOrUnavailable_(journals[0], JOURNAL);
+  const trimmed = J.trim(text, keys);
+  if (trimmed !== text) writeText_(journals[0], trimmed);
+  props.setProperty(trimKey_(folder), JSON.stringify(done.concat(fresh.map(function (f) { return f.getName(); }))));
 }
 
 // T1 spike, run once from the editor (Run menu). Writes a fake Thai + BOM + CRLF CSV under

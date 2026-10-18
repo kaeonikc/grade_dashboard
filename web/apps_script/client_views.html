@@ -1,0 +1,144 @@
+<script>
+'use strict';
+// Screens (web/SPEC.md "Interface"): the course list, opening a course, and the read-only course view.
+// Every piece of course data goes in as text (textContent), never as HTML.
+
+const SLOW_MS = 8000;
+const THAI = /[฀-๿]/;
+const app = document.getElementById('app');
+const F = Journal.fmt;
+
+// A DOM element. Children are nodes or text; `onclick` is the one event attribute.
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === 'onclick') node.addEventListener('click', v); else node.setAttribute(k, v);
+  }
+  for (const c of children) if (c != null && c !== false) node.append(c instanceof Node ? c : String(c));
+  return node;
+}
+
+// Data shown verbatim (names, course names, headers); Thai is marked so VoiceOver reads it in Thai.
+function data(tag, attrs, text) {
+  return el(tag, Object.assign(THAI.test(text) ? { lang: 'th' } : {}, attrs), text);
+}
+
+function button(label, onclick, cls) {
+  return el('button', { type: 'button', class: cls || 'btn', onclick }, label);
+}
+
+// Replaces the screen and moves focus to its heading.
+function show(...nodes) {
+  app.replaceChildren(...nodes);
+  window.scrollTo(0, 0);
+  const h = app.querySelector('h1');
+  if (h) { h.setAttribute('tabindex', '-1'); h.focus(); }
+}
+
+function notice(title, body, ...buttons) {
+  return el('section', { class: 'notice' }, el('p', { class: 'notice-title' }, title),
+    body ? el('p', { class: 'muted' }, body) : null, el('div', { class: 'actions' }, ...buttons));
+}
+
+// ---- 2. Course list (S2.1, S2.3) ----
+function listHeader() {
+  return el('header', { class: 'page-head' }, el('h1', {}, 'grade_web'),
+    el('p', { class: 'muted' }, 'Courses on Drive'));
+}
+
+function showCourses() {
+  show(listHeader(), el('div', { class: 'card placeholder', 'aria-hidden': 'true' }),
+    el('div', { class: 'card placeholder', 'aria-hidden': 'true' }), el('p', { class: 'muted' }, 'Loading courses…'));
+  loadCourses().then((reply) => {
+    if (reply.ok && reply.courses.length) return show(listHeader(), courseList(reply.courses));
+    if (reply.ok || reply.code === 'NOT_FOUND') {
+      return show(listHeader(), notice('No pushed courses yet.', 'On the Mac, run grader web-push <course>, wait ' +
+        'for Drive to finish uploading, then reload this page.', button('Reload', showCourses)));
+    }
+    show(listHeader(),
+      notice('Drive is busy with a save from another device.', null, button('Try again', showCourses)));
+  }, () => {
+    show(listHeader(), notice("Couldn't load the course list.", 'Check your connection, then try again.',
+      button('Try again', showCourses)));
+  });
+}
+
+function courseList(courses) {
+  const names = courses.filter((c) => c.available).map((c) => c.course_name);
+  const shared = (name) => names.indexOf(name) !== names.lastIndexOf(name);
+  return el('ul', { class: 'courses' }, ...courses.map((c) => el('li', {}, c.available
+    ? courseCard(c, shared(c.course_name))
+    : el('div', { class: 'card unavailable' },
+      el('p', { class: 'card-title' }, '⚠ ', data('span', {}, c.folder), ' ',
+        el('span', { class: 'tag' }, 'Unavailable')),
+      el('p', {}, c.reason)))));
+}
+
+function courseCard(c, showFolder) {
+  const drafts = draftCount(c.folder);
+  return el('button', { type: 'button', class: 'card course', onclick: () => showCourse(c.folder, c.course_name) },
+    data('span', { class: 'card-title' }, c.course_name),
+    showFolder ? data('span', { class: 'muted' }, c.folder) : null,
+    el('span', {}, c.course_id + ' · ' + c.term),
+    el('span', {}, 'Pushed ' + F.fmtTime(c.pushed_at, state.now)),
+    el('span', {}, F.journalLine(c, state.now)),
+    c.older_push ? el('span', { class: 'warn' }, "Some of these edits were saved while the latest push was " +
+      "syncing. They're kept; pull them on the Mac: grader web-pull") : null,
+    drafts ? el('span', { class: 'unsaved' }, '● ' + drafts + ' unsaved on this device') : null,
+    el('span', { class: 'chevron', 'aria-hidden': 'true' }, '›'));
+}
+
+// ---- 3. Opening a course ----
+function showCourse(folder, courseName) {
+  const back = button('Back to courses', showCourses);
+  const slow = el('p', { class: 'muted' });
+  show(el('section', { class: 'opening' }, data('h1', {}, courseName),
+    el('div', { class: 'spinner', 'aria-hidden': 'true' }),
+    el('p', {}, 'Opening ', data('span', {}, courseName), '…'),
+    el('p', { class: 'muted' }, 'Reading the course from Drive'), slow));
+  const timer = setTimeout(() => {
+    slow.textContent = 'Still working. Large courses take a little longer.';
+  }, SLOW_MS);
+  const failed = (cause) => show(listHeader(),
+    notice(el('span', {}, "Couldn't open ", data('span', {}, courseName), '.'), cause,
+      button('Try again', () => showCourse(folder, courseName)), back));
+  openCourse(folder).then((reply) => {
+    clearTimeout(timer);
+    if (reply.ok) return show(...courseView());
+    if (reply.code === 'BUSY') return failed('Drive is busy with a save from another device. Try again in a moment.');
+    show(listHeader(), notice(el('span', {}, "Can't open ", data('span', {}, courseName), '.'), reply.message, back));
+  }, () => {
+    clearTimeout(timer);
+    failed(navigator.onLine === false ? "You're offline. Connect, then try again." :
+      "Google didn't answer. Try again in a moment.");
+  });
+}
+
+// ---- The course, read-only for now: header with the push time (S2.4) and the computed grades ----
+function courseView() {
+  const o = state.open;
+  const n = o.journal.unpulled;
+  const head = el('header', { class: 'course-head' },
+    el('div', { class: 'course-bar' },
+      el('button', { type: 'button', class: 'icon', 'aria-label': 'Courses', onclick: showCourses }, '‹'),
+      data('h1', { class: 'course-name' }, o.course.course_name)),
+    el('p', { class: 'muted' }, 'Pushed ' + F.fmtTime(o.push.pushed_at, state.now) + ' (' +
+      F.fmtAgo(o.push.pushed_at, state.now) + ')' + (n ? ' · ' + F.plural(n, 'edit') + ' not pulled' : '')));
+  const cell = (tag, text, attrs) => data(tag, attrs || {}, text == null ? '' : String(text));
+  const num = { class: 'num' };
+  const rows = state.rows.map((r, i) => {
+    const g = state.grades[i];
+    return el('tr', {}, cell('th', r.student_id, { class: 'id', scope: 'row' }), cell('td', r.name),
+      cell('td', g.coursework_total, num), cell('td', g.final_score, num), cell('td', g.grade));
+  });
+  const table = el('div', { class: 'table-wrap' }, el('table', {},
+    el('thead', {}, el('tr', {}, el('th', { scope: 'col' }, 'Student ID'), el('th', { scope: 'col' }, 'Name'),
+      el('th', { scope: 'col', class: 'num' }, 'Coursework Total'),
+      el('th', { scope: 'col', class: 'num' }, 'Final Score'),
+      el('th', { scope: 'col' }, 'Grade'))),
+    el('tbody', {}, ...rows)));
+  return [head, table];
+}
+
+showCourses();
+</script>
