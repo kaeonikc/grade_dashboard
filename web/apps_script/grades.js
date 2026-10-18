@@ -29,6 +29,30 @@ function gwGrades(Csv) {
     return x[0] === y[0] && x[1] === y[1];
   }
 
+  // fmt_value(_cell_value(text)): what apply_edits stores for a typed text. With a '.' a float (integral ones lose
+  // the '.0'), without one an int, else the trimmed text as it is. Exotic floats may differ textually from
+  // Python's repr (0.00001 vs 1e-05) but never in meaning.
+  const INT = /^[+-]?\d(_?\d)*$/;
+  function canonicalValue(value) {
+    const text = String(value == null ? '' : value).trim();
+    if (text.includes('.')) {
+      if (!FLOAT.test(text)) return text;
+      const x = Number(text.replace(/_/g, ''));
+      return Number.isInteger(x) ? BigInt(x).toString() : String(x);
+    }
+    return INT.test(text) ? BigInt(text.replace(/_/g, '')).toString() : text;
+  }
+
+  // Typed score text (S3.7): a number >= 0 with '.', blank or ขส. Refusal reasons: comma, negative, other.
+  const TYPED = /^(\d+(\.\d*)?|\.\d+)$/;
+  function validateTyped(value) {
+    const text = String(value == null ? '' : value).trim();
+    if (text === '' || text === ABSENT || TYPED.test(text)) return { ok: true, value: canonicalValue(text) };
+    if (/^[\d.,]+$/.test(text) && /\d,\d/.test(text)) return { ok: false, reason: 'comma' };
+    if (/^-(\d+(\.\d*)?|\.\d+)$/.test(text)) return { ok: false, reason: 'negative' };
+    return { ok: false, reason: 'other' };
+  }
+
   // numpy round(x, 2) = rint(x * 100) / 100, half to even on the scaled double.
   function round2(x) {
     const y = x * 100;
@@ -170,6 +194,9 @@ function gwGrades(Csv) {
     });
   }
 
-  return { ABSENT, CODE_VALUE, classify, sameCell, round2, letterGrade, mergeCourse, fillDefaultMax, computeGrades };
+  return {
+    ABSENT, CODE_VALUE, classify, sameCell, canonicalValue, validateTyped, round2, letterGrade, mergeCourse,
+    fillDefaultMax, computeGrades,
+  };
 }
 if (typeof module !== 'undefined') module.exports = (Csv) => gwGrades(Csv || require('./csv.js')());

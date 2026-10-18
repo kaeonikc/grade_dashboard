@@ -4,13 +4,18 @@
 // Csv, Grades and Journal come from the injected modules (Index.html, ADR 004).
 
 const DRAFT_PREFIX = 'gw:draft:';
+const UI_PREFIX = 'gw:ui:';
 
 const state = {
-  now: null,      // server time of the last reply: every {ago} counts from it, never from the device clock
-  courses: null,  // listCourses().courses
-  open: null,     // the loadCourse reply of the open course
-  rows: [],       // Grades.mergeCourse: students in Raw Details order
-  grades: [],     // Grades.computeGrades, one per row
+  now: null,         // server time of the last reply: every {ago} counts from it, never from the device clock
+  courses: null,     // listCourses().courses
+  open: null,        // the loadCourse reply of the open course
+  rows: [],          // Grades.mergeCourse: students in Raw Details order
+  max: {},           // Grades.fillDefaultMax: each column's max with the current weights
+  edits: new Map(),  // unsaved edits, editKey -> {student_id, column, value, original} (the draft's edit shape)
+  grades: [],        // Grades.computeGrades over the saved values plus the unsaved edits, one per row
+  column: null,      // the picked columns[].name in column mode
+  search: '',        // the search box text
 };
 
 // google.script.run as a promise. A failed call (network, server exception, time limit) rejects.
@@ -44,9 +49,94 @@ function openCourse(folder) {
     if (reply.ok) {
       state.open = reply;
       state.rows = Grades.mergeCourse(reply.course, reply.roster, reply.files);
+      state.max = Grades.fillDefaultMax(reply.course);
+      state.edits = new Map();
+      state.search = '';
       state.grades = Grades.computeGrades(reply.course, state.rows, []);
+      const ui = uiMemory(folder);
+      const known = reply.course.columns.some((c) => c.name === ui.column);
+      state.column = known ? ui.column : null;
     }
     return reply;
   });
+}
+
+// ---- UI memory per device (gw:ui:<folder>): column names and the tab only, no PII ----
+function uiMemory(folder) {
+  try {
+    const ui = JSON.parse(localStorage.getItem(UI_PREFIX + folder) || 'null');
+    return ui && ui.v === 1 ? ui : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function pickColumn(name) {
+  state.column = name;
+  try {
+    localStorage.setItem(UI_PREFIX + state.open.folder, JSON.stringify({ v: 1, column: name, tab: 'scores' }));
+  } catch (e) {
+    // Storage is blocked: only the remembered column is lost.
+  }
+}
+
+// ---- Cells and unsaved edits ----
+const editKey = (sid, column) => sid + '\u0000' + column;
+const savedValue = (row, column) => row.cells[column] || '';
+
+function edited(row, column) { return state.edits.get(editKey(row.student_id, column)); }
+
+// What the cell holds now: the unsaved value, else the Drive value.
+function cellValue(row, column) {
+  const e = edited(row, column);
+  return e ? e.value : savedValue(row, column);
+}
+
+// Puts a canonical value in a cell as an unsaved edit; a value that means the Drive value removes the edit (S3.6).
+function setCell(row, column, value) {
+  const key = editKey(row.student_id, column);
+  const original = savedValue(row, column);
+  if (Grades.sameCell(value, original)) state.edits.delete(key);
+  else state.edits.set(key, { student_id: row.student_id, column, value, original });
+  state.grades = Grades.computeGrades(state.open.course, state.rows, Array.from(state.edits.values()));
+}
+
+// Typed text committed to a cell (Interface "Typing rules"): {changed} or {refused: message}.
+function commitTyped(row, column, text) {
+  if (Grades.sameCell(text, cellValue(row, column))) return { changed: false };
+  const r = Grades.validateTyped(text);
+  if (!r.ok) return { refused: refusalText(text.trim(), r.reason) };
+  setCell(row, column, r.value);
+  return { changed: true };
+}
+
+// Copy table bad.comma / bad.negative / bad.other.
+function refusalText(text, reason) {
+  if (reason === 'comma') {
+    return "'" + text + "': use . for decimals" + (/^\d+,\d+$/.test(text) ? ' (' + text.replace(',', '.') + ')' : '');
+  }
+  if (reason === 'negative') return "'" + text + "' is negative; scores start at 0";
+  return "'" + text + "' isn't a score. Use a number (8.5), ขส, or leave it blank.";
+}
+
+// Above the column's max (accepted, drawn red: S3.5, edge 41).
+function overMax(value, column) {
+  const c = Grades.classify(value);
+  return c[0] === 'num' && c[1] > maxOf(column);
+}
+
+function maxOf(column) {
+  return Object.prototype.hasOwnProperty.call(state.max, column) ? state.max[column] : 100;
+}
+
+// How many students have a non-blank value in the column, unsaved values included.
+function enteredCount(column) {
+  return state.rows.filter((r) => cellValue(r, column).trim() !== '').length;
+}
+
+// Search (S3.8): ID or name substring, trimmed, case-insensitive for Latin letters.
+function matches(row, query) {
+  const q = query.trim().toLowerCase();
+  return q === '' || row.student_id.toLowerCase().includes(q) || row.name.toLowerCase().includes(q);
 }
 </script>

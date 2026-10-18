@@ -1,6 +1,6 @@
 <script>
 'use strict';
-// Screens (web/SPEC.md "Interface"): the course list, opening a course, and the read-only course view.
+// Screens (web/SPEC.md "Interface"): the course list, opening a course, and column mode.
 // Every piece of course data goes in as text (textContent), never as HTML.
 
 const SLOW_MS = 8000;
@@ -114,31 +114,310 @@ function showCourse(folder, courseName) {
   });
 }
 
-// ---- The course, read-only for now: header with the push time (S2.4) and the computed grades ----
+// ---- 4. Scores: column mode (S3) ----
+const STATUS_MS = 4000;
+let cm = null;  // the open column mode: its controls, one item per student row, and the focused item
+
 function courseView() {
   const o = state.open;
   const n = o.journal.unpulled;
+  cm = { items: [], current: null, statusTimer: null };
+  cm.badge = el('span', { class: 'badge unsaved', hidden: '' });
   const head = el('header', { class: 'course-head' },
     el('div', { class: 'course-bar' },
       el('button', { type: 'button', class: 'icon', 'aria-label': 'Courses', onclick: showCourses }, '‹'),
-      data('h1', { class: 'course-name' }, o.course.course_name)),
+      data('h1', { class: 'course-name' }, o.course.course_name), cm.badge),
     el('p', { class: 'muted' }, 'Pushed ' + F.fmtTime(o.push.pushed_at, state.now) + ' (' +
       F.fmtAgo(o.push.pushed_at, state.now) + ')' + (n ? ' · ' + F.plural(n, 'edit') + ' not pulled' : '')));
-  const cell = (tag, text, attrs) => data(tag, attrs || {}, text == null ? '' : String(text));
-  const num = { class: 'num' };
-  const rows = state.rows.map((r, i) => {
-    const g = state.grades[i];
-    return el('tr', {}, cell('th', r.student_id, { class: 'id', scope: 'row' }), cell('td', r.name),
-      cell('td', g.coursework_total, num), cell('td', g.final_score, num), cell('td', g.grade));
-  });
-  const table = el('div', { class: 'table-wrap' }, el('table', {},
-    el('thead', {}, el('tr', {}, el('th', { scope: 'col' }, 'Student ID'), el('th', { scope: 'col' }, 'Name'),
-      el('th', { scope: 'col', class: 'num' }, 'Coursework Total'),
-      el('th', { scope: 'col', class: 'num' }, 'Final Score'),
-      el('th', { scope: 'col' }, 'Grade'))),
-    el('tbody', {}, ...rows)));
-  return [head, table];
+
+  cm.select = el('select', { id: 'col', class: 'col-select' });
+  cm.select.addEventListener('change', () => choose(cm.select.value));
+  cm.prev = el('button', { type: 'button', class: 'icon', 'aria-label': 'Previous column', onclick: () => step(-1) },
+    '‹');
+  cm.next = el('button', { type: 'button', class: 'icon', 'aria-label': 'Next column', onclick: () => step(1) }, '›');
+  cm.line = el('p', { class: 'muted col-line' });
+  cm.search = el('input', { type: 'text', id: 'search', class: 'search-input', placeholder: 'Search ID or name',
+    'aria-label': 'Search students', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
+  cm.search.value = state.search;
+  cm.search.addEventListener('input', () => { state.search = cm.search.value; applySearch(); });
+  cm.clear = el('button', { type: 'button', class: 'icon search-clear', 'aria-label': 'Clear search',
+    onclick: clearSearch }, '×');
+  const picker = el('section', { class: 'col-picker' },
+    el('label', { for: 'col' }, 'Column'),
+    el('div', { class: 'col-row' }, cm.prev, cm.select, cm.next), cm.line,
+    el('div', { class: 'search' }, cm.search, cm.clear));
+
+  cm.list = el('ul', { class: 'rows' });
+  cm.empty = el('div', { class: 'empty' });
+  cm.nextBtn = el('button', { type: 'button', class: 'btn kbar-next', onclick: () => move(1) }, 'Next ↓');
+  cm.bar = el('div', { class: 'kbar', hidden: '' },
+    el('button', { type: 'button', class: 'btn outline', lang: 'th', onclick: () => barSet('ขส', true) }, 'ขส'),
+    el('button', { type: 'button', class: 'btn outline', onclick: () => barSet('', false) }, 'Clear'),
+    cm.nextBtn);
+  // Keep the input focused so the keypad stays open (iOS): the buttons act on the focused student.
+  cm.bar.addEventListener('pointerdown', (e) => e.preventDefault());
+  cm.status = el('p', { class: 'status', role: 'status' });
+  cm.announce = el('p', { class: 'sr-only', 'aria-live': 'polite' });
+  renderColumn();
+  return [head, picker, cm.list, cm.empty, cm.status, cm.announce, cm.bar];
 }
+
+// Columns grouped by category in category_order (attendance sessions included; total columns are never listed).
+function renderPicker() {
+  const course = state.open.course;
+  const opts = [el('option', { value: '', disabled: '' }, 'Pick a column')];
+  for (const cat of course.category_order) {
+    const cols = course.columns.filter((c) => c.category === cat);
+    if (cols.length) opts.push(el('optgroup', { label: cat }, ...cols.map((c) => optionFor(c))));
+  }
+  cm.select.replaceChildren(...opts);
+  cm.select.value = state.column || '';
+  const i = columnIndex();
+  cm.prev.disabled = i <= 0;
+  cm.next.disabled = i < 0 || i >= course.columns.length - 1;
+}
+
+function optionFor(c) {
+  return data('option', { value: c.name }, c.header + ' · ' + enteredCount(c.name) + '/' + state.rows.length);
+}
+
+function columnIndex() { return state.open.course.columns.findIndex((c) => c.name === state.column); }
+function currentColumn() { return state.open.course.columns[columnIndex()]; }
+
+function choose(name) {
+  pickColumn(name);
+  renderColumn();
+}
+
+function step(delta) {
+  const cols = state.open.course.columns;
+  const i = columnIndex() + delta;
+  if (i >= 0 && i < cols.length) choose(cols[i].name);
+}
+
+function renderColumn() {
+  renderPicker();
+  cm.current = null;
+  cm.bar.hidden = true;
+  const col = currentColumn();
+  cm.items = col ? state.rows.map((row, i) => rowItem(row, col, i)) : [];
+  cm.list.replaceChildren(...cm.items.map((it) => it.li));
+  refreshCounts();
+  applySearch();
+}
+
+// One student: ID, name and sub-line on the left, the value on the right (an input for a score column).
+function rowItem(row, col, i) {
+  const it = { row, col, sub: el('p', { class: 'sub', id: 'sub-' + i }) };
+  it.msg = el('p', { class: 'msg', id: 'msg-' + i, role: 'alert' });
+  const who = el('div', { class: 'who' }, el('span', { class: 'id' }, row.student_id),
+    data('span', { class: 'name' }, row.name), it.sub);
+  if (col.category === 'attendance') {
+    // Session codes are shown as written; they are entered on the Attendance tab.
+    it.value = el('span', { class: 'code' });
+  } else {
+    it.value = el('input', { type: 'text', inputmode: 'decimal', enterkeyhint: 'next', autocomplete: 'off',
+      autocorrect: 'off', spellcheck: 'false', class: 'score', 'aria-describedby': it.sub.id + ' ' + it.msg.id });
+    it.value.setAttribute('aria-label', col.header + ' for ' + row.name + ' ' + row.student_id);
+    inputEvents(it);
+  }
+  it.li = el('li', { class: 'row' }, who,
+    el('div', { class: 'cell' }, it.value, el('span', { class: 'mark', 'aria-hidden': 'true' }, '*')), it.msg);
+  refreshItem(it);
+  return it;
+}
+
+function inputEvents(it) {
+  const input = it.value;
+  input.addEventListener('focus', () => {
+    cm.current = it;
+    input.select();
+    cm.bar.hidden = false;
+    placeBar();
+    cm.nextBtn.textContent = nextVisible(it, 1) ? 'Next ↓' : 'Done';
+  });
+  // The refusal shows live while typing; nothing is committed until Next, Enter, Tab or leaving the field.
+  input.addEventListener('input', () => {
+    const text = input.value;
+    const r = Grades.validateTyped(text);
+    refuse(it, Grades.sameCell(text, cellValue(it.row, it.col.name)) || r.ok ? '' : refusalText(text.trim(), r.reason));
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      move(e.shiftKey ? -1 : 1);
+    } else if (e.key === 'Escape') {
+      refreshItem(it);
+      refuse(it, '');
+    }
+  });
+  input.addEventListener('blur', (e) => {
+    if (!cm.bar.contains(e.relatedTarget)) cm.bar.hidden = true;
+    // Leaving with refused text puts the previous value back; its message stays until the next commit.
+    if (!commit(it)) {
+      refreshItem(it);
+      it.value.classList.remove('refused');
+    }
+  });
+}
+
+// Commits the focused text (Interface "Typing rules"). False when refused: focus and the previous value stay.
+function commit(it) {
+  const r = commitTyped(it.row, it.col.name, it.value.value);
+  if (r.refused) {
+    refuse(it, r.refused);
+    return false;
+  }
+  refuse(it, '');
+  refreshItem(it);
+  if (r.changed) {
+    refreshCounts();
+    announceCommit(it);
+  }
+  return true;
+}
+
+function refuse(it, message) {
+  it.msg.textContent = message;
+  it.value.classList.toggle('refused', message !== '');
+}
+
+// Next (delta 1) or previous (-1) visible student; past the last one, Done closes the keypad.
+function move(delta) {
+  const it = cm.current;
+  if (!it) return;
+  if (!commit(it)) {
+    it.value.select();  // the next keystroke replaces the refused text
+    return;
+  }
+  const to = nextVisible(it, delta);
+  if (to) {
+    to.value.focus({ preventScroll: true });
+    reveal(to.li);
+  } else if (delta > 0) {
+    it.value.blur();
+    const col = it.col.name;
+    say('End of list · ' + enteredCount(col) + ' of ' + state.rows.length + ' entered');
+  }
+}
+
+// ขส moves on to the next student (S3.4); Clear stays.
+function barSet(value, thenNext) {
+  const it = cm.current;
+  if (!it) return;
+  it.value.value = value;
+  if (thenNext) move(1);
+  else commit(it);
+}
+
+function nextVisible(it, delta) {
+  for (let i = cm.items.indexOf(it) + delta; i >= 0 && i < cm.items.length; i += delta) {
+    if (!cm.items[i].li.hidden) return cm.items[i];
+  }
+  return null;
+}
+
+// Scrolls a row to the middle of the space between the sticky header and the keypad bar.
+function reveal(li) {
+  const vv = window.visualViewport;
+  const top = (vv ? vv.offsetTop : 0) + document.querySelector('.course-head').offsetHeight;
+  const bottom = (vv ? vv.offsetTop + vv.height : window.innerHeight) - (cm.bar.hidden ? 0 : cm.bar.offsetHeight);
+  const r = li.getBoundingClientRect();
+  window.scrollBy(0, r.top + r.height / 2 - (top + bottom) / 2);
+}
+
+// Pins the keypad bar just above the on-screen keyboard (visualViewport shrinks while it is open).
+function placeBar() {
+  if (!cm || !cm.bar.isConnected || cm.bar.hidden) return;
+  const vv = window.visualViewport;
+  const covered = vv ? window.innerHeight - vv.offsetTop - vv.height : 0;
+  cm.bar.style.bottom = Math.max(0, covered) + 'px';
+}
+
+function refreshItem(it) {
+  const name = it.col.name;
+  const value = cellValue(it.row, name);
+  const e = edited(it.row, name);
+  const over = overMax(value, name);
+  // An attendance code isn't a number: only score columns mark text as invalid.
+  const invalid = it.col.category !== 'attendance' && Grades.classify(value)[0] === 'invalid';
+  if (it.value.tagName === 'INPUT') it.value.value = value; else it.value.textContent = value;
+  it.li.classList.toggle('is-unsaved', !!e);
+  it.value.classList.toggle('over', over);
+  it.value.classList.toggle('invalid', invalid);
+  const parts = [];
+  if (e) parts.push(el('span', {}, 'was ' + (e.original.trim() === '' ? 'blank' : e.original)));
+  if (over) parts.push(el('span', { class: 'bad' }, 'above max ' + fmtMax(name)));
+  if (invalid) parts.push(el('span', { class: 'bad' }, 'not a number, counts as 0'));
+  it.sub.replaceChildren(...parts.flatMap((p, i) => (i ? [' · ', p] : [p])));
+}
+
+function fmtMax(column) { return String(Grades.round2(maxOf(column))); }
+
+// Column line, the picked option's progress and the unsaved badge.
+function refreshCounts() {
+  const col = currentColumn();
+  const k = col ? enteredCount(col.name) : 0;
+  const total = state.rows.length;
+  const max = col && col.category !== 'attendance' ? ' · max ' + fmtMax(col.name) : '';
+  cm.line.textContent = col ? col.category + max + ' · ' + k + ' of ' + total + ' entered' : '';
+  const opt = col && cm.select.selectedOptions[0];
+  if (opt) opt.textContent = col.header + ' · ' + k + '/' + total;
+  const n = state.edits.size;
+  cm.badge.hidden = n === 0;
+  cm.badge.replaceChildren(el('span', { 'aria-hidden': 'true' }, '● '), n + ' unsaved',
+    el('span', { class: 'sr-only' }, n === 1 ? ' edit' : ' edits'));
+}
+
+function announceCommit(it) {
+  const value = cellValue(it.row, it.col.name);
+  cm.announce.replaceChildren(it.col.name + ' ' + (value.trim() === '' ? 'blank' : value) + ' for ',
+    data('span', {}, it.row.name), (edited(it.row, it.col.name) ? ', unsaved. ' : '. ') + state.edits.size +
+    ' unsaved.');
+}
+
+function say(text) {
+  clearTimeout(cm.statusTimer);
+  cm.status.textContent = text;
+  cm.statusTimer = setTimeout(() => { cm.status.textContent = ''; }, STATUS_MS);
+}
+
+// Search filters the rows only; unsaved edits and the column stay (S3.8, edge 46).
+function applySearch() {
+  cm.clear.hidden = state.search === '';
+  let shown = 0;
+  for (const it of cm.items) {
+    it.li.hidden = !matches(it.row, state.search);
+    if (!it.li.hidden) shown += 1;
+  }
+  if (!currentColumn()) {
+    cm.empty.replaceChildren(el('p', {}, 'Pick a column to enter scores.'));
+  } else if (shown === 0) {
+    cm.empty.replaceChildren(data('p', {}, 'No students match "' + state.search.trim() + '".'),
+      button('Clear search', clearSearch, 'btn outline'));
+  } else {
+    cm.empty.replaceChildren();
+  }
+}
+
+function clearSearch() {
+  state.search = '';
+  cm.search.value = '';
+  applySearch();
+  cm.search.focus();
+}
+
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', placeBar);
+  window.visualViewport.addEventListener('scroll', placeBar);
+}
+// `/` focuses Search anywhere in a course (Interface "Keyboard").
+document.addEventListener('keydown', (e) => {
+  if (e.key !== '/' || !cm || !cm.search.isConnected) return;
+  if (/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
+  e.preventDefault();
+  cm.search.focus();
+});
 
 showCourses();
 </script>

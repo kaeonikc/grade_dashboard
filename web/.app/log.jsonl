@@ -17,3 +17,6 @@
 {"ts": "2026-10-18T22:44:37", "event": "task_started", "role": "engineer", "note": "T5"}
 {"ts": "2026-10-18T23:00:23", "event": "task_passed", "role": "engineer", "note": "T5"}
 {"ts": "2026-10-18T23:00:23", "event": "note", "role": "lead", "note": "For review: journal line validity differs: web (journal.js) accepts any JSON object; Mac (src/webdrive.journal) also requires batch+seq. SPEC says 'not valid JSON'. Align in review."}
+{"ts": "2026-10-18T23:00:23", "event": "task_started", "role": "engineer", "note": "T6"}
+{"ts": "2026-10-18T23:13:18", "event": "task_passed", "role": "engineer", "note": "T6"}
+{"ts": "2026-10-18T23:13:18", "event": "note", "role": "lead", "note": "For review: SPEC keyboard conflict (ขส/Clear in tab order vs Tab=Next); T9 must switch attendance sessions in Scores to the Attendance tab"}

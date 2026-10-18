@@ -39,7 +39,7 @@
       "title": "**Web app shell**: `listCourses` + `loadCourse` under the lock with trim, owner check, course availability (missing course.json, conflict copies, damaged journal), `older_push`, read-only course view with push time. Journal summary formatters (`fmtTime`, `fmtAgo`, `journalLine`). Server harness. clasp deploy and paste-in README, plus the README's \"Duplicate files\" and \"Damaged journal\" procedures (SPEC \"Hand-repair procedures\"). Repo hygiene test"
     },
     {
-      "status": "todo",
+      "status": "passed",
       "attempts": 0,
       "id": "T6",
       "title": "**Column mode**: pick a counted column (grouped by category, attendance sessions included, no totals). Students in Raw Details order with ID/name/value. Numeric keypad input, Next, `ขส`, Clear, refusal of `8,5`/negatives/text, over-max red, `*` + \"N unsaved\" badge, clear-back removes the edit, ID/name search, last column remembered per device (`gw:ui:<folder>`)"
