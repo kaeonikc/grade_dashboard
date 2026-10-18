@@ -1,0 +1,6 @@
+{"ts": "2026-10-18T15:38:31", "event": "created", "role": "lead", "note": "Phone/browser editor for grade_dashboard courses: a Google Apps Script web app over course files in a Google Drive folder (view + edit scores, take attendance, fill column, edit weights/boundaries), with an edit journal that grader web-pull merges back into the Mac copy; grader web-push copies courses to Drive. grade-tui untouched."}
+{"ts": "2026-10-18T15:38:31", "event": "user_correction", "role": "user", "note": "App lives inside the existing grade_dashboard repo at web/ on branch web-app, not its own repo (a feature of grade_dashboard; web-pull must reuse apply_edits)"}
+{"ts": "2026-10-18T15:38:31", "event": "user_correction", "role": "user", "note": "Chose Google Apps Script web app (stack rank 4) on the CMRU Workspace account, deployed with clasp; data stays CSV in Drive, sync is manual via grader web-push/web-pull with an edit journal"}
+{"ts": "2026-10-18T15:49:00", "event": "user_correction", "role": "user", "note": "Typed cells: refuse bad input (8,5 -> 'use . for decimals', negatives, other text); only over-max is accepted+flagged red. Overrides interview rule 12f."}
+{"ts": "2026-10-18T15:56:18", "event": "gate_approved", "role": "user", "note": "requirements"}
+{"ts": "2026-10-18T15:56:18", "event": "phase", "role": "lead", "note": "design"}

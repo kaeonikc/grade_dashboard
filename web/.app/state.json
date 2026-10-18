@@ -1,0 +1,13 @@
+{
+  "name": "grade_web",
+  "idea": "Phone/browser editor for grade_dashboard courses: a Google Apps Script web app over course files in a Google Drive folder (view + edit scores, take attendance, fill column, edit weights/boundaries), with an edit journal that grader web-pull merges back into the Mac copy; grader web-push copies courses to Drive. grade-tui untouched.",
+  "created": "2026-10-18T15:38:31",
+  "phase": "design",
+  "gates": {
+    "requirements": "2026-10-18T15:56:18",
+    "spec": null
+  },
+  "tasks": [],
+  "review_loops": 0,
+  "build_head": null
+}
