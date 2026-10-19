@@ -383,6 +383,76 @@
    "grade": "F"
   }
  ],
+ "analytics": {
+  "overview": {
+   "mean": 50.83,
+   "median": 60.5,
+   "std_dev": 22.6,
+   "pass_rate": 66.67,
+   "passing_count": 4,
+   "total_count": 6
+  },
+  "histogram": [
+   {
+    "label": "0-9",
+    "count": 0
+   },
+   {
+    "label": "10-19",
+    "count": 1
+   },
+   {
+    "label": "20-29",
+    "count": 0
+   },
+   {
+    "label": "30-39",
+    "count": 1
+   },
+   {
+    "label": "40-49",
+    "count": 0
+   },
+   {
+    "label": "50-59",
+    "count": 1
+   },
+   {
+    "label": "60-69",
+    "count": 3
+   },
+   {
+    "label": "70-79",
+    "count": 0
+   },
+   {
+    "label": "80-89",
+    "count": 0
+   },
+   {
+    "label": "90-100",
+    "count": 0
+   }
+  ],
+  "box_plot": {
+   "min": 10.0,
+   "q1": 44.0,
+   "median": 60.5,
+   "q3": 65.75,
+   "max": 68.0,
+   "mean": 50.83,
+   "whisker_low": 39.0,
+   "whisker_high": 68.0,
+   "skew_label": "left-skewed (mean < median)",
+   "outliers": [
+    {
+     "student_id": "9900000203",
+     "name": "นายมืด ว่างเปล่า",
+     "final_score": 10.0
+    }
+   ]
+  }
+ },
  "variants": [
   {
    "name": "s10_1_weights_edit",

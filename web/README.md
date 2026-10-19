@@ -4,9 +4,10 @@ View and edit grade_dashboard courses from an iPhone or any browser. A Google Ap
 account reads course copies in `My Drive/grade_web/<course>/`. `grader web-push` puts a course there, and
 `grader web-pull` brings the web edits back to the Mac copy (the master). The design is in `SPEC.md`.
 
-Status: the web app lists the pushed courses, edits scores and attendance (column mode, wide table, Fill Column),
-saves them with undo, and edits weights and grade boundaries on the Grading tab, with each letter's interval and
-grade-tui's grade distribution and colours (`../SPEC_grade_order.md`).
+Status: the web app follows grade-tui's tabs: [1] Summary Scores, [2] Raw Details (one category at a time, picked
+from the ☰ Categories menu; the table on wide screens, column mode on phones, with Fill, Save and undo), [3] Analytics
+› Overview (statistics, grade distribution, histogram, box plot) and [4] Grading (weights and boundaries, each
+letter's interval, live distribution). See `../SPEC_web_tabs.md` and `../SPEC_grade_order.md`.
 
 The web app is 10 files in `apps_script/`, pushed as they are (no build step):
 
@@ -58,9 +59,12 @@ clasp update-deployment <that deployment ID> --description "grade_web"
 clasp list-deployments                              # must now show the new @<number>
 ```
 
-With clasp 3.4.1, `update-deployment` without `-V` can create the new version (it prints `Redeployed … @N`) and
-leave the deployment on the old one. If `list-deployments` still shows the old number, run
-`clasp update-deployment <that deployment ID> -V <N> --description "grade_web"`.
+`list-deployments` can lag a few seconds behind an update, so list again before concluding anything. With clasp
+3.4.1, `update-deployment` without `-V` may create the new version (it prints `Redeployed … @N`) and leave the
+deployment on the old one. The sure way is `clasp create-version "<note>"` (prints N) and then
+`clasp update-deployment <that deployment ID> -V <N> --description "grade_web"`, for each deployment.
+
+The Apps Script parser rejects BigInt literals (`1n`) in the `.js` files; use `BigInt(1)`.
 
 Keep the deployment ID and the URL out of the repo.
 

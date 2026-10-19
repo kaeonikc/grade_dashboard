@@ -255,6 +255,70 @@
    "grade": "F"
   }
  ],
+ "analytics": {
+  "overview": {
+   "mean": 51.44,
+   "median": 54.0,
+   "std_dev": 49.05,
+   "pass_rate": 55.56,
+   "passing_count": 5,
+   "total_count": 9
+  },
+  "histogram": [
+   {
+    "label": "0-9",
+    "count": 3
+   },
+   {
+    "label": "10-19",
+    "count": 1
+   },
+   {
+    "label": "20-29",
+    "count": 0
+   },
+   {
+    "label": "30-39",
+    "count": 0
+   },
+   {
+    "label": "40-49",
+    "count": 0
+   },
+   {
+    "label": "50-59",
+    "count": 1
+   },
+   {
+    "label": "60-69",
+    "count": 0
+   },
+   {
+    "label": "70-79",
+    "count": 2
+   },
+   {
+    "label": "80-89",
+    "count": 1
+   },
+   {
+    "label": "90-100",
+    "count": 1
+   }
+  ],
+  "box_plot": {
+   "min": 0.0,
+   "q1": 9.0,
+   "median": 54.0,
+   "q3": 79.0,
+   "max": 147.0,
+   "mean": 51.44,
+   "whisker_low": 0.0,
+   "whisker_high": 147.0,
+   "skew_label": "roughly symmetric",
+   "outliers": []
+  }
+ },
  "variants": [
   {
    "name": "s10_4_boundaries_edit",

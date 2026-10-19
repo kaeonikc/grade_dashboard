@@ -5,6 +5,7 @@
 
 const DRAFT_PREFIX = 'gw:draft:';
 const UI_PREFIX = 'gw:ui:';
+const MENU_KEY = 'gw:nav:menu';  // the ☰ menu on wide screens, per device ('0' closed); never a course folder name
 
 const state = {
   now: null,         // server time of the last reply: every {ago} counts from it, never from the device clock
@@ -20,7 +21,11 @@ const state = {
   grades: [],        // Grades.computeGrades over the saved values plus the unsaved edits, one per row
   gradeById: new Map(),  // student_id -> its entry in grades
   groups: new Map(), // student_id -> Class Group from the roster (shown in the detail)
-  view: 'scores',    // 'table' (wide screens only), 'scores', 'attendance' or 'grading'
+  tab: 'summary',    // grade-tui's tab (SPEC_web_tabs.md): 'summary', 'raw', 'analytics' or 'grading'
+  category: '*',     // Raw Details' category (a category name, '*' = All columns on wide screens)
+  menu: false,       // the ☰ Categories menu is shown
+  view: 'summary',   // what renders, from tab + category + width (modeOf): 'summary', 'table' (wide), 'scores',
+                     // 'attendance' (phone), 'analytics' or 'grading'
   column: null,      // the picked columns[].name in Scores (and the table's Fill column)
   session: null,     // the picked attendance session on the Attendance tab (today's when the course opens)
   search: '',        // the search box text
@@ -82,6 +87,9 @@ function openCourse(folder) {
     const ui = uiMemory(folder);
     const known = reply.course.columns.some((c) => c.name === ui.column);
     state.column = known ? ui.column : null;
+    const nav = Grades.navFromMemory(ui, reply.course);
+    state.tab = nav.tab;
+    state.category = nav.category;
     state.session = todaySession();
     const draft = restoreDraft();
     recompute();
@@ -399,7 +407,7 @@ function saveConfig(part) {
   });
 }
 
-// ---- UI memory per device (gw:ui:<folder>): column names and the tab only, no PII ----
+// ---- UI memory per device (gw:ui:<folder>): column names, the tab and the category only, no PII ----
 function uiMemory(folder) {
   try {
     const ui = JSON.parse(localStorage.getItem(UI_PREFIX + folder) || 'null');
@@ -416,10 +424,34 @@ function pickColumn(name) {
 
 function rememberUi() {
   try {
-    localStorage.setItem(UI_PREFIX + state.open.folder, JSON.stringify({ v: 1, column: state.column, tab: state.view }));
+    localStorage.setItem(UI_PREFIX + state.open.folder,
+      JSON.stringify({ v: 1, column: state.column, tab: state.tab, category: state.category }));
   } catch (e) {
     state.storageOff = true;  // only the remembered column is lost, but drafts can't be kept either (S8.8)
   }
+}
+
+// The ☰ menu on wide screens: shown unless this device closed it last (phones always start closed).
+function menuPref() {
+  try {
+    return localStorage.getItem(MENU_KEY) !== '0';
+  } catch (e) {
+    return true;
+  }
+}
+
+function rememberMenu(open) {
+  try {
+    localStorage.setItem(MENU_KEY, open ? '1' : '0');
+  } catch (e) {
+    // only the menu preference is lost
+  }
+}
+
+// grade-tui's Analytics › Overview and the grade distribution over the grades shown (unsaved edits included).
+function overviewData() {
+  return Object.assign(Grades.analytics(state.grades, state.rows),
+    { distribution: Grades.distribution(state.grades, Grades.gradeOrder(state.open.course.grade_boundaries)) });
 }
 
 // ---- Attendance sessions (S6.1, edge 47) ----

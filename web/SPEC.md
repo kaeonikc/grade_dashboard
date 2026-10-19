@@ -634,6 +634,11 @@ Wording follows grade-tui (SPEC_batch_editing.md) and `grader` wherever the same
                                └─ ⋯ More ──▶ Undo last save · Discard all unsaved edits · Reload from Drive ·
                                              Switch course   (header line: Drive journal numbers)
 ```
+> **Superseded for navigation (2026-10-19):** the views below are now reached through grade-tui's tabs, [1] Summary,
+> [2] Raw Details (one category at a time: the table on wide screens, column mode on phones), [3] Analytics ›
+> Overview and [4] Grading, with a ☰ Categories menu. A course opens on the tab and category used last on the
+> device (first visit: Summary). See `../SPEC_web_tabs.md`. Editing, Fill, Save, Undo and the detail are unchanged.
+
 - **Breakpoint**: CSS width ≥ 960 px shows the view switch with **Table** as the default view. Below 960 px the Table
   view isn't offered. If the window is narrowed while in Table, the app switches to **Scores** with the column of the
   focused cell selected (S5.3). Unsaved edits, search text and the selected column survive every view, tab and

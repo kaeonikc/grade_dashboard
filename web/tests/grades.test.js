@@ -241,6 +241,48 @@ test('gradeClass mirrors grade_color_for', () => {
   for (const k of Object.keys(want)) assert.strictEqual(G.gradeClass(k), want[k], k);
 });
 
+// SPEC_web_tabs.md: Analytics › Overview, parity with grade-tui's tui_api._compute_analytics.
+for (const name of FIXTURE_NAMES) {
+  test('analytics parity ' + name, () => {
+    const G = H.Grades();
+    const g = H.loadGolden(name);
+    const rows = H.rowsOf(g.course, name);
+    assert.deepStrictEqual(G.analytics(G.computeGrades(g.course, rows, []), rows), g.analytics);
+  });
+}
+
+test('pyRound2 is Python round(x, 2)', () => {
+  const G = H.Grades();
+  const cases = [[0.125, 0.12], [0.375, 0.38], [2.675, 2.67], [1.005, 1], [51.444444, 51.44],
+    [55.555555555555556, 55.56], [-0.125, -0.12], [0, 0], [80, 80], [1e-7, 0], [0.135, 0.14], [100 / 3, 33.33]];
+  for (const [x, want] of cases) assert.strictEqual(G.pyRound2(x), want, String(x));
+});
+
+test('quantile is linear', () => {
+  const G = H.Grades();
+  assert.strictEqual(G.quantile([7], 0.25), 7);
+  assert.strictEqual(G.quantile([1, 2], 0.25), 1.25);
+  assert.strictEqual(G.quantile([1, 2], 0.5), 1.5);
+  assert.strictEqual(G.quantile([0, 9, 54, 79], 0.75), 60.25);
+});
+
+test('analytics edge cases', () => {
+  const G = H.Grades();
+  const g = (id, x, grade) => ({ student_id: id, final_score: x, grade });
+  const none = G.analytics([], []);
+  assert.deepStrictEqual(none.histogram, []);
+  assert.strictEqual(none.overview.total_count, 0);
+  assert.strictEqual(none.box_plot.skew_label, 'roughly symmetric');
+  const one = G.analytics([g('1', 100, 'A')], [{ student_id: '1', name: 'x' }]);
+  assert.strictEqual(one.overview.std_dev, 0);
+  assert.strictEqual(one.histogram[9].count, 1, '100 lands in 90-100');
+  const many = [g('1', 50, 'D'), g('2', 52, 'D'), g('3', 54, 'D'), g('4', 55, 'D+'), g('5', 0, 'F'), g('6', 130, 'A')];
+  const out = G.analytics(many, many.map((r) => ({ student_id: r.student_id, name: 'n' + r.student_id })));
+  assert.deepStrictEqual(out.box_plot.outliers.map((o) => [o.student_id, o.name, o.final_score]),
+    [['5', 'n5', 0], ['6', 'n6', 130]]);
+  assert.strictEqual(out.overview.passing_count, 5);
+});
+
 test('fillDefaultMax uses current weights', () => {
   const G = H.Grades();
   const c = H.courseOf(H.F3);

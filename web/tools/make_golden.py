@@ -5,8 +5,8 @@ Writes web/tests/golden/ from the fixtures with grade-tui's own code (web/SPEC.m
     python3 web/tools/make_golden.py --check   compare instead; exit 1 on any difference
 
 Per fixture course: course.json from `build_course_json` (what web-push writes) and the expected grades from
-`tui_api.get_course_data` (what grade-tui shows), each on its own temp copy, because the loaders write totals and
-sync attendance. Variants (fixtures/variants.json) apply their edits with `apply_edits` and their config with
+`tui_api.get_course_data` (what grade-tui shows, with its Analytics › Overview numbers), each on its own temp copy,
+because the loaders write totals and sync attendance. Variants (fixtures/variants.json) apply their edits with `apply_edits` and their config with
 `update_course_config` on another temp copy. Also csv_rows.json (Python's parse of every fixture CSV) and
 canonical.json (what apply_edits stores for a typed text, and how cells.classify reads it).
 """
@@ -48,10 +48,23 @@ def _copy(fixture: str):
             yield dest
 
 
-def _expected(course: Path) -> list:
+def _course_data(course: Path) -> dict:
     data = tui_api.get_course_data(course)
     if data["status"] != "success":
         raise SystemExit(f"get_course_data failed on {course.name}: {data['message']}")
+    return data
+
+
+def _analytics(data: dict) -> dict:
+    """grade-tui's Overview panels (SPEC_web_tabs.md): overview, histogram, box plot; outliers without raw_index."""
+    a = data["analytics"]
+    box = dict(a["box_plot"])
+    box["outliers"] = [{k: v for k, v in o.items() if k != "raw_index"} for o in box["outliers"]]
+    return {"overview": a["overview"], "histogram": a["histogram"], "box_plot": box}
+
+
+def _expected(course: Path, data: dict | None = None) -> list:
+    data = data or _course_data(course)
     out = []
     for s in data["student_grades"]:
         ct = s.get("Coursework Total")
@@ -83,8 +96,9 @@ def golden_course(fixture: str, variants: list) -> dict:
     with _copy(fixture) as course:
         course_json = build_course_json(course)
     with _copy(fixture) as course:
-        expected = _expected(course)
-    return {"course": course_json, "expected": expected,
+        data = _course_data(course)
+        expected = _expected(course, data)
+    return {"course": course_json, "expected": expected, "analytics": _analytics(data),
             "variants": [{"name": v["name"], "expected": _variant(fixture, v)} for v in variants
                          if v["fixture"] == fixture]}
 

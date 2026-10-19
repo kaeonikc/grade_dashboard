@@ -116,6 +116,121 @@ function gwGrades(Csv) {
     return 'f';
   }
 
+  // Python's round(x, 2): half to even on the exact binary value of x (not numpy's round2), then the nearest double.
+  // BigInt() calls, not literals: the Apps Script parser rejects `1n`.
+  function pyRound2(x) {
+    if (!Number.isFinite(x) || x === 0) return x;
+    const [ONE, TWO, HUNDRED] = [BigInt(1), BigInt(2), BigInt(100)];
+    const dv = new DataView(new ArrayBuffer(8));
+    dv.setFloat64(0, Math.abs(x));
+    const hi = dv.getUint32(0);
+    const bits = (hi >>> 20) & 0x7ff;
+    let m = (BigInt(hi & 0xfffff) << BigInt(32)) | BigInt(dv.getUint32(4));
+    if (bits) m |= ONE << BigInt(52);
+    const e = (bits || 1) - 1075;
+    if (e >= 0) return x;
+    const num = HUNDRED * m;
+    const den = ONE << BigInt(-e);
+    let q = num / den;
+    const rem2 = TWO * (num - q * den);
+    if (rem2 > den || (rem2 === den && q % TWO === ONE)) q += ONE;
+    const r = Number(q) / 100;
+    return x < 0 ? -r : r;
+  }
+
+  // pandas' Series.quantile (numpy 'linear'): sorted ascending, numpy's _lerp.
+  function quantile(sorted, q) {
+    const idx = (sorted.length - 1) * q;
+    const lo = Math.floor(idx);
+    const t = idx - lo;
+    const a = sorted[lo];
+    const b = sorted[Math.min(lo + 1, sorted.length - 1)];
+    const d = b - a;
+    return t >= 0.5 ? b - d * (1 - t) : a + d * t;
+  }
+
+  // grade-tui's Analytics › Overview (tui_api._compute_analytics: overview, histogram, box_plot) over computeGrades
+  // rows; rows (same order) give the outliers' names. Shapes and rounding match the golden JSON.
+  function analytics(grades, rows) {
+    const n = grades.length;
+    const scores = grades.map((g) => Number(g.final_score) || 0);
+    const sorted = scores.slice().sort((a, b) => a - b);
+    const mean = n ? sum(scores) / n : 0;
+    const passing = grades.filter((g) => g.grade !== 'F').length;
+    const sd = n > 1 ? Math.sqrt(sum(scores.map((x) => (x - mean) ** 2)) / (n - 1)) : 0;
+    const overview = {
+      mean: n ? pyRound2(mean) : 0, median: n ? pyRound2(quantile(sorted, 0.5)) : 0, std_dev: n > 1 ? pyRound2(sd) : 0,
+      pass_rate: n ? pyRound2((passing / n) * 100) : 0, passing_count: passing, total_count: n,
+    };
+    const histogram = [];
+    if (n) {
+      for (let i = 0; i < 10; i++) histogram.push({ label: i < 9 ? i * 10 + '-' + (i * 10 + 9) : '90-100', count: 0 });
+      for (const x of scores) histogram[Math.min(9, Math.max(0, Math.floor(x / 10)))].count += 1;
+    }
+    if (!n) {
+      return { overview, histogram, box_plot: { min: 0, q1: 0, median: 0, q3: 0, max: 0, mean: 0, whisker_low: 0,
+        whisker_high: 0, skew_label: 'roughly symmetric', outliers: [] } };
+    }
+    const q1 = quantile(sorted, 0.25);
+    const q2 = quantile(sorted, 0.5);
+    const q3 = quantile(sorted, 0.75);
+    const iqr = q3 - q1;
+    const lowFence = q1 - 1.5 * iqr;
+    const highFence = q3 + 1.5 * iqr;
+    const inside = sorted.filter((x) => x >= lowFence && x <= highFence);
+    const ratio = iqr > 0 ? (mean - q2) / iqr : 0;
+    const names = new Map((rows || []).map((r) => [r.student_id, r.name]));
+    const outliers = grades.map((g, i) => ({ g, x: scores[i] })).filter((o) => o.x < lowFence || o.x > highFence)
+      .map((o) => ({ student_id: o.g.student_id, name: names.has(o.g.student_id) ? names.get(o.g.student_id) : '',
+        final_score: o.x }))
+      .sort((a, b) => a.final_score - b.final_score);
+    return {
+      overview, histogram,
+      box_plot: {
+        min: sorted[0], q1, median: q2, q3, max: sorted[n - 1], mean: pyRound2(mean),
+        whisker_low: inside.length ? inside[0] : sorted[0],
+        whisker_high: inside.length ? inside[inside.length - 1] : sorted[n - 1],
+        skew_label: Math.abs(ratio) < 0.05 ? 'roughly symmetric' : ratio > 0 ? 'right-skewed (mean > median)'
+          : 'left-skewed (mean < median)',
+        outliers,
+      },
+    };
+  }
+
+  // ---- Navigation (SPEC_web_tabs.md): grade-tui's tabs and the ☰ categories menu. Pure, so node can test it ----
+  const TABS = ['summary', 'raw', 'analytics', 'grading'];
+
+  // Raw Details' categories: category_order, then any category of the pushed columns not in it.
+  function navCategories(course) {
+    const cats = course.category_order.slice();
+    for (const c of course.columns) if (!cats.includes(c.category)) cats.push(c.category);
+    return cats;
+  }
+
+  // The pushed columns of a category, in course.columns order ('*' = every column).
+  function columnsOf(course, category) {
+    return course.columns.filter((c) => category === '*' || c.category === category);
+  }
+
+  // The first category with a score column, else the first with any column, else the first listed.
+  function firstCategory(course) {
+    const cats = navCategories(course);
+    return cats.find((k) => k !== 'attendance' && columnsOf(course, k).length) ||
+      cats.find((k) => columnsOf(course, k).length) || cats[0] || '*';
+  }
+
+  // {tab, category} from a course's remembered UI (gw:ui:<folder>, v 1). Older pages saved tab = the view they
+  // showed: scores, attendance, table or grading. First visit: Summary.
+  function navFromMemory(ui, course) {
+    const old = { scores: ['raw', null], attendance: ['raw', 'attendance'], table: ['raw', '*'] };
+    let tab = (ui && ui.tab) || 'summary';
+    let category = ui && ui.category;
+    if (has(old, tab)) [tab, category] = [old[tab][0], category || old[tab][1]];
+    if (!TABS.includes(tab)) tab = 'summary';
+    if (category !== '*' && !navCategories(course).includes(category)) category = firstCategory(course);
+    return { tab, category };
+  }
+
   // Rows in Raw Details order: every Student ID of the roster and the pushed files (blank IDs and a legacy
   // sentinel first row skipped), sorted as text. Name = the first non-empty one, roster first.
   // cells holds the counted columns' texts as written; a student without a row in a file has none.
@@ -271,7 +386,7 @@ function gwGrades(Csv) {
   return {
     ABSENT, CODE_VALUE, classify, sameCell, canonicalValue, validateTyped, round2, letterGrade, mergeCourse,
     fillDefaultMax, computeGrades, sessionDate, fillTargets, GRADE_SCALE, gradeOrder, gradeRanges, distribution,
-    gradeClass,
+    gradeClass, pyRound2, quantile, analytics, TABS, navCategories, columnsOf, firstCategory, navFromMemory,
   };
 }
 if (typeof module !== 'undefined') module.exports = (Csv) => gwGrades(Csv || require('./csv.js')());

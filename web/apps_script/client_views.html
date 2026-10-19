@@ -110,8 +110,8 @@ function showCourse(folder, courseName) {
   openCourse(folder).then(({ reply, draft }) => {
     clearTimeout(timer);
     if (reply.ok) {
-      // Wide screens open on the Table; phones on the tab used last (a saved Grading tab opens Scores).
-      state.view = WIDE.matches ? 'table' : uiMemory(folder).tab === 'attendance' ? 'attendance' : 'scores';
+      // The tab and category used last on this device (openCourse); the ☰ menu starts shown on wide screens only.
+      state.menu = WIDE.matches && menuPref();
       show(...courseView(draft));
       return renderView();
     }
@@ -135,8 +135,10 @@ function courseView(draft) {
   cm.badge = el('button', { type: 'button', class: 'badge unsaved', hidden: '', onclick: openSaveSheet });
   cm.headLine = el('p', { class: 'muted' });
   cm.strip = storageStrip();
+  cm.menuBtn = el('button', { type: 'button', class: 'icon menu-btn', 'aria-label': 'Categories',
+    'aria-controls': 'cat-menu', 'aria-expanded': 'false', onclick: () => toggleMenu() }, '☰');
   const head = el('header', { class: 'course-head' },
-    el('div', { class: 'course-bar' },
+    el('div', { class: 'course-bar' }, cm.menuBtn,
       el('button', { type: 'button', class: 'icon', 'aria-label': 'Courses', onclick: () => leave(showCourses) }, '‹'),
       data('h1', { class: 'course-name' }, o.course.course_name), cm.badge,
       el('button', { type: 'button', class: 'icon', 'aria-label': 'More', 'aria-haspopup': 'dialog', onclick: openMore },
@@ -161,13 +163,18 @@ function courseView(draft) {
     el('div', { class: 'col-row' }, cm.prev, cm.select, cm.next), cm.line,
     el('div', { class: 'search-row' }, el('div', { class: 'search' }, cm.search, cm.clear), cm.fill));
 
-  // The view switch on wide screens and the tab bar on phones (CSS shows one of them).
-  cm.views = el('div', { class: 'views', role: 'group', 'aria-label': 'View' },
-    ...[['table', 'Table'], ['scores', 'Scores'], ['attendance', 'Attendance'], ['grading', 'Grading']].map(
-      ([view, label]) => viewButton(view, label, 'btn outline view-btn')));
+  // grade-tui's tabs (SPEC_web_tabs.md): a strip on wide screens, the bottom tab bar on phones (CSS shows one).
+  cm.views = el('nav', { class: 'views', 'aria-label': 'Tabs' },
+    ...TAB_LABELS.map(([tab, label], i) => tabButton(tab, '[' + (i + 1) + '] ' + label, 'btn outline view-btn')));
   cm.tabs = el('nav', { class: 'tabs', 'aria-label': 'Tabs' },
-    ...[['scores', 'Scores'], ['attendance', 'Attendance'], ['grading', 'Grading']].map(
-      ([view, label]) => viewButton(view, label, 'tab')));
+    ...TAB_LABELS.map(([tab, label, short]) => tabButton(tab, short || label, 'tab')));
+  cm.menuList = el('ul', { class: 'menu-list' });
+  cm.menu = el('nav', { id: 'cat-menu', class: 'cat-menu', 'aria-label': 'Categories' },
+    el('p', { class: 'menu-title' }, 'Categories'), cm.menuList);
+  cm.menu.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !WIDE.matches) closeDrawer(); });
+  cm.scrim = el('div', { class: 'scrim', 'aria-hidden': 'true', onclick: () => closeDrawer() });
+  cm.summary = el('div', { class: 'summary' });
+  cm.overview = el('div', { class: 'overview' });
   cm.wrap = el('div', { class: 'table-wrap' });
   cm.grading = el('div', { class: 'grading' });
   cm.list = el('ul', { class: 'rows' });
@@ -186,63 +193,95 @@ function courseView(draft) {
   cm.dock = el('div', { class: 'dock' }, cm.alert, cm.status, el('div', { class: 'action-bar' }, cm.saveBtn), cm.tabs);
   cm.announce = el('p', { class: 'sr-only', 'aria-live': 'polite' });
   cm.banner = draftBanner(draft);
-  return [head, cm.banner, cm.views, picker, cm.list, cm.empty, cm.wrap, cm.grading, cm.announce, cm.dock, cm.bar]
-    .filter(Boolean);
+  return [head, cm.banner, cm.views, picker, cm.list, cm.empty, cm.summary, cm.overview, cm.wrap, cm.grading,
+    cm.announce, cm.dock, cm.bar, cm.scrim, cm.menu].filter(Boolean);
 }
 
-function viewButton(view, label, cls) {
-  const b = button(label, () => setView(view), cls);
-  b.dataset.view = view;
+const TAB_LABELS = [['summary', 'Summary'], ['raw', 'Raw Details', 'Raw'], ['analytics', 'Analytics'],
+  ['grading', 'Grading']];
+
+function tabButton(tab, label, cls) {
+  const b = button(label, () => setTab(tab), cls);
+  b.dataset.tab = tab;
   return b;
 }
 
-// Table, column mode (Scores or Attendance) or Grading, from the current state; an open detail is rebuilt with
-// fresh values.
-function renderView() {
-  const table = state.view === 'table';
-  document.body.classList.toggle('view-table', table);
-  document.body.classList.toggle('view-grading', state.view === 'grading');
-  for (const b of [...cm.views.children, ...cm.tabs.children]) {
-    b.setAttribute('aria-pressed', String(b.dataset.view === state.view));
+// What renders for the tab and category: Raw Details is the table on wide screens and column mode (Scores, or
+// Attendance for the attendance category) on phones. All columns ('*') is wide only.
+function modeOf() {
+  if (state.tab !== 'raw') return state.tab;
+  if (WIDE.matches) return 'table';
+  return state.category === 'attendance' ? 'attendance' : 'scores';
+}
+
+// A category always opens on one of its columns: the picked one when it belongs there, else its first.
+function normalizeNav() {
+  const course = state.open.course;
+  if (state.category === '*' ? !WIDE.matches : !Grades.navCategories(course).includes(state.category)) {
+    state.category = Grades.firstCategory(course);
   }
-  if (state.view === 'grading') {
-    tb = null;
-    cm.wrap.replaceChildren();
+  const cols = Grades.columnsOf(course, state.category);
+  if (state.category !== '*' && state.category !== 'attendance' && cols.length &&
+      !cols.some((c) => c.name === state.column)) {
+    state.column = cols[0].name;
+  }
+}
+
+// The current tab and category, from the current state; an open detail is rebuilt with fresh values.
+function renderView() {
+  normalizeNav();
+  const v = state.view = modeOf();
+  const wideSummary = v === 'summary' && WIDE.matches;
+  document.body.classList.toggle('view-table', v === 'table' || wideSummary);
+  for (const k of ['grading', 'summary', 'analytics']) document.body.classList.toggle('view-' + k, v === k);
+  for (const b of [...cm.views.children, ...cm.tabs.children]) {
+    b.setAttribute('aria-pressed', String(b.dataset.tab === state.tab));
+  }
+  if (v !== 'table') tb = null;
+  if (v !== 'table' && !wideSummary) cm.wrap.replaceChildren();
+  if (v !== 'grading') {
+    cfg = null;
+    cm.grading.replaceChildren();
+  }
+  if (v !== 'scores' && v !== 'attendance') {
     cm.items = [];
     cm.list.replaceChildren();
     cm.empty.replaceChildren();
     keypad(false);
+  }
+  if (v !== 'summary') sm = null;
+  cm.summary.replaceChildren();
+  cm.overview.replaceChildren();
+  renderMenu();
+  if (v === 'grading') {
     renderGrading();
     refreshChrome();
-  } else if (table) {
-    cfg = null;
-    cm.grading.replaceChildren();
-    cm.items = [];
-    cm.list.replaceChildren();
-    cm.empty.replaceChildren();
-    keypad(false);
+  } else if (v === 'table') {
     renderTable();
     refreshCounts();
+  } else if (v === 'summary') {
+    renderSummary();
+    refreshChrome();
+  } else if (v === 'analytics') {
+    renderOverview();
+    refreshChrome();
   } else {
-    tb = null;
-    cfg = null;
-    cm.wrap.replaceChildren();
-    cm.grading.replaceChildren();
     renderColumn();
   }
   if (det) renderDetail();
 }
 
-// Leaving the table picks the column of its focused cell (S5.3); a session opens on the Attendance tab.
-function setView(view) {
-  const col = state.view === 'table' && view !== 'table' && tb && tb.cur ? tb.specs[tb.cur.c].col : null;
-  if (col && col.category === 'attendance') {
-    state.session = col.name;
-    if (view === 'scores') view = 'attendance';
-  } else if (col) {
-    state.column = col.name;
-  }
-  state.view = view;
+function setTab(tab) {
+  if (!Grades.TABS.includes(tab)) return;
+  state.tab = tab;
+  rememberUi();
+  renderView();
+}
+
+function setCategory(category) {
+  state.tab = 'raw';
+  state.category = category;
+  normalizeNav();
   rememberUi();
   renderView();
 }
@@ -282,8 +321,8 @@ function draftBanner(draft) {
   return box;
 }
 
-// Scores: columns grouped by category in category_order (attendance sessions included; total columns are never
-// listed). Attendance: the sessions verbatim, today's marked `· today`.
+// Scores: the current category's columns (total columns are never listed). Attendance: the sessions verbatim,
+// today's marked `· today`.
 function renderPicker() {
   const course = state.open.course;
   const att = state.view === 'attendance';
@@ -295,10 +334,8 @@ function renderPicker() {
     const today = todaySession();
     opts.push(...sessions().map((c) => data('option', { value: c.name }, c.header + (c.name === today ? ' · today' : ''))));
   } else {
-    for (const cat of course.category_order) {
-      const cols = course.columns.filter((c) => c.category === cat);
-      if (cols.length) opts.push(el('optgroup', { label: cat }, ...cols.map((c) => optionFor(c))));
-    }
+    const cols = Grades.columnsOf(course, state.category);
+    if (cols.length) opts.push(el('optgroup', { label: state.category }, ...cols.map((c) => optionFor(c))));
   }
   cm.select.replaceChildren(...opts);
   const col = currentColumn();
@@ -313,27 +350,33 @@ function optionFor(c) {
   return data('option', { value: c.name }, c.header + ' · ' + enteredCount(c.name) + '/' + state.rows.length);
 }
 
-// The columns ‹ › step through: the sessions on Attendance, the score columns on Scores.
+// The columns ‹ › step through: the sessions on Attendance, the category's columns on Scores.
 function viewColumns() {
   const att = state.view === 'attendance';
-  return state.open.course.columns.filter((c) => (c.category === 'attendance') === att);
+  if (att) return sessions();
+  return Grades.columnsOf(state.open.course, state.category).filter((c) => c.category !== 'attendance');
 }
 
-// The column of the current view: the session on Attendance, else the picked column (Scores never shows a session).
+// The column of the current view: the session on Attendance, else the picked column of the category (the table:
+// any picked column it shows, for Fill).
 function currentColumn() {
   const att = state.view === 'attendance';
   const col = state.open.course.columns.find((c) => c.name === (att ? state.session : state.column));
-  return col && (att || state.view === 'table' || col.category !== 'attendance') ? col : undefined;
+  if (!col || att) return col;
+  if (state.view === 'table') return state.category === '*' || col.category === state.category ? col : undefined;
+  return col.category !== 'attendance' && col.category === state.category ? col : undefined;
 }
 
-// A session picked anywhere opens the Attendance tab with it; a score column opens Scores.
+// A column picked anywhere opens Raw Details on its category (a session: Attendance) with it.
 function choose(name) {
   const col = state.open.course.columns.find((c) => c.name === name);
   if (!col) return;
   const att = col.category === 'attendance';
   if (att) state.session = name; else pickColumn(name);
-  const view = att ? 'attendance' : 'scores';
-  if (state.view !== view) return setView(view);
+  if (state.tab !== 'raw' || (state.category !== col.category && state.category !== '*')) {
+    return setCategory(col.category);
+  }
+  if (state.view === 'table') return renderView();
   renderColumn();
 }
 
@@ -442,6 +485,8 @@ function changed(row) {
     for (const it of det.items) refreshItem(it);
     refreshSummary();
   }
+  if (sm) paintSummary(row);
+  if (state.view === 'analytics') renderOverview();
   refreshCounts();
 }
 
@@ -653,7 +698,8 @@ function renderDetail() {
   det.items = [];
   det.sections = [];
   const col = currentColumn();
-  const from = state.view === 'table' ? 'Table' : col ? col.name : state.view === 'attendance' ? 'Attendance' : 'Scores';
+  const from = state.view === 'summary' ? 'Summary' : state.view === 'analytics' ? 'Overview'
+    : state.view === 'table' ? 'Table' : col ? col.name : state.view === 'attendance' ? 'Attendance' : 'Scores';
   const back = button('‹ ' + from, closeDetail, 'btn outline det-back');
   back.setAttribute('aria-label', 'Back to ' + from);
   det.badge = el('button', { type: 'button', class: 'badge unsaved', hidden: '', onclick: openSaveSheet });
@@ -797,10 +843,12 @@ const BIG_TABLE = 300 * 80;
 let tb = null;  // the table: column specs, one record per student, the focused cell, the open editor or picker
 
 // ID, Name, then per category its counted columns and its computed `{category} /{w}`, then the three totals.
+// A Raw Details category (not All columns) shows only its own columns and total.
 function tableColumns() {
   const course = state.open.course;
+  const one = state.category !== '*';
   const specs = [{ kind: 'id', label: 'Student ID' }, { kind: 'name', label: 'Name' }];
-  for (const cat of course.category_order) {
+  for (const cat of one ? [state.category] : Grades.navCategories(course)) {
     for (const col of course.columns) {
       if (col.category === cat) specs.push({ kind: cat === 'attendance' ? 'code' : 'score', col });
     }
@@ -808,6 +856,7 @@ function tableColumns() {
       specs.push({ kind: 'calc', cat, label: cat + ' /' + Grades.round2(course.weights[cat] * 100) });
     }
   }
+  if (one) return specs;
   specs.push({ kind: 'calc', key: 'coursework_total', label: 'Coursework Total' },
     { kind: 'calc', key: 'final_score', label: 'Final Score' }, { kind: 'calc', key: 'grade', label: 'Grade' });
   return specs;
@@ -824,6 +873,10 @@ function renderTable() {
 }
 
 function buildTable() {
+  if (state.category !== '*' && !Grades.columnsOf(state.open.course, state.category).length) {
+    cm.wrap.replaceChildren(data('p', { class: 'muted empty' }, 'No columns pushed for ' + state.category + '.'));
+    return;
+  }
   const specs = tableColumns();
   tb = { specs, recs: [], byId: new Map(), cur: null, edit: null, picker: null };
   const head = el('tr', { role: 'row', 'aria-rowindex': '1' }, ...specs.map(headCell));
@@ -1366,7 +1419,11 @@ function goTo(sid, column) {
     cm.search.value = '';
     applySearch();
   }
-  if (state.view === 'table') {
+  if (state.view === 'table' || (state.tab !== 'raw' && WIDE.matches)) {
+    const col = state.open.course.columns.find((x) => x.name === column);
+    if (col && (state.tab !== 'raw' || (state.category !== '*' && state.category !== col.category))) {
+      setCategory(col.category);
+    }
     const rec = tb && tb.byId.get(sid);
     const c = tb ? tb.specs.findIndex((s) => s.col && s.col.name === column) : -1;
     if (rec && c >= 0) focusCell(rec.r, c);
@@ -1490,15 +1547,18 @@ function refreshDistribution() {
   if (!d) return;
   const { rows, preview } = gradeDistribution();
   d.tag.hidden = !preview;
+  d.list.replaceChildren(...barItems(rows.map((r) => ({ label: r.letter, cls: gradeCls(r.letter), count: r.count,
+    pct: r.pct }))));
+}
+
+// Bar rows (`.dist`): label, a bar scaled to the largest count, `6 (15.0%)`. Empty counts: `No students yet.`
+function barItems(rows) {
   const top = Math.max(0, ...rows.map((r) => r.count));
-  if (!top) return d.list.replaceChildren(el('li', { class: 'muted' }, 'No students yet.'));
-  d.list.replaceChildren(...rows.map((r) => {
-    const cls = gradeCls(r.letter);
-    return el('li', {}, el('span', { class: 'letter ' + cls }, r.letter),
-      el('span', { class: 'bar', 'aria-hidden': 'true' },
-        el('span', { class: cls, style: 'width: ' + (r.count / top) * 100 + '%' })),
-      el('span', { class: 'count' }, r.count + ' (' + r.pct.toFixed(1) + '%)'));
-  }));
+  if (!top) return [el('li', { class: 'muted' }, 'No students yet.')];
+  return rows.map((r) => el('li', {}, el('span', { class: 'letter ' + r.cls }, r.label),
+    el('span', { class: 'bar', 'aria-hidden': 'true' },
+      el('span', { class: r.cls || 'plain', style: 'width: ' + (r.count / top) * 100 + '%' })),
+    el('span', { class: 'count' }, r.count + ' (' + r.pct.toFixed(1) + '%)')));
 }
 
 // The colour class of a letter (grade-tui's grade_color_for).
@@ -1691,6 +1751,8 @@ function applySearch() {
     if (tb) searchTable();
     return;
   }
+  if (state.view === 'summary') return searchSummary();
+  if (state.view === 'analytics' || state.view === 'grading') return;
   let shown = 0;
   for (const it of cm.items) {
     it.li.hidden = !matches(it.row, state.search);
@@ -1700,6 +1762,8 @@ function applySearch() {
     cm.empty.replaceChildren(el('p', {}, 'This course has no attendance sessions. Add them on the Mac, then push again.'));
   } else if (state.view === 'attendance' && !currentColumn()) {
     cm.empty.replaceChildren(el('p', {}, 'No session is dated today (' + longDate(today()) + '). Pick one above.'));
+  } else if (!viewColumns().length) {
+    cm.empty.replaceChildren(data('p', {}, 'No columns pushed for ' + state.category + '.'));
   } else if (!currentColumn()) {
     cm.empty.replaceChildren(el('p', {}, 'Pick a column to enter scores.'));
   } else if (shown === 0) {
@@ -1717,11 +1781,232 @@ function clearSearch() {
   cm.search.focus();
 }
 
-// Narrowing the window below 960 px leaves the table for column mode (S5.3).
+// ---- 14. grade-tui's tabs: the ☰ Categories menu, Summary Scores and Overview (SPEC_web_tabs.md) ----
+
+// The current tab's menu: [1] Summary Scores, [2] All columns (wide) and the categories with their points,
+// [3] Overview, [4] none.
+function menuEntries() {
+  if (state.tab === 'summary') return [{ key: 'summary', label: 'Summary Scores' }];
+  if (state.tab === 'analytics') return [{ key: 'overview', label: 'Overview' }];
+  if (state.tab !== 'raw') return [];
+  const cats = Grades.navCategories(state.open.course).map((cat) => ({ key: cat, label: cat, pts: catPoints(cat) }));
+  return (WIDE.matches ? [{ key: '*', label: 'All columns' }] : []).concat(cats);
+}
+
+// grade-tui's `[20 pts]`: the category's column maxima (a session counts 1), or its weight × 100 without columns.
+function catPoints(cat) {
+  const course = state.open.course;
+  const cols = Grades.columnsOf(course, cat);
+  if (!cols.length) return Grades.round2((course.weights[cat] || 0) * 100);
+  return Grades.round2(cols.reduce((t, c) => t + (cat === 'attendance' ? 1 : maxOf(c.name)), 0));
+}
+
+function renderMenu() {
+  const items = menuEntries();
+  const current = state.tab === 'raw' ? state.category : items.length ? items[0].key : null;
+  cm.menuList.replaceChildren(...items.map((m) => {
+    const b = el('button', { type: 'button', class: 'cat-item', onclick: () => pickMenu(m.key) },
+      data('span', {}, m.label), m.pts == null ? null : el('span', { class: 'muted' }, m.pts + ' pts'));
+    if (m.key === current) b.setAttribute('aria-current', 'page');
+    return el('li', {}, b);
+  }));
+  const open = state.menu && items.length > 0;
+  cm.menuBtn.disabled = !items.length;
+  cm.menuBtn.setAttribute('aria-expanded', String(open));
+  cm.menu.hidden = !open;
+  cm.scrim.hidden = !open || WIDE.matches;
+  document.body.classList.toggle('menu-open', open);
+}
+
+// ☰: a side column on wide screens (remembered on this device), a drawer on phones (focus goes into it).
+function toggleMenu() {
+  state.menu = !state.menu;
+  if (WIDE.matches) rememberMenu(state.menu);
+  renderMenu();
+  if (state.menu && !WIDE.matches) {
+    const b = cm.menu.querySelector('[aria-current]') || cm.menu.querySelector('button');
+    if (b) b.focus();
+  }
+}
+
+function closeDrawer() {
+  if (WIDE.matches || !state.menu) return;
+  state.menu = false;
+  renderMenu();
+  cm.menuBtn.focus();
+}
+
+function pickMenu(key) {
+  if (state.tab === 'raw' && key !== state.category) setCategory(key);
+  closeDrawer();
+}
+
+// Summary Scores: the weighted categories as `{category} /{points}`, then Coursework Total, Final Score, Grade.
+let sm = null;  // the shown Summary: student_id -> {node, paint} for live updates and search
+
+function summaryFields(g) {
+  const course = state.open.course;
+  return course.category_order.filter((c) => Object.prototype.hasOwnProperty.call(course.weights, c))
+    .map((cat) => [cat + ' /' + Grades.round2(course.weights[cat] * 100), g ? g.pct[cat] : null])
+    .concat([['Coursework Total', g ? g.coursework_total || 0 : null], ['Final Score', g ? g.final_score : null]]);
+}
+
+const gradeSpan = (grade) => el('span', { class: 'grade-text ' + gradeCls(grade) }, grade);
+
+// Wide: a read-only table (a name opens the detail). Phone: one line per student that unfolds the full row.
+function renderSummary() {
+  sm = new Map();
+  if (WIDE.matches) {
+    const heads = ['Student ID', 'Name'].concat(summaryFields(null).map((f) => f[0]), 'Grade');
+    const cls = (i) => (i === 0 ? 'c-id' : i === 1 ? 'c-name' : 'c-calc');
+    const head = el('tr', {}, ...heads.map((h, i) => el('th', { scope: 'col', class: cls(i) }, data('span', {}, h))));
+    const body = el('tbody', {}, ...state.rows.map(summaryRow));
+    cm.wrap.replaceChildren(el('table', { class: 'tb sum-table', 'aria-label': 'Summary Scores' },
+      el('thead', {}, head), body));
+  } else {
+    cm.summary.replaceChildren(el('ul', { class: 'rows sum-list', 'aria-label': 'Summary Scores' },
+      ...state.rows.map(summaryItem)));
+  }
+  searchSummary();
+}
+
+function summaryRow(row) {
+  const cells = summaryFields(null).map(() => el('td', { class: 'c-calc' })).concat(el('td', { class: 'c-grade' }));
+  const tr = el('tr', {}, el('td', { class: 'c-id' }, row.student_id),
+    el('td', { class: 'c-name' }, el('button', { type: 'button', class: 'link', onclick: () => openDetail(row) },
+      data('span', {}, row.name))), ...cells);
+  const paint = () => {
+    const g = gradeOf(row);
+    summaryFields(g).forEach((f, i) => { cells[i].textContent = f[1]; });
+    cells[cells.length - 1].replaceChildren(gradeSpan(g.grade));
+  };
+  sm.set(row.student_id, { node: tr, row, paint });
+  paint();
+  return tr;
+}
+
+function summaryItem(row, i) {
+  const id = 'sum-' + i;
+  const final = el('span', { class: 'sum-final' });
+  const grade = el('span', { class: 'sum-grade' });
+  const chevron = el('span', { class: 'chevron', 'aria-hidden': 'true' }, '▸');
+  const fields = el('dl', { class: 'sum-fields' });
+  const region = el('div', { id, class: 'sum-more', hidden: '' }, fields,
+    button('Details ›', () => openDetail(row), 'btn outline'));
+  const toggle = el('button', { type: 'button', class: 'sum-row', 'aria-expanded': 'false', 'aria-controls': id },
+    el('span', { class: 'who' }, el('span', { class: 'id' }, row.student_id),
+      data('span', { class: 'name' }, row.name)),
+    final, grade, chevron);
+  toggle.addEventListener('click', () => {
+    region.hidden = !region.hidden;
+    toggle.setAttribute('aria-expanded', String(!region.hidden));
+    chevron.textContent = region.hidden ? '▸' : '▾';
+  });
+  const li = el('li', { class: 'sum-item' }, toggle, region);
+  const paint = () => {
+    const g = gradeOf(row);
+    final.textContent = g.final_score;
+    grade.replaceChildren(gradeSpan(g.grade));
+    fields.replaceChildren(...summaryFields(g).concat([['Grade', gradeSpan(g.grade)]])
+      .flatMap(([k, v]) => [el('dt', {}, k), el('dd', {}, v)]));
+  };
+  sm.set(row.student_id, { node: li, row, paint });
+  paint();
+  return li;
+}
+
+function paintSummary(row) {
+  const r = sm && sm.get(row.student_id);
+  if (r) r.paint();
+}
+
+function searchSummary() {
+  if (!sm) return;
+  for (const r of sm.values()) r.node.hidden = !matches(r.row, state.search);
+}
+
+// Analytics › Overview: grade-tui's four panels over the grades shown (unsaved edits included).
+function renderOverview() {
+  const d = overviewData();
+  const ov = d.overview;
+  const n = ov.total_count;
+  const panel = (title, ...body) => el('section', { class: 'ov-panel' }, el('h2', {}, title), ...body);
+  if (!n) {
+    cm.overview.replaceChildren(panel('Overview', el('p', { class: 'muted' }, 'No students yet.')));
+    return;
+  }
+  const pts = (x) => x.toFixed(2) + ' pts';
+  const stats = [['Total enrolled', n + (n === 1 ? ' student' : ' students')], ['Mean', pts(ov.mean)],
+    ['Median', pts(ov.median)], ['Std. deviation', pts(ov.std_dev)],
+    ['Pass rate', ov.pass_rate.toFixed(1) + '% (' + ov.passing_count + '/' + n + ' passing)']];
+  cm.overview.replaceChildren(
+    panel('Class statistics', el('dl', { class: 'ov-stats' }, ...stats.flatMap(([k, v]) => [el('dt', {}, k),
+      el('dd', {}, v)]))),
+    panel('Grade distribution', el('ul', { class: 'dist' }, ...barItems(d.distribution.map((r) => ({ label: r.letter,
+      cls: gradeCls(r.letter), count: r.count, pct: r.pct }))))),
+    panel('Final Score histogram', el('ul', { class: 'dist hist' }, ...barItems(d.histogram.map((b) => ({
+      label: b.label, cls: '', count: b.count, pct: (b.count / n) * 100 }))))),
+    panel('Final Score box plot', ...boxPlot(d.box_plot)));
+}
+
+function svg(tag, attrs, ...children) {
+  const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, v);
+  node.append(...children);
+  return node;
+}
+
+// A 0–100 axis (wider when a score is above 100): whiskers, the Q1–Q3 box, the median, the mean (dashed) and the
+// outliers. The drawing is decorative; the text lines under it carry every value.
+function boxPlot(bp) {
+  const top = Math.max(100, bp.max);
+  const x = (v) => (v / top) * 100;
+  const line = (cls, x1, x2, y1, y2) => svg('line', { class: cls, x1: x(x1), x2: x(x2), y1, y2,
+    'vector-effect': 'non-scaling-stroke' });
+  const pic = svg('svg', { class: 'bp', viewBox: '0 0 100 20', preserveAspectRatio: 'none', 'aria-hidden': 'true' },
+    line('bp-line', bp.whisker_low, bp.whisker_high, 10, 10),
+    line('bp-line', bp.whisker_low, bp.whisker_low, 5, 15), line('bp-line', bp.whisker_high, bp.whisker_high, 5, 15),
+    svg('rect', { class: 'bp-box', x: x(bp.q1), y: 3, width: Math.max(x(bp.q3) - x(bp.q1), 0.2), height: 14,
+      'vector-effect': 'non-scaling-stroke' }),
+    line('bp-median', bp.median, bp.median, 3, 17), line('bp-mean', bp.mean, bp.mean, 1, 19),
+    ...bp.outliers.map((o) => line('bp-out', o.final_score, o.final_score, 6, 14)));
+  const ticks = el('div', { class: 'bp-axis', 'aria-hidden': 'true' },
+    ...[0, 0.25, 0.5, 0.75, 1].map((f) => el('span', {}, String(Grades.round2(top * f)))));
+  const outliers = bp.outliers.length ? bp.outliers.map((o) => o.name + ' (' + o.student_id + ') ' + o.final_score)
+    .join(', ') : 'none';
+  return [pic, ticks,
+    el('p', {}, ['Min ' + bp.min, 'Q1 ' + bp.q1, 'Median ' + bp.median, 'Q3 ' + bp.q3, 'Max ' + bp.max,
+      'Mean ' + bp.mean].join(' · ')),
+    el('p', { class: 'muted' }, 'Whiskers ' + bp.whisker_low + '–' + bp.whisker_high + ' · ' + bp.skew_label),
+    data('p', {}, 'Outliers: ' + outliers)];
+}
+
+// grade-tui's keys on wide screens: 1–4 switch tabs, s shows/hides the menu. Not while typing, in the editing
+// grid (digits start an edit there) or with a dialog open.
+document.addEventListener('keydown', (e) => {
+  if (!cm || !cm.list.isConnected || !WIDE.matches || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
+  const t = e.target;
+  if (t.closest && t.closest('input, select, textarea, [contenteditable], [role="grid"], dialog, .detail')) return;
+  if (document.querySelector('dialog[open]')) return;
+  if (e.key >= '1' && e.key <= '4') {
+    e.preventDefault();
+    setTab(Grades.TABS[+e.key - 1]);
+  } else if (e.key === 's' || e.key === 'S') {
+    e.preventDefault();
+    toggleMenu();
+  }
+});
+
+// Crossing 960 px: the table <-> column mode (S5.3), and the menu becomes a side column or a closed drawer.
 WIDE.addEventListener('change', () => {
   if (!cm || !cm.list.isConnected) return;
-  if (!WIDE.matches && state.view === 'table') setView('scores');
-  else refreshChrome();
+  state.menu = WIDE.matches && menuPref();
+  if (state.view !== modeOf() || state.tab === 'summary' || (state.tab === 'raw' && state.category === '*')) {
+    renderView();
+  } else {
+    renderMenu();
+    refreshChrome();
+  }
 });
 // Esc closes the detail side panel (inputs, sheets and the picker handle their own Esc first).
 document.addEventListener('keydown', (e) => {
