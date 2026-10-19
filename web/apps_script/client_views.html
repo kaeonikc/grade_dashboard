@@ -1334,6 +1334,9 @@ function openPicker(r, c) {
     closePicker();
     focusCell(r, c);
   });
+  // Safari doesn't focus a pressed button: the press would blur the picker (relatedTarget null) and close it before
+  // the click lands. Keeping focus where it is lets the click through; a press outside still closes it.
+  box.addEventListener('mousedown', (e) => e.preventDefault());
   box.addEventListener('focusout', (e) => { if (!box.contains(e.relatedTarget)) closePicker(); });
   tb.picker = box;
   cm.wrap.append(box);
