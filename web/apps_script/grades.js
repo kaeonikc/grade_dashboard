@@ -194,9 +194,35 @@ function gwGrades(Csv) {
     });
   }
 
+  // A session header like `20 Jan 2027` -> '2027-01-20'; anything else (placeholders a1..aN, totals) -> null.
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  function sessionDate(header) {
+    const m = /^(\d{1,2}) ([A-Z][a-z]{2}) (\d{4})$/.exec(String(header == null ? '' : header).trim());
+    const month = m ? MONTHS.indexOf(m[2]) : -1;
+    if (month < 0) return null;
+    const d = new Date(Date.UTC(+m[3], month, +m[1]));
+    if (d.getUTCDate() !== +m[1]) return null;
+    return d.toISOString().slice(0, 10);
+  }
+
+  // Fill Column (S7): the cells that change when `value` goes in `column`, over every row. mode 'empty' takes only
+  // blank cells, 'whole' every cell; an unsaved value (overlay) counts as the cell's value, and a cell that already
+  // means `value` is left out. Returns [{student_id, value}].
+  function fillTargets(rows, overlay, column, value, mode) {
+    const edits = new Map();
+    for (const e of overlay || []) if (e.column === column) edits.set(e.student_id, e.value);
+    const targets = [];
+    for (const r of rows) {
+      const now = edits.has(r.student_id) ? edits.get(r.student_id) : (r.cells[column] || '');
+      if (mode === 'empty' && now.trim() !== '') continue;
+      if (!sameCell(now, value)) targets.push({ student_id: r.student_id, value });
+    }
+    return targets;
+  }
+
   return {
     ABSENT, CODE_VALUE, classify, sameCell, canonicalValue, validateTyped, round2, letterGrade, mergeCourse,
-    fillDefaultMax, computeGrades,
+    fillDefaultMax, computeGrades, sessionDate, fillTargets,
   };
 }
 if (typeof module !== 'undefined') module.exports = (Csv) => gwGrades(Csv || require('./csv.js')());

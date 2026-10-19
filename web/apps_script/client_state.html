@@ -20,8 +20,9 @@ const state = {
   grades: [],        // Grades.computeGrades over the saved values plus the unsaved edits, one per row
   gradeById: new Map(),  // student_id -> its entry in grades
   groups: new Map(), // student_id -> Class Group from the roster (shown in the detail)
-  view: 'scores',    // 'table' (wide screens only) or 'scores'
-  column: null,      // the picked columns[].name in column mode
+  view: 'scores',    // 'table' (wide screens only), 'scores', 'attendance' or 'grading'
+  column: null,      // the picked columns[].name in Scores (and the table's Fill column)
+  session: null,     // the picked attendance session on the Attendance tab (today's when the course opens)
   search: '',        // the search box text
   saving: false,     // a Save or Undo is on its way: edits are locked
   storageOff: false, // localStorage refused a write: the draft can't be kept (S8.8)
@@ -79,6 +80,7 @@ function openCourse(folder) {
     const ui = uiMemory(folder);
     const known = reply.course.columns.some((c) => c.name === ui.column);
     state.column = known ? ui.column : null;
+    state.session = todaySession();
     const draft = restoreDraft();
     recompute();
     return { reply, draft };
@@ -294,11 +296,27 @@ function uiMemory(folder) {
 
 function pickColumn(name) {
   state.column = name;
+  rememberUi();
+}
+
+function rememberUi() {
   try {
-    localStorage.setItem(UI_PREFIX + state.open.folder, JSON.stringify({ v: 1, column: name, tab: 'scores' }));
+    localStorage.setItem(UI_PREFIX + state.open.folder, JSON.stringify({ v: 1, column: state.column, tab: state.view }));
   } catch (e) {
     state.storageOff = true;  // only the remembered column is lost, but drafts can't be kept either (S8.8)
   }
+}
+
+// ---- Attendance sessions (S6.1, edge 47) ----
+function sessions() { return state.open.course.columns.filter((c) => c.category === 'attendance'); }
+
+// Today on the server clock, 'YYYY-MM-DD' (the ISO text carries the server's own offset).
+function today() { return serverNow().slice(0, 10); }
+
+// The session dated today, or null when none is (the teacher picks one).
+function todaySession() {
+  const s = sessions().find((c) => Grades.sessionDate(c.header) === today());
+  return s ? s.name : null;
 }
 
 // ---- Cells and unsaved edits ----
@@ -315,11 +333,27 @@ function cellValue(row, column) {
 
 // Puts a canonical value in a cell as an unsaved edit; a value that means the Drive value removes the edit (S3.6).
 function setCell(row, column, value) {
+  putEdit(row, column, value);
+  saveDraft();
+  recompute();
+}
+
+function putEdit(row, column, value) {
   const key = editKey(row.student_id, column);
   const original = savedValue(row, column);
   if (Grades.sameCell(value, original)) state.edits.delete(key);
   else state.edits.set(key, { student_id: row.student_id, column, value, original });
   if (!state.edits.size) state.editsPush = state.open.push.push_id;
+}
+
+// Fill Column (S7): the cells that would change, unsaved values counted as filled.
+function fillPlan(column, value, mode) {
+  return Grades.fillTargets(state.rows, Array.from(state.edits.values()), column, value, mode);
+}
+
+// Puts fillPlan's targets in as unsaved edits, like setCell does one by one (one draft write, one recompute).
+function fillColumn(column, targets) {
+  for (const t of targets) putEdit(state.byId.get(t.student_id), column, t.value);
   saveDraft();
   recompute();
 }

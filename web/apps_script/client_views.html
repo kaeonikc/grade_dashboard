@@ -1,7 +1,7 @@
 <script>
 'use strict';
-// Screens (web/SPEC.md "Interface"): the course list, opening a course, column mode, the student detail, the wide
-// table, and the Save, Discard, Undo, Leave and More dialogs.
+// Screens (web/SPEC.md "Interface"): the course list, opening a course, column mode, attendance, the student detail,
+// the wide table, and the Fill, Save, Discard, Undo, Leave and More dialogs.
 // Every piece of course data goes in as text (textContent), never as HTML.
 
 const SLOW_MS = 8000;
@@ -110,7 +110,8 @@ function showCourse(folder, courseName) {
   openCourse(folder).then(({ reply, draft }) => {
     clearTimeout(timer);
     if (reply.ok) {
-      state.view = WIDE.matches ? 'table' : 'scores';
+      // Wide screens open on the Table; phones on the tab used last (a saved Grading tab opens Scores).
+      state.view = WIDE.matches ? 'table' : uiMemory(folder).tab === 'attendance' ? 'attendance' : 'scores';
       show(...courseView(draft));
       return renderView();
     }
@@ -154,20 +155,22 @@ function courseView(draft) {
   cm.search.addEventListener('input', () => { state.search = cm.search.value; applySearch(); });
   cm.clear = el('button', { type: 'button', class: 'icon search-clear', 'aria-label': 'Clear search',
     onclick: clearSearch }, '×');
-  const picker = el('section', { class: 'col-picker' },
-    el('label', { for: 'col' }, 'Column'),
+  cm.fill = button('Fill…', openFill, 'btn outline fill-btn');
+  cm.label = el('label', { for: 'col' });
+  const picker = el('section', { class: 'col-picker' }, cm.label,
     el('div', { class: 'col-row' }, cm.prev, cm.select, cm.next), cm.line,
-    el('div', { class: 'search' }, cm.search, cm.clear));
+    el('div', { class: 'search-row' }, el('div', { class: 'search' }, cm.search, cm.clear), cm.fill));
 
-  // Wide screens only (CSS): the view switch. Attendance and Grading join it with their tabs.
+  // The view switch on wide screens and the tab bar on phones (CSS shows one of them).
   cm.views = el('div', { class: 'views', role: 'group', 'aria-label': 'View' },
-    ...[['table', 'Table'], ['scores', 'Scores']].map(([view, label]) => {
-      const b = button(label, () => setView(view), 'btn outline view-btn');
-      b.dataset.view = view;
-      return b;
-    }));
+    ...[['table', 'Table'], ['scores', 'Scores'], ['attendance', 'Attendance'], ['grading', 'Grading']].map(
+      ([view, label]) => viewButton(view, label, 'btn outline view-btn')));
+  cm.tabs = el('nav', { class: 'tabs', 'aria-label': 'Tabs' },
+    ...[['scores', 'Scores'], ['attendance', 'Attendance'], ['grading', 'Grading']].map(
+      ([view, label]) => viewButton(view, label, 'tab')));
   cm.wrap = el('div', { class: 'table-wrap' });
   cm.list = el('ul', { class: 'rows' });
+  cm.list.addEventListener('keydown', attendanceKey);
   cm.empty = el('div', { class: 'empty' });
   cm.nextBtn = el('button', { type: 'button', class: 'btn kbar-next', onclick: () => move(1) }, 'Next ↓');
   cm.bar = el('div', { class: 'kbar', hidden: '' },
@@ -179,18 +182,36 @@ function courseView(draft) {
   cm.status = el('p', { class: 'status', role: 'status' });
   cm.alert = el('div', { class: 'alert', role: 'alert' });
   cm.saveBtn = button('', openSaveSheet, 'btn save-btn');
-  cm.dock = el('div', { class: 'dock' }, cm.alert, cm.status, el('div', { class: 'action-bar' }, cm.saveBtn));
+  cm.dock = el('div', { class: 'dock' }, cm.alert, cm.status, el('div', { class: 'action-bar' }, cm.saveBtn), cm.tabs);
   cm.announce = el('p', { class: 'sr-only', 'aria-live': 'polite' });
   cm.banner = draftBanner(draft);
   return [head, cm.banner, cm.views, picker, cm.list, cm.empty, cm.wrap, cm.announce, cm.dock, cm.bar].filter(Boolean);
 }
 
-// Table or column mode, from the current state; an open detail is rebuilt with fresh values.
+function viewButton(view, label, cls) {
+  const b = button(label, () => setView(view), cls);
+  b.dataset.view = view;
+  return b;
+}
+
+// Table, column mode (Scores or Attendance) or Grading, from the current state; an open detail is rebuilt with
+// fresh values.
 function renderView() {
   const table = state.view === 'table';
   document.body.classList.toggle('view-table', table);
-  for (const b of cm.views.children) b.setAttribute('aria-pressed', String(b.dataset.view === state.view));
-  if (table) {
+  document.body.classList.toggle('view-grading', state.view === 'grading');
+  for (const b of [...cm.views.children, ...cm.tabs.children]) {
+    b.setAttribute('aria-pressed', String(b.dataset.view === state.view));
+  }
+  if (state.view === 'grading') {
+    tb = null;
+    cm.wrap.replaceChildren();
+    cm.items = [];
+    cm.list.replaceChildren();
+    keypad(false);
+    cm.empty.replaceChildren(el('p', { class: 'muted' }, 'Weights and grade boundaries are not editable here yet.'));
+    refreshChrome();
+  } else if (table) {
     cm.items = [];
     cm.list.replaceChildren();
     cm.empty.replaceChildren();
@@ -205,12 +226,17 @@ function renderView() {
   if (det) renderDetail();
 }
 
-// Leaving the table picks the column of its focused cell (S5.3).
+// Leaving the table picks the column of its focused cell (S5.3); a session opens on the Attendance tab.
 function setView(view) {
-  if (state.view === 'table' && view !== 'table' && tb && tb.cur && tb.specs[tb.cur.c].col) {
-    pickColumn(tb.specs[tb.cur.c].col.name);
+  const col = state.view === 'table' && view !== 'table' && tb && tb.cur ? tb.specs[tb.cur.c].col : null;
+  if (col && col.category === 'attendance') {
+    state.session = col.name;
+    if (view === 'scores') view = 'attendance';
+  } else if (col) {
+    state.column = col.name;
   }
   state.view = view;
+  rememberUi();
   renderView();
 }
 
@@ -249,36 +275,64 @@ function draftBanner(draft) {
   return box;
 }
 
-// Columns grouped by category in category_order (attendance sessions included; total columns are never listed).
+// Scores: columns grouped by category in category_order (attendance sessions included; total columns are never
+// listed). Attendance: the sessions verbatim, today's marked `· today`.
 function renderPicker() {
   const course = state.open.course;
-  const opts = [el('option', { value: '', disabled: '' }, 'Pick a column')];
-  for (const cat of course.category_order) {
-    const cols = course.columns.filter((c) => c.category === cat);
-    if (cols.length) opts.push(el('optgroup', { label: cat }, ...cols.map((c) => optionFor(c))));
+  const att = state.view === 'attendance';
+  cm.label.textContent = att ? 'Session' : 'Column';
+  cm.prev.setAttribute('aria-label', att ? 'Previous session' : 'Previous column');
+  cm.next.setAttribute('aria-label', att ? 'Next session' : 'Next column');
+  const opts = [el('option', { value: '', disabled: '' }, att ? 'Pick a session' : 'Pick a column')];
+  if (att) {
+    const today = todaySession();
+    opts.push(...sessions().map((c) => data('option', { value: c.name }, c.header + (c.name === today ? ' · today' : ''))));
+  } else {
+    for (const cat of course.category_order) {
+      const cols = course.columns.filter((c) => c.category === cat);
+      if (cols.length) opts.push(el('optgroup', { label: cat }, ...cols.map((c) => optionFor(c))));
+    }
   }
   cm.select.replaceChildren(...opts);
-  cm.select.value = state.column || '';
-  const i = columnIndex();
+  const col = currentColumn();
+  cm.select.value = col ? col.name : '';
+  const cols = viewColumns();
+  const i = cols.indexOf(col);
   cm.prev.disabled = i <= 0;
-  cm.next.disabled = i < 0 || i >= course.columns.length - 1;
+  cm.next.disabled = i < 0 || i >= cols.length - 1;
 }
 
 function optionFor(c) {
   return data('option', { value: c.name }, c.header + ' · ' + enteredCount(c.name) + '/' + state.rows.length);
 }
 
-function columnIndex() { return state.open.course.columns.findIndex((c) => c.name === state.column); }
-function currentColumn() { return state.open.course.columns[columnIndex()]; }
+// The columns ‹ › step through: the sessions on Attendance, the score columns on Scores.
+function viewColumns() {
+  const att = state.view === 'attendance';
+  return state.open.course.columns.filter((c) => (c.category === 'attendance') === att);
+}
 
+// The column of the current view: the session on Attendance, else the picked column (Scores never shows a session).
+function currentColumn() {
+  const att = state.view === 'attendance';
+  const col = state.open.course.columns.find((c) => c.name === (att ? state.session : state.column));
+  return col && (att || state.view === 'table' || col.category !== 'attendance') ? col : undefined;
+}
+
+// A session picked anywhere opens the Attendance tab with it; a score column opens Scores.
 function choose(name) {
-  pickColumn(name);
+  const col = state.open.course.columns.find((c) => c.name === name);
+  if (!col) return;
+  const att = col.category === 'attendance';
+  if (att) state.session = name; else pickColumn(name);
+  const view = att ? 'attendance' : 'scores';
+  if (state.view !== view) return setView(view);
   renderColumn();
 }
 
 function step(delta) {
-  const cols = state.open.course.columns;
-  const i = columnIndex() + delta;
+  const cols = viewColumns();
+  const i = cols.indexOf(currentColumn()) + delta;
   if (i >= 0 && i < cols.length) choose(cols[i].name);
 }
 
@@ -303,10 +357,12 @@ function rowItem(row, col, i) {
     el('span', { class: 'id' }, row.student_id), data('span', { class: 'name' }, row.name), it.sub,
     el('span', { class: 'chevron', 'aria-hidden': 'true' }, '›'));
   it.who.setAttribute('aria-label', 'Open ' + row.name + ' ' + row.student_id);
-  // Session codes are shown as written; they are entered on the Attendance tab.
-  if (col.category === 'attendance') it.value = el('span', { class: 'code' }); else scoreInput(it);
-  it.li = el('li', { class: 'row' }, it.who,
-    el('div', { class: 'cell' }, it.value, el('span', { class: 'mark', 'aria-hidden': 'true' }, '*')), it.msg);
+  // A session (Attendance tab): the code as written on line 1, the code buttons on line 2.
+  const att = col.category === 'attendance';
+  if (att) it.value = el('span', { class: 'code' }); else scoreInput(it);
+  it.li = el('li', { class: att ? 'row att' : 'row' }, it.who,
+    el('div', { class: 'cell' }, it.value, el('span', { class: 'mark', 'aria-hidden': 'true' }, '*')),
+    att ? codeButtons(it) : null, it.msg);
   refreshItem(it);
   return it;
 }
@@ -476,9 +532,13 @@ function refreshItem(it) {
 
 function fmtMax(column) { return String(Grades.round2(maxOf(column))); }
 
-// Column line, the picked option's progress and the unsaved badge.
+// Column line (Attendance: the counts line), the picked option's progress and the unsaved badge.
 function refreshCounts() {
   const col = currentColumn();
+  if (state.view === 'attendance') {
+    cm.line.textContent = col ? codeCounts(col.name) : '';
+    return refreshChrome();
+  }
   const k = col ? enteredCount(col.name) : 0;
   const total = state.rows.length;
   const max = col && col.category !== 'attendance' ? ' · max ' + fmtMax(col.name) : '';
@@ -486,6 +546,19 @@ function refreshCounts() {
   const opt = col && cm.select.selectedOptions[0];
   if (opt) opt.textContent = col.header + ' · ' + k + '/' + total;
   refreshChrome();
+}
+
+// `P n · L n · A n · X n · EA n · blank n`, unsaved values included; EA only when present.
+function codeCounts(column) {
+  const n = { P: 0, L: 0, A: 0, X: 0, EA: 0 };
+  let blank = 0;
+  for (const r of state.rows) {
+    const code = cellValue(r, column).trim();
+    if (code === '') blank += 1;
+    else if (Object.prototype.hasOwnProperty.call(n, code)) n[code] += 1;
+  }
+  return ['P', 'L', 'A', 'X'].concat(n.EA ? ['EA'] : []).map((k) => k + ' ' + n[k]).concat('blank ' + blank)
+    .join(' · ');
 }
 
 // The unsaved badge, the Save button, header line 2, the storage strip, and inputs locked while saving (S8.9).
@@ -505,6 +578,9 @@ function refreshChrome() {
   cm.headLine.textContent = state.saving && cm.working ? cm.working : 'Pushed ' + F.fmtTime(pushed, state.now) +
     ' (' + F.fmtAgo(pushed, state.now) + ')' + (j.unpulled ? ' · ' + F.plural(j.unpulled, 'edit') + ' not pulled' : '');
   cm.strip.hidden = !state.storageOff;
+  const col = currentColumn();
+  cm.fill.disabled = state.saving || !col;
+  cm.fill.replaceChildren(...(WIDE.matches && col ? ['Fill… ', data('span', {}, col.header)] : ['Fill…']));
   for (const it of cm.items.concat(det ? det.items : [])) if (it.value.tagName === 'INPUT') it.value.readOnly = state.saving;
 }
 
@@ -570,7 +646,7 @@ function renderDetail() {
   det.items = [];
   det.sections = [];
   const col = currentColumn();
-  const from = state.view === 'table' ? 'Table' : col ? col.name : 'Scores';
+  const from = state.view === 'table' ? 'Table' : col ? col.name : state.view === 'attendance' ? 'Attendance' : 'Scores';
   const back = button('‹ ' + from, closeDetail, 'btn outline det-back');
   back.setAttribute('aria-label', 'Back to ' + from);
   det.badge = el('button', { type: 'button', class: 'badge unsaved', hidden: '', onclick: openSaveSheet });
@@ -642,17 +718,51 @@ function codeButtons(it) {
     return [code, b];
   }));
   it.clearBtn = button('Clear', () => setCode(it, ''), 'btn outline');
-  const group = el('div', { class: 'codes', role: 'group' }, ...it.codes.values(), it.clearBtn);
-  group.setAttribute('aria-label', 'Attendance ' + it.col.header + ' for ' + it.row.name + ' ' + it.row.student_id);
-  return group;
+  it.group = el('div', { class: 'codes', role: 'group', tabindex: '-1' }, ...it.codes.values(), it.clearBtn);
+  it.group.setAttribute('aria-label', 'Attendance ' + it.col.header + ' for ' + it.row.name + ' ' + it.row.student_id);
+  return it.group;
 }
 
-// A code tap; tapping the code the cell already holds does nothing.
+// A code tap; tapping the code the cell already holds does nothing. On the Attendance tab a code (not Clear) moves
+// focus to the next student (S6.2). Clear stays on the student (its button is now disabled).
 function setCode(it, code) {
   if (state.saving || Grades.sameCell(code, cellValue(it.row, it.col.name))) return;
   setCell(it.row, it.col.name, code);
   changed(it.row);
   announceCommit(it);
+  if (code && it.list === cm.items) focusRow(nextRow(it, 1));
+  else if (!code) it.group.focus({ preventScroll: true });
+}
+
+// The next shown student row of the Attendance list (delta 1) or the previous one (-1).
+function nextRow(it, delta) {
+  const list = cm.items;
+  for (let i = list.indexOf(it) + delta; i >= 0 && i < list.length; i += delta) if (!list[i].li.hidden) return list[i];
+  return null;
+}
+
+// Focus on a student's code group, scrolled to the middle of the screen.
+function focusRow(it) {
+  if (!it) return;
+  it.group.focus({ preventScroll: true });
+  reveal(it.li);
+}
+
+// Attendance keys (Interface "Keyboard"): ↑ ↓ move, P L A X set the focused student's code and move down,
+// Backspace/Delete clear. Enter on the name line opens the detail (it is a button).
+function attendanceKey(e) {
+  if (state.view !== 'attendance' || e.ctrlKey || e.metaKey || e.altKey) return;
+  const it = cm.items.find((x) => x.li.contains(e.target));
+  if (!it) return;
+  const code = e.key.toUpperCase();
+  let act = null;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') act = () => focusRow(nextRow(it, e.key === 'ArrowDown' ? 1 : -1));
+  else if (CODES.some(([k]) => k === code)) act = () => setCode(it, code);
+  else if (e.key === 'Backspace' || e.key === 'Delete') act = () => setCode(it, '');
+  if (act) {
+    e.preventDefault();
+    act();
+  }
 }
 
 // The summary card, category totals and `dropped` mark, from g (a preview) or the student's grades.
@@ -742,7 +852,7 @@ function headCell(s, c) {
   const th = el('th', { role: 'columnheader', scope: 'col', 'aria-colindex': String(c + 1), class: 'c-' + s.kind });
   if (s.col) {
     th.append(el('button', { type: 'button', class: 'th-btn', 'data-col': s.col.name,
-      onclick: () => { pickColumn(s.col.name); markPicked(); } }, data('span', {}, s.col.header)));
+      onclick: () => { pickColumn(s.col.name); markPicked(); refreshChrome(); } }, data('span', {}, s.col.header)));
   } else {
     th.append(data('span', {}, s.label));
     if (s.kind === 'calc') th.append(el('span', { class: 'sr-only' }, ' (computed)'));
@@ -1033,6 +1143,109 @@ function autofocused(node) {
   return node;
 }
 
+// ---- 8. Fill Column sheet (S7): the cells go in as unsaved edits, nothing is written to Drive ----
+function openFill() {
+  const col = currentColumn();
+  if (!col || state.saving) return;
+  const att = col.category === 'attendance';
+  let mode = 'empty';
+  let value = att ? 'P' : null;  // null: no valid value typed yet
+  let plan = [];
+  const msg = el('p', { class: 'msg', id: 'fill-msg', role: 'alert' });
+  const hint = el('p', { class: 'muted' });
+  const count = el('p', { class: 'fill-count' });
+  const ea = el('p', { class: 'muted' });
+  const go = button('', () => {
+    if (!plan.length) return;
+    d.close();
+    fillColumn(col.name, plan);
+    renderView();
+    say('Filled ' + F.plural(plan.length, 'cell') + ' (unsaved)');
+  });
+  const update = () => {
+    plan = value == null ? [] : fillPlan(col.name, value, mode);
+    const eas = att && mode === 'whole'
+      ? plan.filter((t) => cellValue(state.byId.get(t.student_id), col.name).trim() === 'EA').length : 0;
+    hint.textContent = value == null && !msg.textContent ? 'Type a value, or tap ขส.' : '';
+    count.textContent = value == null ? '' : '→ ' + F.plural(plan.length, 'cell') + ' will change';
+    ea.textContent = eas ? 'Includes ' + F.plural(eas, 'EA cell') + '.' : '';
+    go.disabled = !plan.length;
+    go.textContent = value == null ? 'Fill…' : plan.length ? 'Fill ' + F.plural(plan.length, 'cell') : 'Nothing to change';
+  };
+  const radio = (m, label) => {
+    const r = el('input', { type: 'radio', name: 'fill-cells', value: m });
+    r.checked = m === mode;
+    r.addEventListener('change', () => { mode = m; update(); });
+    return el('label', { class: 'radio' }, r, label);
+  };
+  const d = dialog(el('span', {}, 'Fill ', data('span', {}, col.header)),
+    el('fieldset', { class: 'fill-cells' }, el('legend', {}, 'Cells'), radio('empty', 'Only empty cells'),
+      radio('whole', 'Whole column')),
+    att ? codeChoice() : typedValue(), msg, hint, count, ea,
+    state.search.trim() ? el('p', { class: 'muted' }, 'Fill covers all ' + F.plural(state.rows.length, 'student') +
+      ', not only the ones your search shows.') : null,
+    el('div', { class: 'sheet-actions' }, button('Cancel', () => d.close(), 'btn outline'), go));
+  update();
+  // Tapping outside the sheet closes it without changes (Esc does too, natively).
+  d.addEventListener('click', (e) => {
+    const r = d.getBoundingClientRect();
+    if (e.target === d && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) {
+      d.close();
+    }
+  });
+  const title = d.querySelector('h2');
+  title.tabIndex = -1;
+  title.focus();
+
+  // Attendance: one of P L A X Clear pressed at a time (S7.4).
+  function codeChoice() {
+    const choices = CODES.concat([['', 'Clear']]).map(([code, label]) => {
+      const b = button(code || 'Clear', () => {
+        value = code;
+        for (const [c, x] of choices) x.setAttribute('aria-pressed', String(c === value));
+        update();
+      }, code ? 'btn code-btn code-' + code : 'btn outline code-btn fill-clear');
+      b.setAttribute('aria-label', label);
+      b.setAttribute('aria-pressed', String(code === value));
+      return [code, b];
+    });
+    return el('div', { class: 'fill-row' }, el('span', { id: 'fill-vlabel' }, 'Value'),
+      el('div', { class: 'codes', role: 'group', 'aria-labelledby': 'fill-vlabel' }, ...choices.map((c) => c[1])));
+  }
+
+  // Scores: the typing rules (S3.7); a refused or blank value disables Fill.
+  function typedValue() {
+    const input = el('input', { type: 'text', id: 'fill-value', class: 'score', inputmode: 'decimal',
+      enterkeyhint: 'done', autocomplete: 'off', autocorrect: 'off', spellcheck: 'false', 'aria-describedby': 'fill-msg' });
+    const typed = () => {
+      const text = input.value;
+      const r = Grades.validateTyped(text);
+      const blank = text.trim() === '';
+      msg.textContent = blank || r.ok ? '' : refusalText(text.trim(), r.reason);
+      input.classList.toggle('refused', msg.textContent !== '');
+      value = !blank && r.ok ? r.value : null;
+      update();
+    };
+    input.addEventListener('input', typed);
+    input.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      go.click();
+    });
+    const absent = button('ขส', () => { input.value = Grades.ABSENT; typed(); }, 'btn outline');
+    absent.lang = 'th';
+    return el('div', { class: 'fill-row' }, el('label', { for: 'fill-value' }, 'Value'), input, absent);
+  }
+}
+
+// `Wed 21 Jan 2027` for a 'YYYY-MM-DD' date (edge 47).
+function longDate(iso) {
+  const d = new Date(iso + 'T00:00:00Z');
+  const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()];
+  const month = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getUTCMonth()];
+  return day + ' ' + d.getUTCDate() + ' ' + month + ' ' + d.getUTCFullYear();
+}
+
 // ---- 9. Save (S8) ----
 function openSaveSheet() {
   if (!state.edits.size || state.saving) return;
@@ -1291,7 +1504,11 @@ function applySearch() {
     it.li.hidden = !matches(it.row, state.search);
     if (!it.li.hidden) shown += 1;
   }
-  if (!currentColumn()) {
+  if (state.view === 'attendance' && !sessions().length) {
+    cm.empty.replaceChildren(el('p', {}, 'This course has no attendance sessions. Add them on the Mac, then push again.'));
+  } else if (state.view === 'attendance' && !currentColumn()) {
+    cm.empty.replaceChildren(el('p', {}, 'No session is dated today (' + longDate(today()) + '). Pick one above.'));
+  } else if (!currentColumn()) {
     cm.empty.replaceChildren(el('p', {}, 'Pick a column to enter scores.'));
   } else if (shown === 0) {
     cm.empty.replaceChildren(data('p', {}, 'No students match "' + state.search.trim() + '".'),
@@ -1310,7 +1527,9 @@ function clearSearch() {
 
 // Narrowing the window below 960 px leaves the table for column mode (S5.3).
 WIDE.addEventListener('change', () => {
-  if (cm && cm.list.isConnected && !WIDE.matches && state.view === 'table') setView('scores');
+  if (!cm || !cm.list.isConnected) return;
+  if (!WIDE.matches && state.view === 'table') setView('scores');
+  else refreshChrome();
 });
 // Esc closes the detail side panel (inputs, sheets and the picker handle their own Esc first).
 document.addEventListener('keydown', (e) => {

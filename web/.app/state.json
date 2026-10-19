@@ -57,7 +57,7 @@
       "title": "**Student detail and wide table**: tap a student for the full row with per-category weighted %, `dropped` mark, Coursework Total, Final Score and Grade, live from saved values + unsaved edits, editable there. Wide screens get the whole course table with the same marks and editing; narrow widths fall back to column mode"
     },
     {
-      "status": "todo",
+      "status": "passed",
       "attempts": 0,
       "id": "T9",
       "title": "**Attendance and Fill**: session column with today preselected, P/L/A/X taps that move to the next student, `EA` shown and kept, no session add/rename/remove, never touching the xlsx. Fill: whole column or only empty cells (unsaved values count as filled), \"N cells will change\", 0 does nothing, validation, attendance choices P/L/A/X/Clear"
