@@ -68,6 +68,54 @@ function gwGrades(Csv) {
     return 'F';
   }
 
+  // The letter scale, highest first; F is never a key (SPEC_grade_order.md D1).
+  const GRADE_SCALE = ['A', 'B+', 'B', 'C+', 'C', 'D+', 'D'];
+  const byText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+  // The letters of a saved boundaries map in scale order, whatever its key order (key order doesn't survive the trip
+  // to the browser). A letter outside the scale goes before the first letter with a lower saved threshold.
+  function gradeOrder(saved) {
+    const keys = Object.keys(saved || {});
+    const order = GRADE_SCALE.filter((g) => keys.includes(g));
+    const unknown = keys.filter((k) => !GRADE_SCALE.includes(k)).sort((a, b) => saved[b] - saved[a] || byText(a, b));
+    for (const u of unknown) {
+      const i = order.findIndex((g) => saved[g] < saved[u]);
+      order.splice(i < 0 ? order.length : i, 0, u);
+    }
+    return order;
+  }
+
+  // Each letter's interval as grade-tui writes it, then F: [{letter, text}]. values must descend along order.
+  function gradeRanges(order, values) {
+    const out = order.map((g, i) => ({
+      letter: g, text: i === 0 ? 'X ≥ ' + values[g] : values[g] + ' ≤ X < ' + values[order[i - 1]],
+    }));
+    out.push({ letter: 'F', text: order.length ? 'X < ' + values[order[order.length - 1]] : '' });
+    return out;
+  }
+
+  // Students per letter (order, then F): [{letter, count, pct}].
+  function distribution(grades, order) {
+    const counts = new Map();
+    for (const g of grades) counts.set(g.grade, (counts.get(g.grade) || 0) + 1);
+    const n = grades.length;
+    return order.concat('F').map((letter) => {
+      const count = counts.get(letter) || 0;
+      return { letter, count, pct: n ? (count / n) * 100 : 0 };
+    });
+  }
+
+  // grade-tui's grade_color_for as a class suffix: a, bp, b, cp, c, dp, d, f.
+  function gradeClass(letter) {
+    const g = String(letter == null ? '' : letter).trim();
+    if (g.startsWith('A')) return 'a';
+    for (const L of ['B', 'C', 'D']) {
+      if (g === L + '+') return L.toLowerCase() + 'p';
+      if (g.startsWith(L)) return L.toLowerCase();
+    }
+    return 'f';
+  }
+
   // Rows in Raw Details order: every Student ID of the roster and the pushed files (blank IDs and a legacy
   // sentinel first row skipped), sorted as text. Name = the first non-empty one, roster first.
   // cells holds the counted columns' texts as written; a student without a row in a file has none.
@@ -222,7 +270,8 @@ function gwGrades(Csv) {
 
   return {
     ABSENT, CODE_VALUE, classify, sameCell, canonicalValue, validateTyped, round2, letterGrade, mergeCourse,
-    fillDefaultMax, computeGrades, sessionDate, fillTargets,
+    fillDefaultMax, computeGrades, sessionDate, fillTargets, GRADE_SCALE, gradeOrder, gradeRanges, distribution,
+    gradeClass,
   };
 }
 if (typeof module !== 'undefined') module.exports = (Csv) => gwGrades(Csv || require('./csv.js')());

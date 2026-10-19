@@ -138,8 +138,10 @@ unchanged from the Mac.
   on weights the web may change (ADR 003).
 - `columns` lists every counted column found in a pushed file, in Raw Details order (category order, then
   `data_mapping` order). Only these columns can be edited. `total …` columns are never listed.
-- A web config save rewrites only `weights` or `grade_boundaries`. Boundaries keep their stored letter order, which
-  `planConfig` requires to be strictly descending (it refuses rather than re-sorts).
+- A web config save rewrites only `weights` or `grade_boundaries`. Boundaries are read and written in scale order
+  (`A, B+, B, C+, C, D+, D`; `Grades.gradeOrder`, `../SPEC_grade_order.md`), never in key order: the key order of
+  course.json doesn't survive `google.script.run`. `planConfig` requires them strictly descending in that order (it
+  refuses rather than re-sorts the values).
 
 ### push.json (fake example)
 ```json
@@ -363,9 +365,10 @@ Undo while unsaved edits exist (S9.4).
 ### Config save (`saveConfig`)
 `save.planConfig`: every value must be non-empty and parse as a finite number ≥ 0 (else `INVALID` with `field` = the
 key, S10.3; the same reasons as the client: not a number, comma, negative, empty). The key set must equal the current
-one (no new letters or categories, S10.4). For `grade_boundaries`, the values must be **strictly descending in the
-stored letter order** (A > B+ > B …). Otherwise `INVALID` with `field` = the first letter whose value isn't lower
-than the letter above it. The server never re-sorts, so the letters keep their meaning and order (S10.4).
+one (no new letters or categories, S10.4). For `grade_boundaries`, the values must be **strictly descending in scale
+order** (`Grades.gradeOrder`: A > B+ > B …; a letter outside the scale goes by its saved value). Otherwise `INVALID`
+with `field` = the first letter whose value isn't lower than the letter above it. The server writes the letters in
+that order and never re-sorts the values, so the letters keep their meaning (S10.4).
 `original` must deep-equal the current `course.json[part]` (else `STALE_CONFIG` with `current`, nothing written,
 S10.5). A weights sum ≠ 1 is **not** an error: the reply carries `warning: "weights sum to 1.05"` and the save goes
 through (S10.2, edge 45). The write follows
@@ -1122,21 +1125,30 @@ reloading the tab triggers the browser's own `beforeunload` prompt where support
 │ [ Reset ]               [ Save weights ] │
 ├──────────────────────────────────────────┤
 │ Grade boundaries (highest first)         │
-│   A               [ 80    ]              │
-│   B+              [ 75    ]              │
-│   B               [ 70    ]              │
-│   C+              [ 65    ]              │
-│   C               [ 60    ]              │
-│   D+              [ 55    ]              │
-│   D               [ 50    ]              │
-│   F               below 50               │
+│   A  X ≥ 80           [ 80    ]          │
+│   B+ 75 ≤ X < 80      [ 75    ]          │
+│   B  70 ≤ X < 75      [ 70    ]          │
+│   C+ 65 ≤ X < 70      [ 65    ]          │
+│   C  60 ≤ X < 65      [ 60    ]          │
+│   D+ 55 ≤ X < 60      [ 55    ]          │
+│   D  50 ≤ X < 55      [ 50    ]          │
+│   F  X < 50                              │
 │ [ Reset ]          [ Save boundaries ]   │
+├──────────────────────────────────────────┤
+│ Grade distribution (preview)             │
+│   A   ▇▇▇▇▇▇░░░░        2 (22.2%)        │
+│   …                                      │
+│   F   ▇▇▇▇▇▇▇▇▇▇        4 (44.4%)        │
 ├──────────────────────────────────────────┤
 │ Undo last save doesn't cover weights or  │
 │ boundaries: change them back here.       │
 └──────────────────────────────────────────┘
 ```
-- Labels are the keys verbatim (category keys in `category_order`, letters in stored order). No control adds or
+- Labels are the keys verbatim (category keys in `category_order`, letters in scale order: `Grades.gradeOrder`).
+  Each letter shows its interval under it (`70 ≤ X < 75`; `—` while a field is refused), and letters are coloured
+  as in grade-tui (`--grade-*` tokens). The Grade distribution (count and % per letter, then F) follows the saved
+  values plus unsaved edits, or the typed weights/boundaries with a `(preview)` tag. See `../SPEC_grade_order.md`.
+  No control adds or
   removes a key (S10.4). Inputs `inputmode="decimal"`. Changed fields show `*`.
 - Sum line: `Weights sum to 1` (muted) when it equals 1, else `⚠ weights sum to 1.05` (warning colour). Save stays
   enabled (S10.2).
@@ -1819,7 +1831,7 @@ Shared helper `web/tests/helpers.js`: load a golden file, read the fixture CSV t
 | `journal.test.js` (T5, T7) | `journal contract matches expected.json` (every journal file). `edge29 bad line numbers` (`truncated.jsonl` → `[3]`). `ac2_1 summary counts unpulled and last save` (`seven_lines` + `archive_pull_4` → 3 unpulled, last 09:45). `trim removes only archived keys` (other lines, invalid lines byte-identical; idempotent). `edge17 conflictCopies` (`web_edits (1).jsonl`, `9_ฟิสิกส์จำลอง_homework (1).csv`, two same names; `notes (1).txt` that isn't an expected file → not reported). `ac9_5 undoTarget newest first` (`undo_batches`: B undone → target A; config batch and older-push batch never offered; undo batches never offered). `ac9_3 undoTarget none after pull` → null. `cellLines and configLine shape` (fields of SPEC "Journal", `seq` 0-based, `student_id` text, `ensure_ascii` off) |
 | `save.test.js` (T7) | `ac8_1 planSave three cells in two files` (F1: hw2 ×2, midterm_exam ×1 → 3 changes, 2 files, one batch). `ac8_2 stale original is a conflict` (Drive `7`, edit original blank → `changed`, `now` 7; nothing spliced for it). `ac8_3 retry is all already` (plan again on the spliced texts → 0 changes, 3 `already`, no lines). `edge6 duplicate ID sets every row` (`duplicate_ids.csv`). `edge38 missing student or column is not found`. `invalid value is refused server-side`. `ac9_1 planUndo inverts the batch` (value ↔ original, `undoes` set). `ac9_2 planUndo skips a cell changed since` (one reverted, one conflict). `ac6_5 attendance P and A spliced` (F1 `20 Jan 2027`; `EA` cell untouched, S6.3). `from_web.jsonl is what save writes` (fixed clock and batch id) |
 | `fill.test.js` (T9) | `ac7_1 only empty cells counts 2` (hw2 = overlay `9`, blank, blank; value `0`). `ac7_2 whole column counts 3` (value `10`; a cell already `10` not counted). `ac7_3 unsaved value counts as filled` (`9900000002` overlay `7`). `ac7_5 zero targets`. `ac7_4 fill value validated` (`8,5`, `-1`, `abc` refused). `ac6_6 fill P then one A gives 3 unsaved` (whole column `P` → 3 targets; then `A` for one student → overlay has 2 `P` + 1 `A`). `ac6_1 sessionDate and today's session` (`20 Jan 2027` on 2027-01-20 → preselected; 2027-01-21 → none; `a1` → no date) |
-| `config.test.js` (T10) | `ac10_2 sum warning` (`weights sum to 1.05`, save allowed). `ac10_3 not a number names the field` (`0.2x` → `INVALID`, field `homework`; also `0,25`, `-1`, empty). `ac10_4 boundaries strictly descending in stored order` (A 78 accepted, order kept; B+ 81 → `INVALID` field `B+`; never re-sorted). `ac10_4 key set fixed` (extra letter/category refused, missing key refused). `ac10_5 stale original refused` (`STALE_CONFIG` with `current`). `ac10_1 new course.json changes only the part` + one `config` line with old and new values |
+| `config.test.js` (T10) | `ac10_2 sum warning` (`weights sum to 1.05`, save allowed). `ac10_3 not a number names the field` (`0.2x` → `INVALID`, field `homework`; also `0,25`, `-1`, empty). `ac10_4 boundaries strictly descending in scale order` (A 78 accepted, order kept; B+ 81 → `INVALID` field `B+`; values never re-sorted). `ac10_4 key order of the stored boundaries does not matter` (the phone's A, B, C, D, D+, C+, B+ order accepted and written in scale order; B+ 69 → field `B`). `ac10_4 key set fixed` (extra letter/category refused, missing key refused). `ac10_5 stale original refused` (`STALE_CONFIG` with `current`). `ac10_1 new course.json changes only the part` + one `config` line with old and new values |
 
 ### Layer 1b: server harness (`server.test.js`, T5/T7/T9/T10)
 `web/tests/gas_fake.js` loads `web/apps_script/*.js` into one `node:vm` context (the Apps Script global scope) with

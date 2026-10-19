@@ -290,10 +290,11 @@ window.addEventListener('beforeunload', (e) => {
 // ---- Grading: weights and boundaries (S10). Undo last save doesn't cover them ----
 const CONFIG_PARTS = ['weights', 'grade_boundaries'];
 
-// The keys in the order shown: categories in category_order, letters in their stored order (never re-sorted).
+// The keys in the order shown: categories in category_order, letters in scale order (Grades.gradeOrder; the key
+// order of course.json doesn't survive google.script.run).
 function configKeys(part) {
   const values = state.open.course[part];
-  return part === 'weights' ? state.open.course.category_order.filter((k) => k in values) : Object.keys(values);
+  return part === 'weights' ? state.open.course.category_order.filter((k) => k in values) : Grades.gradeOrder(values);
 }
 
 // The form of a part: the texts as typed, else the course values as course.json holds them (`0.25`).
@@ -316,16 +317,16 @@ function formChanged(part) {
   return !!state.forms[part] && configKeys(part).some((k) => configChanged(part, k));
 }
 
-// The same checks the server makes (save.configProblems): [{field, reason, upper?}] in the stored key order.
+// The same checks the server makes (save.configProblems): [{field, reason, upper?}] in the order shown.
 function configProblems(part) {
-  return Save.configProblems(part, Object.keys(state.open.course[part]), configForm(part));
+  return Save.configProblems(part, configKeys(part), configForm(part));
 }
 
 // The form as numbers, or null while a field is refused.
 function configValues(part) {
   if (configProblems(part).length) return null;
   const form = configForm(part);
-  return Object.fromEntries(Object.keys(state.open.course[part]).map((k) => [k, Save.configNumber(form[k]).value]));
+  return Object.fromEntries(configKeys(part).map((k) => [k, Save.configNumber(form[k]).value]));
 }
 
 // Copy table cfg.nan / cfg.comma / cfg.negative / cfg.empty / cfg.order.
@@ -347,6 +348,21 @@ function gradeChanges(part, values) {
   const next = Grades.computeGrades(course, state.rows, Array.from(state.edits.values()));
   return next.map((g, i) => ({ row: state.rows[i], from: state.grades[i].grade, to: g.grade }))
     .filter((c) => c.from !== c.to);
+}
+
+// The Grading tab's distribution (SPEC_grade_order D4): {rows: [{letter, count, pct}], preview}. Over the grades
+// shown, or, while a form holds changed valid values, with those values in place (preview).
+function gradeDistribution() {
+  let course = state.open.course;
+  let preview = false;
+  for (const part of CONFIG_PARTS) {
+    const values = formChanged(part) && configValues(part);
+    if (!values) continue;
+    course = Object.assign({}, course, { [part]: values });
+    preview = true;
+  }
+  const grades = preview ? Grades.computeGrades(course, state.rows, Array.from(state.edits.values())) : state.grades;
+  return { rows: Grades.distribution(grades, configKeys('grade_boundaries')), preview };
 }
 
 // A part as Drive now holds it: maxima derived from weights, totals and grades follow (ADR 003).

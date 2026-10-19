@@ -4,8 +4,9 @@ View and edit grade_dashboard courses from an iPhone or any browser. A Google Ap
 account reads course copies in `My Drive/grade_web/<course>/`. `grader web-push` puts a course there, and
 `grader web-pull` brings the web edits back to the Mac copy (the master). The design is in `SPEC.md`.
 
-Status: the web app lists the pushed courses (name, term, push time, edits not pulled) and opens a course read-only,
-with its totals and grades. Editing and saving come next.
+Status: the web app lists the pushed courses, edits scores and attendance (column mode, wide table, Fill Column),
+saves them with undo, and edits weights and grade boundaries on the Grading tab, with each letter's interval and
+grade-tui's grade distribution and colours (`../SPEC_grade_order.md`).
 
 The web app is 10 files in `apps_script/`, pushed as they are (no build step):
 
@@ -54,7 +55,12 @@ After a code change, push and update the **same** deployment so the URL stays th
 clasp push --force
 clasp list-deployments                              # the ID next to "@<number> - grade_web" (not @HEAD)
 clasp update-deployment <that deployment ID> --description "grade_web"
+clasp list-deployments                              # must now show the new @<number>
 ```
+
+With clasp 3.4.1, `update-deployment` without `-V` can create the new version (it prints `Redeployed … @N`) and
+leave the deployment on the old one. If `list-deployments` still shows the old number, run
+`clasp update-deployment <that deployment ID> -V <N> --description "grade_web"`.
 
 Keep the deployment ID and the URL out of the repo.
 

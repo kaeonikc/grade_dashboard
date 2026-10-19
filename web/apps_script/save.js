@@ -80,8 +80,9 @@ function gwSave(Csv, Grades) {
     return { ok: false, reason: r.reason === 'other' ? 'nan' : r.reason };
   }
 
-  // Every problem of a form, in the stored key order: {field, reason} from configNumber, or for boundaries
-  // {field, reason: 'order', upper} when a letter isn't lower than the nearest valid letter above it (S10.4).
+  // Every problem of a form, in the given key order (boundaries: Grades.gradeOrder): {field, reason} from configNumber,
+  // or for boundaries {field, reason: 'order', upper} when a letter isn't lower than the nearest valid letter above it
+  // (S10.4).
   function configProblems(part, keys, form) {
     const problems = [];
     let above = null;
@@ -122,13 +123,13 @@ function gwSave(Csv, Grades) {
   // Refusals: STALE_CONFIG with `current` when Drive changed since the form was loaded (checked first, so the
   // teacher sees the Drive values), INVALID with `field` and `reason` ('part', 'keys', configNumber's, or 'order' with `upper`).
   // Success: {ok, course: a new course.json with only `part` replaced, value: {key: number} in the stored key
-  // order (never re-sorted), warning}.
+  // order for weights and in scale order (Grades.gradeOrder) for boundaries, warning}.
   function planConfig(course, part, value, original) {
     const invalid = (field, reason) => ({ ok: false, code: 'INVALID', field, reason });
     if (PARTS.indexOf(part) < 0 || !course[part]) return invalid('part', 'part');
     const current = course[part];
     if (!sameConfig(original, current)) return { ok: false, code: 'STALE_CONFIG', current };
-    const keys = Object.keys(current);
+    const keys = part === 'grade_boundaries' ? Grades.gradeOrder(current) : Object.keys(current);
     const extra = Object.keys(value || {}).find((k) => keys.indexOf(k) < 0);
     const missing = keys.find((k) => !Object.prototype.hasOwnProperty.call(value || {}, k));
     if (extra !== undefined || missing !== undefined) return invalid(extra !== undefined ? extra : missing, 'keys');

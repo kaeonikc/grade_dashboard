@@ -778,7 +778,7 @@ function refreshSummary(g) {
   const n = editCount(det.row);
   det.card.replaceChildren(
     el('p', { class: 'det-big' }, el('span', {}, 'Final Score ', el('strong', {}, grades.final_score)),
-      el('span', {}, 'Grade ', el('strong', {}, grades.grade))),
+      el('span', {}, 'Grade ', el('strong', { class: gradeCls(grades.grade) }, grades.grade))),
     el('p', {}, 'Coursework Total ' + (grades.coursework_total || 0)));
   if (n) det.card.append(el('p', { class: 'unsaved' }, 'Includes ' + F.plural(n, 'unsaved edit')));
   for (const s of det.sections) s.total.textContent = grades.pct[s.cat] + ' of ' + s.of;
@@ -910,6 +910,7 @@ function paintCell(rec, s, td, g) {
     if (THAI.test(row.name)) td.lang = 'th';
   } else if (s.kind === 'calc') {
     td.textContent = s.cat ? g.pct[s.cat] : s.key === 'coursework_total' ? g.coursework_total || 0 : g[s.key];
+    if (s.key === 'grade') td.replaceChildren(el('span', { class: gradeCls(g.grade) }, g.grade));
   } else if (!(tb.edit && tb.edit.td === td)) {
     const name = s.col.name;
     const value = cellValue(row, name);
@@ -1470,10 +1471,38 @@ let cfg = null;  // the Grading tab: per part, its fields, sum and preview lines
 
 function renderGrading() {
   cfg = {};
-  cm.grading.replaceChildren(...CONFIG_PARTS.map(configSection),
+  cm.grading.replaceChildren(...CONFIG_PARTS.map(configSection), distSection(),
     el('p', { class: 'muted' }, "Undo last save doesn't cover weights or boundaries: change them back here."));
   for (const part of CONFIG_PARTS) refreshConfig(part);
 }
+
+// grade-tui's Letter Grade Distribution (SPEC_grade_order D4): a bar and `6 (15.0%)` per letter, scale order then F.
+function distSection() {
+  const tag = el('span', { class: 'tag-preview', hidden: '' }, '(preview)');
+  const list = el('ul', { class: 'dist' });
+  cfg.dist = { tag, list };
+  return el('section', { class: 'cfg', 'aria-labelledby': 'cfg-dist' },
+    el('h2', { id: 'cfg-dist' }, 'Grade distribution', tag), list);
+}
+
+function refreshDistribution() {
+  const d = cfg && cfg.dist;
+  if (!d) return;
+  const { rows, preview } = gradeDistribution();
+  d.tag.hidden = !preview;
+  const top = Math.max(0, ...rows.map((r) => r.count));
+  if (!top) return d.list.replaceChildren(el('li', { class: 'muted' }, 'No students yet.'));
+  d.list.replaceChildren(...rows.map((r) => {
+    const cls = gradeCls(r.letter);
+    return el('li', {}, el('span', { class: 'letter ' + cls }, r.letter),
+      el('span', { class: 'bar', 'aria-hidden': 'true' },
+        el('span', { class: cls, style: 'width: ' + (r.count / top) * 100 + '%' })),
+      el('span', { class: 'count' }, r.count + ' (' + r.pct.toFixed(1) + '%)'));
+  }));
+}
+
+// The colour class of a letter (grade-tui's grade_color_for).
+function gradeCls(letter) { return 'g-' + Grades.gradeClass(letter); }
 
 // One form: a labelled input per key (no control adds or removes a key, S10.4), its checks, Reset and Save.
 function configSection(part) {
@@ -1491,14 +1520,18 @@ function configSection(part) {
       refreshConfig(part);
     });
     const msg = el('p', { class: 'msg', id: id + '-msg' });
-    const li = el('li', { class: 'row' }, data('label', { for: id }, key),
+    const range = weights ? null : el('span', { class: 'range' });
+    const label = weights ? data('label', { for: id }, key) : el('span', { class: 'cfg-key' },
+      data('label', { for: id, class: 'letter ' + gradeCls(key) }, key), range);
+    const li = el('li', { class: 'row' }, label,
       el('span', { class: 'cell' }, input, el('span', { class: 'mark', 'aria-hidden': 'true' }, '*')), msg);
-    c.fields.push({ key, input, msg, li });
+    c.fields.push({ key, input, msg, li, range });
     return li;
   });
   if (!weights) {
-    c.lowest = el('span', { class: 'muted' });
-    rows.push(el('li', { class: 'row' }, el('span', {}, 'F'), c.lowest));
+    c.lowest = el('span', { class: 'range' });
+    rows.push(el('li', { class: 'row' }, el('span', { class: 'cfg-key' },
+      el('span', { class: 'letter ' + gradeCls('F') }, 'F'), c.lowest)));
   }
   c.sum = weights ? el('p', {}) : null;
   c.preview = el('div', { class: 'cfg-preview' });
@@ -1527,8 +1560,11 @@ function refreshConfig(part) {
   }
   const values = problems.size ? null : configValues(part);
   if (c.lowest) {
-    const typed = c.fields.map((f) => Save.configNumber(form[f.key])).filter((n) => n.ok).map((n) => n.value);
-    c.lowest.textContent = 'below ' + Math.min(...(typed.length ? typed : Object.values(state.open.course[part])));
+    // Each letter's interval (`70 ≤ X < 75`), `—` while a field is refused.
+    const ranges = values ? Grades.gradeRanges(configKeys(part), values) : [];
+    const text = (letter) => (ranges.find((r) => r.letter === letter) || { text: '—' }).text;
+    for (const f of c.fields) f.range.textContent = text(f.key);
+    c.lowest.textContent = text('F');
   }
   if (c.sum) {
     const warning = values && Save.sumWarning(values);
@@ -1541,6 +1577,7 @@ function refreshConfig(part) {
   c.reset.disabled = state.saving || !changed;
   c.save.disabled = state.saving || !changed || problems.size > 0;
   c.save.textContent = state.saving && c.working ? c.working : part === 'weights' ? 'Save weights' : 'Save boundaries';
+  refreshDistribution();
 }
 
 // `With these weights {n} grades change.` (▸ lists `{id} {name}: B → B+`) or `No grade changes.`
@@ -1551,7 +1588,7 @@ function previewLines(part, values) {
     (changes.length === 1 ? '1 grade changes.' : changes.length + ' grades change.');
   return [el('details', {}, el('summary', {}, text), el('ul', { class: 'cell-lines' }, ...changes.map((ch) =>
     el('li', {}, el('span', { class: 'id' }, ch.row.student_id), ' ', data('span', {}, ch.row.name),
-      ': ' + ch.from + ' → ' + ch.to))))];
+      ': ', el('span', { class: gradeCls(ch.from) }, ch.from), ' → ', el('span', { class: gradeCls(ch.to) }, ch.to)))))];
 }
 
 function doSaveConfig(part) {
@@ -1582,7 +1619,8 @@ function doSaveConfig(part) {
 
 // Another device saved this part after the page loaded (S10.5): nothing was written; the teacher picks.
 function configStale(part, current) {
-  const keys = part === 'weights' ? state.open.course.category_order.filter((k) => k in current) : Object.keys(current);
+  const keys = part === 'weights' ? state.open.course.category_order.filter((k) => k in current)
+    : Grades.gradeOrder(current);
   const done = (apply) => () => {
     cm.alert.replaceChildren();
     apply();

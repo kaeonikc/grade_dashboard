@@ -179,6 +179,68 @@ test('letterGrade uses sorted thresholds', () => {
   assert.strictEqual(G.letterGrade(85, unordered), 'A');
 });
 
+// SPEC_grade_order.md: scale order, intervals, distribution and colour classes.
+const B_SCALE = ['A', 'B+', 'B', 'C+', 'C', 'D+', 'D'];
+const B_DEFAULT = { A: 80, 'B+': 75, B: 70, 'C+': 65, C: 60, 'D+': 55, D: 50 };
+const reorder = (o, keys) => Object.fromEntries(keys.map((k) => [k, o[k]]));
+
+test('gradeOrder ignores key order', () => {
+  const G = H.Grades();
+  const seen = reorder(B_DEFAULT, ['A', 'B', 'C', 'D', 'D+', 'C+', 'B+']); // the order the phone showed
+  assert.deepStrictEqual(G.gradeOrder(seen), B_SCALE);
+  assert.deepStrictEqual(G.gradeOrder(reorder(B_DEFAULT, Object.keys(B_DEFAULT).sort())), B_SCALE);
+  assert.deepStrictEqual(G.gradeOrder(B_DEFAULT), B_SCALE);
+  assert.deepStrictEqual(G.gradeOrder({ A: 80 }), ['A']);
+  assert.deepStrictEqual(G.gradeOrder({}), []);
+});
+
+test('gradeOrder places unknown letters by saved value', () => {
+  const G = H.Grades();
+  assert.deepStrictEqual(G.gradeOrder(Object.assign({ 'A+': 85 }, B_DEFAULT)), ['A+'].concat(B_SCALE));
+  assert.deepStrictEqual(G.gradeOrder(Object.assign({ E: 0 }, B_DEFAULT)), B_SCALE.concat('E'));
+  assert.deepStrictEqual(G.gradeOrder({ D: 50, X: 72, A: 80, B: 70 }), ['A', 'X', 'B', 'D']);
+  assert.deepStrictEqual(G.gradeOrder({ Z: 60, Y: 60, A: 80 }), ['A', 'Y', 'Z'], 'ties by key text');
+});
+
+test('gradeRanges are half-open intervals', () => {
+  const G = H.Grades();
+  const text = (b) => G.gradeRanges(G.gradeOrder(b), b).map((r) => r.letter + ' ' + r.text);
+  assert.deepStrictEqual(text(B_DEFAULT), ['A X ≥ 80', 'B+ 75 ≤ X < 80', 'B 70 ≤ X < 75', 'C+ 65 ≤ X < 70',
+    'C 60 ≤ X < 65', 'D+ 55 ≤ X < 60', 'D 50 ≤ X < 55', 'F X < 50']);
+  const half = text(Object.assign({}, B_DEFAULT, { 'B+': 74.5 }));
+  assert.strictEqual(half[1], 'B+ 74.5 ≤ X < 80');
+  assert.strictEqual(half[2], 'B 70 ≤ X < 74.5');
+  assert.deepStrictEqual(text({ A: 80 }), ['A X ≥ 80', 'F X < 80']);
+});
+
+test('letterGrade agrees with the intervals at their edges', () => {
+  const G = H.Grades();
+  const cases = [[69.9, 'C+'], [70, 'B'], [70.1, 'B'], [74.5, 'B'], [74.99, 'B'], [75, 'B+'], [80, 'A'], [49.9, 'F']];
+  for (const [x, g] of cases) assert.strictEqual(G.letterGrade(x, B_DEFAULT), g, String(x));
+});
+
+test('distribution counts every row in scale order then F', () => {
+  const G = H.Grades();
+  for (const name of [H.F1, H.F2, H.F3, H.F4]) {
+    const g = H.loadGolden(name);
+    const order = G.gradeOrder(g.course.grade_boundaries);
+    const rows = G.distribution(g.expected, order);
+    assert.deepStrictEqual(rows.map((r) => r.letter), order.concat('F'), name);
+    assert.strictEqual(rows.reduce((s, r) => s + r.count, 0), g.expected.length, name);
+    for (const r of rows) {
+      assert.strictEqual(r.count, g.expected.filter((e) => e.grade === r.letter).length, name + ' ' + r.letter);
+      assert.strictEqual(r.pct, (r.count / g.expected.length) * 100);
+    }
+  }
+  assert.deepStrictEqual(G.distribution([], ['A']), [{ letter: 'A', count: 0, pct: 0 }, { letter: 'F', count: 0, pct: 0 }]);
+});
+
+test('gradeClass mirrors grade_color_for', () => {
+  const G = H.Grades();
+  const want = { A: 'a', 'A+': 'a', 'B+': 'bp', B: 'b', 'C+': 'cp', C: 'c', 'D+': 'dp', D: 'd', F: 'f', E: 'f', '': 'f' };
+  for (const k of Object.keys(want)) assert.strictEqual(G.gradeClass(k), want[k], k);
+});
+
 test('fillDefaultMax uses current weights', () => {
   const G = H.Grades();
   const c = H.courseOf(H.F3);

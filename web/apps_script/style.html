@@ -3,12 +3,17 @@
   :root {
     --bg: #ffffff; --bg2: #f4f5f7; --text: #1b1b1f; --muted: #5b5e66; --accent: #1558b0; --on-accent: #ffffff;
     --danger: #b3261e; --mark: #8a5a00; --line: #d5d7dd; --unsaved-bg: #fff1c2;
+    /* Grade colours: grade-tui's hues, each >= 4.5:1 on --bg and --bg2 (tests/style.test.js) */
+    --grade-a: #0b5cad; --grade-bp: #00777a; --grade-b: #2d7a12; --grade-cp: #5a7000;
+    --grade-c: #806600; --grade-dp: #9a5b00; --grade-d: #b34700; --grade-f: #b3261e;
     color-scheme: light dark;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #121316; --bg2: #1c1d21; --text: #ececf0; --muted: #a9abb3; --accent: #8ab4f8; --on-accent: #0b1b33;
       --danger: #ff8a80; --mark: #f2c14e; --line: #3a3c42; --unsaved-bg: #3d3214;
+      --grade-a: #7ab8ff; --grade-bp: #4fd1d1; --grade-b: #8fdc5a; --grade-cp: #c6e04a;
+      --grade-c: #f2e14a; --grade-dp: #ffc24d; --grade-d: #ff9a4d; --grade-f: #ff8a80;
     }
   }
   * { box-sizing: border-box; }
@@ -108,6 +113,22 @@
   .cfg h2 { font-size: 1.125rem; margin: 1rem 0 0; }
   .cfg-preview summary { min-height: 2.75rem; padding-top: 0.5rem; cursor: pointer; }
   .cfg-preview p { margin: 0.5rem 0 0; }
+  .cfg-key { display: flex; flex-direction: column; }
+  .cfg-key .letter { font-weight: 700; }
+  .range { color: var(--muted); font-size: 0.875rem; font-variant-numeric: tabular-nums; }
+  .dist { list-style: none; margin: 0.5rem 0 0; padding: 0; }
+  .dist li {
+    display: grid; grid-template-columns: 2.5rem 1fr 7.5rem; align-items: center; column-gap: 0.75rem;
+    padding: 0.25rem 0; font-variant-numeric: tabular-nums;
+  }
+  .dist .count { text-align: right; }
+  .dist .letter { font-weight: 700; }
+  .dist .bar { height: 0.875rem; border-radius: 0.25rem; background: var(--bg2); overflow: hidden; }
+  .dist .bar span { display: block; height: 100%; background: currentColor; }
+  .tag-preview { margin-left: 0.5rem; font-size: 0.875rem; font-weight: 400; color: var(--mark); }
+  .g-a { color: var(--grade-a); } .g-bp { color: var(--grade-bp); } .g-b { color: var(--grade-b); }
+  .g-cp { color: var(--grade-cp); } .g-c { color: var(--grade-c); } .g-dp { color: var(--grade-dp); }
+  .g-d { color: var(--grade-d); } .g-f { color: var(--grade-f); }
   .rows { list-style: none; margin: 0; padding: 0; }
   .row {
     display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: 0.75rem;

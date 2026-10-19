@@ -48,17 +48,31 @@ test('ac10_3 not a number names the field', () => {
   assert.deepStrictEqual({ code: rb.code, field: rb.field }, { code: 'INVALID', field: 'C' });
 });
 
-test('ac10_4 boundaries strictly descending in stored order', () => {
+test('ac10_4 boundaries strictly descending in scale order', () => {
   const S = H.Save();
   const course = H.courseOf(H.F1);
   const ok = S.planConfig(course, 'grade_boundaries', typed(Object.assign({}, B0, { A: 78 })), B0);
   assert.strictEqual(ok.ok, true);
   assert.deepStrictEqual(Object.keys(ok.course.grade_boundaries), Object.keys(B0));
+  assert.deepStrictEqual(Object.keys(ok.value), Object.keys(B0));
   assert.strictEqual(ok.course.grade_boundaries.A, 78);
   const up = S.planConfig(course, 'grade_boundaries', typed(Object.assign({}, B0, { 'B+': 81 })), B0);
   assert.deepStrictEqual({ ok: up.ok, code: up.code, field: up.field }, { ok: false, code: 'INVALID', field: 'B+' });
   const eq = S.planConfig(course, 'grade_boundaries', typed(Object.assign({}, B0, { C: 65 })), B0);
   assert.deepStrictEqual({ code: eq.code, field: eq.field }, { code: 'INVALID', field: 'C' });
+});
+
+test('ac10_4 key order of the stored boundaries does not matter', () => {
+  const S = H.Save();
+  const seen = Object.fromEntries(['A', 'B', 'C', 'D', 'D+', 'C+', 'B+'].map((k) => [k, B0[k]])); // the phone's order
+  const course = Object.assign(H.courseOf(H.F1), { grade_boundaries: seen });
+  const same = S.planConfig(course, 'grade_boundaries', typed(seen), seen);
+  assert.strictEqual(same.ok, true, 'plus grades are not refused');
+  assert.deepStrictEqual(Object.keys(same.course.grade_boundaries), Object.keys(B0), 'written in scale order');
+  assert.deepStrictEqual(S.configProblems('grade_boundaries', H.Grades().gradeOrder(seen), typed(seen)), []);
+  const low = S.planConfig(course, 'grade_boundaries', typed(Object.assign({}, seen, { 'B+': 69 })), seen);
+  assert.deepStrictEqual({ code: low.code, field: low.field, reason: low.reason, upper: low.upper },
+    { code: 'INVALID', field: 'B', reason: 'order', upper: 'B+' });
 });
 
 test('ac10_4 key set fixed', () => {
