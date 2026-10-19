@@ -48,3 +48,21 @@ function readText_(file) {
 function writeText_(file, text) {
   file.setContent(text);
 }
+
+// The marker of a save in progress (SPEC "Saving" step 3), kept in ScriptProperties under the folder's id.
+function pendingKey_(folder) {
+  return 'pending:' + folder.getId();
+}
+
+function getPending_(folder) {
+  const value = PropertiesService.getScriptProperties().getProperty(pendingKey_(folder));
+  return value ? JSON.parse(value) : null;
+}
+
+function setPending_(folder, marker) {
+  PropertiesService.getScriptProperties().setProperty(pendingKey_(folder), JSON.stringify(marker));
+}
+
+function clearPending_(folder) {
+  PropertiesService.getScriptProperties().deleteProperty(pendingKey_(folder));
+}

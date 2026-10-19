@@ -93,6 +93,23 @@ function gwJournal() {
     };
   }
 
+  // The journal lines of one batch, fields in the order of SPEC's journal example. meta = {batch, ts, push} plus
+  // `undoes` for an undo batch; changes = [{student_id, column, file, value, original}].
+  function cellLines(meta, changes) {
+    return changes.map((c, seq) => {
+      const line = {
+        batch: meta.batch, seq, ts: meta.ts, kind: 'cell', push: meta.push, file: c.file,
+        student_id: String(c.student_id), column: c.column, value: c.value, original: c.original,
+      };
+      if (meta.undoes) line.undoes = meta.undoes;
+      return line;
+    });
+  }
+
+  function configLine(meta, part, value, original) {
+    return { batch: meta.batch, seq: 0, ts: meta.ts, kind: 'config', push: meta.push, part, value, original };
+  }
+
   // ---- message formatters (Interface "Formats" and the copy table) ----
   function plural(n, word) {
     return n + ' ' + word + (n === 1 ? '' : 's');
@@ -130,9 +147,57 @@ function gwJournal() {
     return plural(s.unpulled, 'edit') + ' not pulled · last saved ' + fmtTime(s.last_saved, nowIso);
   }
 
+  const LISTED = 3;  // cells named in a result message before "and {k} more"
+  const shown = (value) => (String(value).trim() === '' ? 'blank' : value);
+
+  // `9900000001 hw2 (now 7), …` for the first 3, then ` and {k} more`.
+  function cellList(cells, withNow) {
+    const names = cells.slice(0, LISTED).map((c) => c.student_id + ' ' + c.column +
+      (withNow && c.now != null ? ' (now ' + shown(c.now) + ')' : ''));
+    return names.join(', ') + (cells.length > LISTED ? ' and ' + (cells.length - LISTED) + ' more' : '');
+  }
+
+  // The Save result (copy table save.ok, save.conflicts, save.notFound, save.pushChanged). Saved counts saved +
+  // already, so a Retry after a lost reply reads like the original save; "(N files)" = the distinct
+  // columns[].file of those cells.
+  function saveResult(reply, columns) {
+    const done = reply.saved.concat(reply.already);
+    const fileOf = new Map(columns.map((c) => [c.name, c.file]));
+    const files = new Set(done.map((c) => fileOf.get(c.column)));
+    const of = (reason) => reply.conflicts.filter((c) => c.reason === reason);
+    const changed = of('changed');
+    const notFound = of('not found');
+    const invalid = of('invalid');
+    let text = 'Saved ' + plural(done.length, 'cell');
+    if (!reply.conflicts.length) text += ' (' + plural(files.size, 'file') + ')';
+    if (changed.length) text += ' · ' + changed.length + ' changed elsewhere, not saved: ' + cellList(changed, true);
+    if (notFound.length) {
+      text += ' · ' + notFound.length + ' not found (student or column not in this course): ' + cellList(notFound);
+    }
+    if (invalid.length) text += ' · ' + invalid.length + ' refused by Drive (not a valid score): ' + cellList(invalid);
+    if (reply.push_changed) {
+      text += '. Some edits were made before the latest push; they were checked against the new data.';
+    }
+    return text;
+  }
+
+  function undoTitle(target, nowIso) {
+    return 'Undo save of ' + fmtTime(target.ts, nowIso) + ', ' + plural(target.cells, 'cell') + '?';
+  }
+
+  // The undoLastSave result (copy table undo.ok, undo.partial, undo.noneDone).
+  function undoResult(reply, target, nowIso) {
+    const n = reply.saved.length + reply.already.length;
+    const c = reply.conflicts.length;
+    if (!c) return 'Undid save of ' + fmtTime(target.ts, nowIso) + ': ' + plural(n, 'cell') + ' restored';
+    const left = c + ' changed since, left as is: ' + cellList(reply.conflicts, true);
+    if (!n) return 'Nothing undone · ' + left;
+    return 'Undid ' + n + ' of ' + plural(target.cells, 'cell') + ' · ' + left;
+  }
+
   return {
-    key, parseJournal, archivedKeys, unpulled, summary, trim, conflictCopies, undoTarget,
-    fmt: { plural, fmtTime, fmtAgo, draftAge, journalLine },
+    key, parseJournal, archivedKeys, unpulled, summary, trim, conflictCopies, undoTarget, cellLines, configLine,
+    fmt: { plural, fmtTime, fmtAgo, draftAge, journalLine, saveResult, undoTitle, undoResult },
   };
 }
 if (typeof module !== 'undefined') module.exports = gwJournal;

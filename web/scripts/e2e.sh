@@ -26,6 +26,8 @@ DRIVE="$T/MyDrive"
 M="$DRIVE/grade_web/$F1"
 PROPS="$T/props.json"
 export GRADE_WEB_DRIVE_ROOT="$DRIVE"
+# Step 6e needs saveConfig (T10). Until Code.js has it, 6e is skipped and the journal holds 6 lines, not 7.
+if grep -q '^function saveConfig(' web/apps_script/Code.js; then CONFIG=1; LINES=7; else CONFIG=0; LINES=6; fi
 
 shalist() { (cd "$1" && find . -type f ! -name '*.bak' -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256); }
 gas() { local now="$1"; shift; node web/scripts/gas_run.js --drive "$DRIVE" --props "$PROPS" --now "$now" "$@"; }
@@ -161,6 +163,7 @@ rows = list(csv.reader(io.StringIO((m / f"data/{p}_homework.csv").read_text(enco
 assert next(r[2] for r in rows[1:] if r[0] == "9900000002") == "10"
 PY
 
+if [ "$CONFIG" = 1 ]; then
 step 6e "gas_run saveConfig grade_boundaries A 78"
 B0='{"A":80,"B+":75,"B":70,"C+":65,"C":60,"D+":55,"D":50}'
 B1='{"A":"78","B+":"75","B":"70","C+":"65","C":"60","D+":"55","D":"50"}'
@@ -171,18 +174,24 @@ import json, sys
 gb = json.load(open(sys.argv[1], encoding="utf-8"))["grade_boundaries"]
 assert list(gb) == ["A", "B+", "B", "C+", "C", "D+", "D"] and gb["A"] == 78, gb
 PY
+else
+step 6e "skipped: saveConfig arrives in T10"
+fi
 
 step 7 "grader web-pull (preview)"
 code=0; out="$(python3 grader.py web-pull "$C" </dev/null 2>&1)" || code=$?
 echo "$out"
 [ "$code" = 0 ] || fail "web-pull preview exit $code"
-grep -q '^   Journal: 7 edits not pulled · last saved ' <<<"$out" || fail "journal count line"
+grep -q "^   Journal: $LINES edits not pulled · last saved " <<<"$out" || fail "journal count line"
 for line in '  9900000001 hw2: (blank) → 9' '  9900000001 20 Jan 2027: (blank) → P' '  9900000002 20 Jan 2027: (blank) → A' \
-            '  grade boundaries: A 80 → 78' '  conflict: 9900000003 hw2 — Mac 7, web 5 (not applied)' \
+            '  conflict: 9900000003 hw2 — Mac 7, web 5 (not applied)' \
             '  no change: 9900000002 hw1 (edited back to 10)' \
             'Preview only: nothing was written. Apply with: grader web-pull --yes'; do
   grep -qxF -- "$line" <<<"$out" || fail "preview lacks: $line"
 done
+if [ "$CONFIG" = 1 ]; then
+  grep -qxF -- '  grade boundaries: A 80 → 78' <<<"$out" || fail "preview lacks: grade boundaries"
+fi
 [ "$(shalist "$C")" = "$S1" ] || fail "the preview changed the Mac course"
 
 step 8 "grader web-pull --yes"
@@ -192,17 +201,18 @@ code=0; out="$(python3 grader.py web-pull "$C" --yes 2>&1)" || code=$?
 echo "$out"
 [ "$code" = 0 ] || fail "web-pull --yes exit $code"
 grep -qxF -- "  ✍️  data/${P1}_attendance.csv: 2 cells (attendance xlsx too)" <<<"$out" || fail "attendance write line"
-grep -qE '^  📦 Archived on Drive: archive/web_edits_[0-9]{8}-[0-9]{6}\.jsonl \(7 lines\)$' <<<"$out" || fail "archive line"
+grep -qE "^  📦 Archived on Drive: archive/web_edits_[0-9]{8}-[0-9]{6}\\.jsonl \\($LINES lines\\)\$" <<<"$out" || fail "archive line"
 grep -q '^✅ Pulled 3 cells' <<<"$out" || fail "result line"
 HID="$(grep -oE '^   Undo with: grader undo [0-9]{8}-[0-9]{6}_grader_web-pull$' <<<"$out" | awk '{print $NF}')"
 [ -n "$HID" ] || fail "undo line"
 HIST1="$(python3 grader.py history --course "$C" -n 1000 | grep -c 'web-pull' || true)"
 [ "$HIST1" = "$((HIST0 + 1))" ] || fail "history has $HIST1 web-pull lines (expected $((HIST0 + 1)))"
 [ "$(shasum -a 256 "$M/web_edits.jsonl" | cut -d' ' -f1)" = "$JSHA" ] || fail "web-pull rewrote the journal"
-python3 - "$C" "$M" "$P1" "$HID" <<'PY' || fail "Mac files after the pull"
+python3 - "$C" "$M" "$P1" "$HID" "$CONFIG" <<'PY' || fail "Mac files after the pull"
 import csv, io, sys, yaml, openpyxl
 from pathlib import Path
 c, m, p, hid = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], sys.argv[4]
+config = sys.argv[5] == "1"
 def cell(path, sid, col):
     rows = list(csv.reader(io.StringIO(path.read_text(encoding="utf-8-sig"), newline="")))
     i = next(k for k, h in enumerate(rows[0]) if h == col or h.split(" (")[0] == col)
@@ -219,7 +229,7 @@ vals = {str(ws.cell(row=r, column=1).value): ws.cell(row=r, column=col).value fo
 assert vals["9900000001"] == "P" and vals["9900000002"] == "A", vals
 assert all(str(ws.cell(row=r, column=tot).value).startswith("=") for r in range(2, ws.max_row + 1))
 cfg = yaml.safe_load((c / f"course_info/{p}_config.yaml").read_text(encoding="utf-8"))
-assert float(cfg["grade_boundaries"]["A"]) == 78
+assert float(cfg["grade_boundaries"]["A"]) == (78 if config else 80)
 assert cfg["weights"] == {"attendance": 0.1, "homework": 0.2, "midterm": 0.3, "final": 0.4}
 assert cfg["course_id"] == "MOCK" and cfg["term"] == "2027_S1"
 arch = sorted((m / "archive").glob("web_edits_*.jsonl"))
@@ -257,12 +267,12 @@ check "$T/r.json" '
 c = [x for x in r["courses"] if x["folder"] == "'"$F1"'"][0]
 assert c["unpulled"] == 0, c' || fail "unpulled after pull"
 [ ! -s "$M/web_edits.jsonl" ] || fail "journal still holds lines after the trim"
-python3 - "$M" <<'PY' || fail "conflict line missing from the archive"
+python3 - "$M" "$LINES" <<'PY' || fail "conflict line missing from the archive"
 import json, sys
 from pathlib import Path
 lines = [json.loads(l) for a in sorted((Path(sys.argv[1]) / "archive").glob("*.jsonl"))
          for l in a.read_text(encoding="utf-8").splitlines()[1:]]
-assert len(lines) == 7
+assert len(lines) == int(sys.argv[2])
 assert any(l.get("student_id") == "9900000003" and l.get("column") == "hw2" and l.get("result") == "conflict" for l in lines)
 PY
 

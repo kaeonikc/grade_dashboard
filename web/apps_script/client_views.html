@@ -1,6 +1,7 @@
 <script>
 'use strict';
-// Screens (web/SPEC.md "Interface"): the course list, opening a course, and column mode.
+// Screens (web/SPEC.md "Interface"): the course list, opening a course, column mode, and the Save, Discard,
+// Undo, Leave and More dialogs.
 // Every piece of course data goes in as text (textContent), never as HTML.
 
 const SLOW_MS = 8000;
@@ -102,9 +103,9 @@ function showCourse(folder, courseName) {
   const failed = (cause) => show(listHeader(),
     notice(el('span', {}, "Couldn't open ", data('span', {}, courseName), '.'), cause,
       button('Try again', () => showCourse(folder, courseName)), back));
-  openCourse(folder).then((reply) => {
+  openCourse(folder).then(({ reply, draft }) => {
     clearTimeout(timer);
-    if (reply.ok) return show(...courseView());
+    if (reply.ok) return show(...courseView(draft));
     if (reply.code === 'BUSY') return failed('Drive is busy with a save from another device. Try again in a moment.');
     show(listHeader(), notice(el('span', {}, "Can't open ", data('span', {}, courseName), '.'), reply.message, back));
   }, () => {
@@ -118,17 +119,20 @@ function showCourse(folder, courseName) {
 const STATUS_MS = 4000;
 let cm = null;  // the open column mode: its controls, one item per student row, and the focused item
 
-function courseView() {
+// draft: openCourse's restoreDraft result, shown as the draft banner (null: none).
+function courseView(draft) {
   const o = state.open;
-  const n = o.journal.unpulled;
-  cm = { items: [], current: null, statusTimer: null };
-  cm.badge = el('span', { class: 'badge unsaved', hidden: '' });
+  cm = { items: [], current: null, statusTimer: null, working: null };
+  cm.badge = el('button', { type: 'button', class: 'badge unsaved', hidden: '', onclick: openSaveSheet });
+  cm.headLine = el('p', { class: 'muted' });
+  cm.strip = storageStrip();
   const head = el('header', { class: 'course-head' },
     el('div', { class: 'course-bar' },
-      el('button', { type: 'button', class: 'icon', 'aria-label': 'Courses', onclick: showCourses }, '‹'),
-      data('h1', { class: 'course-name' }, o.course.course_name), cm.badge),
-    el('p', { class: 'muted' }, 'Pushed ' + F.fmtTime(o.push.pushed_at, state.now) + ' (' +
-      F.fmtAgo(o.push.pushed_at, state.now) + ')' + (n ? ' · ' + F.plural(n, 'edit') + ' not pulled' : '')));
+      el('button', { type: 'button', class: 'icon', 'aria-label': 'Courses', onclick: () => leave(showCourses) }, '‹'),
+      data('h1', { class: 'course-name' }, o.course.course_name), cm.badge,
+      el('button', { type: 'button', class: 'icon', 'aria-label': 'More', 'aria-haspopup': 'dialog', onclick: openMore },
+        '⋯')),
+    cm.headLine, cm.strip);
 
   cm.select = el('select', { id: 'col', class: 'col-select' });
   cm.select.addEventListener('change', () => choose(cm.select.value));
@@ -157,9 +161,48 @@ function courseView() {
   // Keep the input focused so the keypad stays open (iOS): the buttons act on the focused student.
   cm.bar.addEventListener('pointerdown', (e) => e.preventDefault());
   cm.status = el('p', { class: 'status', role: 'status' });
+  cm.alert = el('div', { class: 'alert', role: 'alert' });
+  cm.saveBtn = button('', openSaveSheet, 'btn save-btn');
+  cm.dock = el('div', { class: 'dock' }, cm.alert, cm.status, el('div', { class: 'action-bar' }, cm.saveBtn));
   cm.announce = el('p', { class: 'sr-only', 'aria-live': 'polite' });
+  cm.banner = draftBanner(draft);
   renderColumn();
-  return [head, picker, cm.list, cm.empty, cm.status, cm.announce, cm.bar];
+  return [head, cm.banner, picker, cm.list, cm.empty, cm.announce, cm.dock, cm.bar].filter(Boolean);
+}
+
+// Storage refused (S8.8, edge 40): one line under the header on every course screen; a tap shows why.
+function storageStrip() {
+  const more = el('span', { hidden: '' },
+    ' Storage is blocked here (for example in a private window). Saved edits on Drive are safe.');
+  const strip = el('button', { type: 'button', class: 'strip', 'aria-expanded': 'false', hidden: '' },
+    "Unsaved edits can't be backed up in this browser. Save often: closing this tab loses them.", more);
+  strip.addEventListener('click', () => {
+    more.hidden = !more.hidden;
+    strip.setAttribute('aria-expanded', String(!more.hidden));
+  });
+  return strip;
+}
+
+// Draft found on opening (S8.4, edge 38). Dismissing keeps the edits.
+function draftBanner(draft) {
+  if (!draft) return null;
+  const box = el('section', { class: 'banner', 'aria-label': 'Draft' });
+  const dismiss = el('button', { type: 'button', class: 'icon dismiss', 'aria-label': 'Dismiss',
+    onclick: () => box.remove() }, '×');
+  if (draft.already) {
+    box.append(el('p', {}, 'Your draft from ' + F.fmtTime(draft.made_at, state.now) +
+      ' is already on Drive; nothing to restore.'), dismiss);
+    return box;
+  }
+  box.append(
+    el('p', { class: 'notice-title' }, F.plural(draft.count, 'unsaved edit') + ' restored (' +
+      F.draftAge(draft.made_at, state.now) + ')'),
+    el('div', {}, draft.pushed ? el('p', {}, 'The course was pushed again since then; each edit is checked when you ' +
+      'save.') : null, draft.gone ? el('p', {}, (draft.gone === 1 ? '1 is for a student or column'
+      : draft.gone + ' are for students or columns') + ' no longer in this course.') : null),
+    el('div', { class: 'actions' }, button('Review', openSaveSheet, 'btn outline'),
+      button('Discard…', openDiscard, 'btn outline')), dismiss);
+  return box;
 }
 
 // Columns grouped by category in category_order (attendance sessions included; total columns are never listed).
@@ -198,7 +241,7 @@ function step(delta) {
 function renderColumn() {
   renderPicker();
   cm.current = null;
-  cm.bar.hidden = true;
+  keypad(false);
   const col = currentColumn();
   cm.items = col ? state.rows.map((row, i) => rowItem(row, col, i)) : [];
   cm.list.replaceChildren(...cm.items.map((it) => it.li));
@@ -232,7 +275,7 @@ function inputEvents(it) {
   input.addEventListener('focus', () => {
     cm.current = it;
     input.select();
-    cm.bar.hidden = false;
+    keypad(true);
     placeBar();
     cm.nextBtn.textContent = nextVisible(it, 1) ? 'Next ↓' : 'Done';
   });
@@ -252,7 +295,7 @@ function inputEvents(it) {
     }
   });
   input.addEventListener('blur', (e) => {
-    if (!cm.bar.contains(e.relatedTarget)) cm.bar.hidden = true;
+    if (!cm.bar.contains(e.relatedTarget)) keypad(false);
     // Leaving with refused text puts the previous value back; its message stays until the next commit.
     if (!commit(it)) {
       refreshItem(it);
@@ -301,10 +344,17 @@ function move(delta) {
   }
 }
 
+// The keypad bar replaces the bottom dock while an input has focus (iOS covers the bottom of the page).
+function keypad(open) {
+  cm.bar.hidden = !open;
+  cm.dock.hidden = open;
+  document.body.classList.toggle('typing', open);
+}
+
 // ขส moves on to the next student (S3.4); Clear stays.
 function barSet(value, thenNext) {
   const it = cm.current;
-  if (!it) return;
+  if (!it || state.saving) return;
   it.value.value = value;
   if (thenNext) move(1);
   else commit(it);
@@ -363,10 +413,24 @@ function refreshCounts() {
   cm.line.textContent = col ? col.category + max + ' · ' + k + ' of ' + total + ' entered' : '';
   const opt = col && cm.select.selectedOptions[0];
   if (opt) opt.textContent = col.header + ' · ' + k + '/' + total;
+  refreshChrome();
+}
+
+// The unsaved badge, the Save button, header line 2, the storage strip, and inputs locked while saving (S8.9).
+function refreshChrome() {
   const n = state.edits.size;
+  const j = state.open.journal;
+  const pushed = state.open.push.pushed_at;
   cm.badge.hidden = n === 0;
   cm.badge.replaceChildren(el('span', { 'aria-hidden': 'true' }, '● '), n + ' unsaved',
     el('span', { class: 'sr-only' }, n === 1 ? ' edit' : ' edits'));
+  cm.saveBtn.hidden = n === 0;
+  cm.saveBtn.disabled = state.saving;
+  cm.saveBtn.textContent = state.saving && cm.working ? cm.working : 'Save ' + n;
+  cm.headLine.textContent = state.saving && cm.working ? cm.working : 'Pushed ' + F.fmtTime(pushed, state.now) +
+    ' (' + F.fmtAgo(pushed, state.now) + ')' + (j.unpulled ? ' · ' + F.plural(j.unpulled, 'edit') + ' not pulled' : '');
+  cm.strip.hidden = !state.storageOff;
+  for (const it of cm.items) if (it.value.tagName === 'INPUT') it.value.readOnly = state.saving;
 }
 
 function announceCommit(it) {
@@ -380,6 +444,269 @@ function say(text) {
   clearTimeout(cm.statusTimer);
   cm.status.textContent = text;
   cm.statusTimer = setTimeout(() => { cm.status.textContent = ''; }, STATUS_MS);
+}
+
+// A message that stays until dismissed (conflicts, failures), with its buttons.
+function alertBox(text, ...buttons) {
+  cm.alert.replaceChildren(el('p', {}, text), el('div', { class: 'actions' }, ...buttons,
+    el('button', { type: 'button', class: 'icon dismiss', 'aria-label': 'Dismiss',
+      onclick: () => cm.alert.replaceChildren() }, '×')));
+}
+
+const shown = (value) => (String(value == null ? '' : value).trim() === '' ? 'blank' : value);
+
+// ---- Dialogs (9-12 and the More sheet). The element with `autofocus` gets the initial focus ----
+let dialogCount = 0;
+function dialog(title, ...content) {
+  const id = 'dialog-' + (++dialogCount);
+  const d = el('dialog', { class: 'sheet', 'aria-labelledby': id }, el('h2', { id }, title), ...content);
+  d.addEventListener('close', () => d.remove());
+  document.body.append(d);
+  d.showModal();
+  return d;
+}
+
+function autofocused(node) {
+  node.setAttribute('autofocus', '');
+  return node;
+}
+
+// ---- 9. Save (S8) ----
+function openSaveSheet() {
+  if (!state.edits.size || state.saving) return;
+  const edits = Array.from(state.edits.values());
+  const gone = edits.filter(isGone);
+  const n = edits.length;
+  let over = 0;
+  const groups = state.open.course.columns.map((c) => {
+    const es = edits.filter((e) => e.column === c.name && !isGone(e));
+    if (!es.length) return null;
+    const m = es.filter((e) => overMax(e.value, c.name)).length;
+    over += m;
+    return el('details', { class: 'save-col' },
+      el('summary', {}, data('span', {}, c.header), el('span', { class: 'num' },
+        F.plural(es.length, 'cell') + (m ? ', ' + m + ' above max' : ''))),
+      el('ul', { class: 'cell-lines' }, ...es.map((e) => el('li', {}, cellLine(e)))));
+  });
+  const save = autofocused(button('Save ' + F.plural(n, 'cell'), () => { d.close(); doSave(false); }));
+  const d = dialog('Save ' + F.plural(n, 'cell') + '?', ...groups,
+    over ? el('p', { class: 'warn' }, over === 1 ? '1 is above max; it will be saved as typed.'
+      : over + ' are above max; they will be saved as typed.') : null,
+    gone.length ? el('div', { class: 'gone' },
+      el('p', {}, gone.length + " can't be saved: student or column not in this course."),
+      el('ul', { class: 'cell-lines' }, ...gone.map((e) => el('li', {}, e.student_id + ' ' + e.column + ': ' +
+        shown(e.original) + ' → ' + shown(e.value)))),
+      button('Drop these ' + gone.length, () => { d.close(); dropGone(); renderColumn(); }, 'btn outline')) : null,
+    el('div', { class: 'sheet-actions' }, button('Discard all…', () => { d.close(); openDiscard(); }, 'btn outline'),
+      save),
+    el('div', { class: 'sheet-actions' }, button('Keep editing', () => d.close(), 'btn outline')));
+}
+
+// `{id} {name}: {was} → {new}`
+function cellLine(e) {
+  const row = state.byId.get(e.student_id);
+  return el('span', {}, el('span', { class: 'id' }, e.student_id), ' ', row ? data('span', {}, row.name) : null,
+    ': ' + shown(e.original) + ' → ' + shown(e.value));
+}
+
+// Saves every unsaved edit; `after` runs when none is left (Save and leave). A Retry resends the same edits.
+function doSave(retrying, after) {
+  if (state.saving || !state.edits.size) return;
+  const n = state.edits.size;
+  cm.working = 'Saving ' + F.plural(n, 'cell') + '…';
+  cm.alert.replaceChildren();
+  saveEdits().then((reply) => {
+    renderColumn();
+    if (!reply.ok) return saveRefused(reply, n, after);
+    const listed = reply.conflicts.filter((c) => c.reason !== 'not found');
+    const nothing = !retrying && !reply.batch && !reply.saved.length && !reply.conflicts.length;
+    const text = nothing ? 'Nothing to save: Drive already has these values'
+      : F.saveResult(reply, state.open.course.columns);
+    if (reply.conflicts.length) {
+      alertBox(text, listed.length > 3 ? button('Show all', () => openConflicts(listed), 'btn outline') : null);
+    } else {
+      say(text);
+    }
+    if (after && !state.edits.size) after();
+  }, (err) => {
+    refreshChrome();
+    const kind = failureKind(err);
+    if (kind === 'auth') {
+      return alertBox('Signed out of Google. Sign in again; your edits are kept.',
+        button('Sign in', () => location.reload(), 'btn outline'));
+    }
+    alertBox((kind === 'offline' ? "Save failed: you're offline. " : "Save failed: Google didn't finish the save. ") +
+      kept(n), button('Retry', () => doSave(true, after), 'btn outline'));
+  });
+  refreshChrome();
+}
+
+function kept(n) {
+  return 'Your ' + F.plural(n, 'edit') + (n === 1 ? ' is' : ' are') + ' kept.';
+}
+
+function saveRefused(reply, n, after) {
+  if (reply.code === 'BUSY') {
+    return alertBox('Another save is running; try again. ' + kept(n),
+      button('Retry', () => doSave(true, after), 'btn outline'));
+  }
+  if (reply.code === 'UNAVAILABLE' || reply.code === 'NOT_FOUND') {
+    return alertBox('Not saved: ' + reply.message + ' Your ' + F.plural(n, 'edit') + (n === 1 ? ' is' : ' are') +
+      ' kept on this device.', button('Back to courses', backToCourses, 'btn outline'));
+  }
+  alertBox("Save failed: Google didn't finish the save. " + kept(n),
+    button('Retry', () => doSave(true, after), 'btn outline'));
+}
+
+function openConflicts(conflicts) {
+  const d = dialog('Changed elsewhere, not saved (' + conflicts.length + ')',
+    el('ul', { class: 'conf-list' }, ...conflicts.map((c) => {
+      const row = state.byId.get(c.student_id);
+      const e = state.edits.get(editKey(c.student_id, c.column));
+      const mine = e ? e.value : '';
+      const line = c.reason === 'invalid'
+        ? "Drive refused '" + mine + "' for " + c.student_id + ' ' + c.column + ': not a valid score.'
+        : c.column + '   Drive now ' + shown(c.now) + ' · yours ' + shown(mine);
+      return el('li', {},
+        el('p', {}, el('span', { class: 'id' }, c.student_id), ' ', row ? data('span', {}, row.name) : null),
+        el('div', { class: 'conf-line' }, el('span', {}, line),
+          button('Go to', () => { d.close(); goTo(c.student_id, c.column); }, 'btn outline')));
+    })),
+    el('p', { class: 'muted' }, 'These stay unsaved. Save again to write your values, or change them first.'),
+    el('div', { class: 'sheet-actions' }, button('Close', () => d.close(), 'btn outline')));
+}
+
+// Opens the column with the student's row focused.
+function goTo(sid, column) {
+  if (state.search) {
+    state.search = '';
+    cm.search.value = '';
+  }
+  choose(column);
+  const it = cm.items.find((x) => x.row.student_id === sid);
+  if (!it) return;
+  reveal(it.li);
+  if (it.value.tagName === 'INPUT') it.value.focus({ preventScroll: true });
+}
+
+function backToCourses() {
+  closeCourse();
+  showCourses();
+}
+
+// ---- 10. Discard (S8.10) ----
+function openDiscard() {
+  const n = state.edits.size;
+  if (!n || state.saving) return;
+  const d = dialog('Discard ' + F.plural(n, 'unsaved edit') + '?',
+    el('p', {}, "They were never saved to Drive and can't be brought back."),
+    el('div', { class: 'sheet-actions' }, autofocused(button('Keep edits', () => d.close(), 'btn outline')),
+      button('Discard ' + F.plural(n, 'edit'), () => {
+        d.close();
+        discardEdits();
+        if (cm.banner) cm.banner.remove();
+        renderColumn();
+        say('Discarded ' + F.plural(n, 'edit'));
+      }, 'btn danger')));
+}
+
+// ---- 11. Undo last save (S9) ----
+function openUndo() {
+  const t = state.open.journal.undo;
+  if (!t || state.edits.size || state.saving) return;
+  const lines = t.edits.map((e) => {
+    const row = state.byId.get(e.student_id);
+    return el('li', {}, el('span', { class: 'id' }, e.student_id), ' ', row ? data('span', {}, row.name) : null,
+      ' ' + e.column + ': ' + shown(e.value) + ' → ' + shown(e.original));
+  });
+  if (t.cells > t.edits.length) lines.push(el('li', { class: 'muted' }, 'and ' + (t.cells - t.edits.length) + ' more'));
+  const d = dialog(F.undoTitle(t, state.now), el('ul', { class: 'cell-lines' }, ...lines),
+    el('p', {}, 'Drive gets the earlier values back. Cells changed since then are left alone.'),
+    el('div', { class: 'sheet-actions' }, autofocused(button('Cancel', () => d.close(), 'btn outline')),
+      button('Undo save', () => { d.close(); doUndo(t); })));
+}
+
+function doUndo(t) {
+  cm.working = 'Undoing save of ' + F.fmtTime(t.ts, state.now) + '…';
+  cm.alert.replaceChildren();
+  undoLastSave(t.batch).then((reply) => {
+    renderColumn();
+    if (reply.ok) {
+      const text = F.undoResult(reply, t, state.now);
+      return reply.conflicts.length ? alertBox(text) : say(text);
+    }
+    if (reply.code === 'UNDO_CHANGED') {
+      return alertBox('Another device saved since this page loaded. Reload to see the newest save, then try again.',
+        button('Reload', reload, 'btn outline'));
+    }
+    if (reply.code === 'UNAVAILABLE' || reply.code === 'NOT_FOUND') {
+      return alertBox('Not saved: ' + reply.message, button('Back to courses', backToCourses, 'btn outline'));
+    }
+    if (reply.code === 'BUSY') {
+      return alertBox('Another save is running; try again.', button('Retry', () => doUndo(t), 'btn outline'));
+    }
+    alertBox(String(reply.message).replace(/`/g, ''));
+  }, (err) => {
+    refreshChrome();
+    alertBox(failureKind(err) === 'offline' ? "You're offline. Connect, then try again."
+      : "Google didn't answer. Try again in a moment.");
+  });
+  refreshChrome();
+}
+
+// ---- 12. Leaving with unsaved edits (S8.7) ----
+function leave(then) {
+  const n = state.edits.size;
+  const go = () => { closeCourse(); then(); };
+  if (!n) return go();
+  if (state.saving) return;
+  const d = dialog(el('span', {}, F.plural(n, 'unsaved edit') + ' in ', data('span', {}, state.open.course.course_name)),
+    el('p', {}, 'They stay on this device as a draft if you leave without saving.'),
+    el('div', { class: 'sheet-actions' }, autofocused(button('Keep editing', () => d.close(), 'btn outline'))),
+    el('div', { class: 'sheet-actions' }, button('Leave, keep draft', () => { d.close(); go(); }, 'btn outline'),
+      button('Save and leave', () => { d.close(); doSave(false, go); })));
+}
+
+// ---- More sheet ----
+function openMore() {
+  const j = state.open.journal;
+  const n = state.edits.size;
+  const item = (label, sub, onclick, disabled) => {
+    const b = el('button', { type: 'button', class: 'menu-item', onclick }, el('span', {}, label),
+      sub ? el('span', { class: 'muted' }, sub) : null);
+    b.disabled = disabled;
+    return b;
+  };
+  const undoSub = n ? 'Save or discard your ' + F.plural(n, 'unsaved edit') + ' first'
+    : j.undo ? F.fmtTime(j.undo.ts, state.now) + ' · ' + F.plural(j.undo.cells, 'cell')
+      : String(j.undo_note).replace(/`/g, '');
+  const title = j.unpulled
+    ? el('span', {}, 'Drive: ' + F.plural(j.unpulled, 'edit') + ' not pulled', el('br'),
+      el('span', { class: 'muted' }, 'last saved ' + F.fmtTime(j.last_saved, state.now)))
+    : 'Drive: no edits waiting to be pulled';
+  const d = dialog(title,
+    item('Undo last save', undoSub, () => { d.close(); openUndo(); }, !!n || !j.undo || state.saving),
+    item(n ? 'Discard all unsaved edits (' + n + ')' : 'Discard all unsaved edits', n ? null : 'No unsaved edits',
+      () => { d.close(); openDiscard(); }, !n || state.saving),
+    item('Reload from Drive', null, () => { d.close(); reload(); }, state.saving),
+    item('Switch course', null, () => { d.close(); leave(showCourses); }, state.saving),
+    el('div', { class: 'sheet-actions' }, autofocused(button('Close', () => d.close(), 'btn outline'))));
+}
+
+// Reload from Drive: unsaved edits stay on top (they are conflict-checked on Save).
+function reload() {
+  const n = state.edits.size;
+  reloadCourse().then((reply) => {
+    if (!reply.ok) {
+      return alertBox(reply.code === 'BUSY' ? 'Drive is busy with a save from another device. Try again in a moment.'
+        : reply.message, button('Back to courses', backToCourses, 'btn outline'));
+    }
+    show(...courseView(null));
+    say(n ? 'Reloaded. Your ' + F.plural(n, 'unsaved edit') + (n === 1 ? ' is' : ' are') + ' kept.' : 'Reloaded');
+  }, (err) => {
+    alertBox(failureKind(err) === 'offline' ? "You're offline. Connect, then try again."
+      : "Google didn't answer. Try again in a moment.");
+  });
 }
 
 // Search filters the rows only; unsaved edits and the column stay (S3.8, edge 46).
@@ -411,6 +738,13 @@ if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', placeBar);
   window.visualViewport.addEventListener('scroll', placeBar);
 }
+// Ctrl/Cmd+S opens the Save sheet; leaving the focused input commits it first.
+document.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 's' || !state.open || !cm) return;
+  e.preventDefault();
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  openSaveSheet();
+});
 // `/` focuses Search anywhere in a course (Interface "Keyboard").
 document.addEventListener('keydown', (e) => {
   if (e.key !== '/' || !cm || !cm.search.isConnected) return;

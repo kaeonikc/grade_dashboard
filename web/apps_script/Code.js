@@ -7,6 +7,8 @@ const TOP_FILES = ['course.json', 'push.json', JOURNAL];
 const LOCK_WAIT_MS = 25000;
 const NOTE_NONE = 'Nothing to undo';
 const NOTE_PULLED = 'Already pulled to the Mac; use `grader undo` there';
+const UNDO_CHANGED = 'Another device saved since this page loaded. Reload to see the newest save, then try again.';
+const ISO_FORMAT = "yyyy-MM-dd'T'HH:mm:ssXXX";
 
 const NOT_AVAILABLE_HTML =
   '<h1>Not available</h1><p>This page opens only for the Google account that owns it.</p>';
@@ -49,7 +51,8 @@ let core = null;
 function core_() {
   if (!core) {
     const Csv = gwCsv();
-    core = { Csv: Csv, Grades: gwGrades(Csv), Journal: gwJournal() };
+    const Grades = gwGrades(Csv);
+    core = { Csv: Csv, Grades: Grades, Journal: gwJournal(), Save: gwSave(Csv, Grades) };
   }
   return core;
 }
@@ -88,22 +91,45 @@ function listCourses() {
 
 // {ok, folder, course, push, roster, files, journal}: everything the browser needs to show and compute a course.
 function loadCourse(folderName) {
-  return withLock_(function () {
-    const root = gradeWebFolder_();
-    const folder = root && subfolder_(root, folderName);
-    if (!folder) return fail_('NOT_FOUND', 'No pushed course named ' + folderName);
-    try {
-      const c = openCourse_(folder);
-      const files = {};
-      c.course.files.forEach(function (rel) { files[rel] = readListed_(c, rel); });
-      return {
-        ok: true, folder: folderName, course: c.course, push: c.push, roster: readListed_(c, c.course.roster),
-        files: files, journal: journalReply_(c),
-      };
-    } catch (e) {
-      if (!(e instanceof Unavailable_)) throw e;
-      return fail_('UNAVAILABLE', e.reason);
-    }
+  return withCourse_(folderName, function (c) {
+    const files = {};
+    c.course.files.forEach(function (rel) { files[rel] = readListed_(c, rel); });
+    return {
+      ok: true, folder: folderName, course: c.course, push: c.push, roster: readListed_(c, c.course.roster),
+      files: files, journal: journalReply_(c),
+    };
+  });
+}
+
+// Writes the unsaved edits [{student_id, column, value, original}] that still match Drive (SPEC "Saving").
+// `push` = the push the edits were made on (a restored draft may predate the current one, edge 38).
+function saveBatch(folderName, edits, push) {
+  return withCourse_(folderName, function (c) {
+    const plan = planFor_(c, edits, false);
+    const meta = plan.changes.length ? batchMeta_(c) : null;
+    if (meta) writeBatch_(c, plan, meta);
+    return {
+      ok: true, batch: meta && meta.batch, ts: meta && meta.ts, saved: savedCells_(plan), already: plan.already,
+      conflicts: plan.conflicts, files: Object.keys(plan.texts).length,
+      push_changed: !!push && push !== c.push.push_id, journal: journalReply_(c),
+    };
+  });
+}
+
+// Reverts the batch the teacher confirmed, if it is still the one Undo offers (SPEC "Undo last save"). Cells
+// changed since come back as conflicts and keep their value (S9.2).
+function undoLastSave(folderName, batch) {
+  return withCourse_(folderName, function (c) {
+    const journal = journalReply_(c);
+    if (!journal.undo) return Object.assign(fail_('UNDO_UNAVAILABLE', journal.undo_note), { journal: journal });
+    if (journal.undo.batch !== batch) return Object.assign(fail_('UNDO_CHANGED', UNDO_CHANGED), { journal: journal });
+    const plan = planFor_(c, core_().Save.planUndo(c.lines, batch), true);
+    const meta = plan.changes.length ? Object.assign(batchMeta_(c), { undoes: batch }) : null;
+    if (meta) writeBatch_(c, plan, meta);
+    return {
+      ok: true, batch: meta && meta.batch, undoes: batch, saved: savedCells_(plan), already: plan.already,
+      conflicts: plan.conflicts, journal: journalReply_(c),
+    };
   });
 }
 
@@ -124,6 +150,23 @@ function withLock_(fn) {
   }
 }
 
+// Runs fn(c) under the lock on an available course (roll-forward and trim done); else NOT_FOUND / UNAVAILABLE.
+function withCourse_(folderName, fn) {
+  return withLock_(function () {
+    const root = gradeWebFolder_();
+    const folder = root && subfolder_(root, folderName);
+    if (!folder) return fail_('NOT_FOUND', 'No pushed course named ' + folderName);
+    let c;
+    try {
+      c = openCourse_(folder);
+    } catch (e) {
+      if (!(e instanceof Unavailable_)) throw e;
+      return fail_('UNAVAILABLE', e.reason);
+    }
+    return fn(c);
+  });
+}
+
 function withNow_(reply) {
   reply.now = nowIso_();
   return reply;
@@ -135,7 +178,7 @@ function fail_(code, message) {
 
 // Server clock in the script time zone, ISO 8601 with offset: 2027-01-20T09:15:02+07:00.
 function nowIso_() {
-  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ssXXX");
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), ISO_FORMAT);
 }
 
 // ---- one course: trim, then the availability check ----
@@ -144,9 +187,9 @@ function Unavailable_(reason) {
   this.reason = reason;
 }
 
-// Trims the journal, then checks the course can be used (SPEC "Course availability"). Throws Unavailable_.
-// Returns {folder, course, push, dirs: {<rel dir>: [File]}, lines, summary}. The data files are only found here;
-// readListed_ reads them.
+// Trims the journal, checks the course can be used (SPEC "Course availability"), then rolls a pending save
+// forward. Throws Unavailable_. Returns {folder, course, push, dirs: {<rel dir>: [File]}, journalFile,
+// journalText, lines, summary}. The data files are only found here; readListed_ reads them.
 function openCourse_(folder) {
   trim_(folder);
   const top = filesIn_(folder);
@@ -178,12 +221,16 @@ function openCourse_(folder) {
 
   const journalFile = fileIn_(top, JOURNAL);
   if (!journalFile) throw new Unavailable_(WHY.noJournal);
-  const parsed = J.parseJournal(readOrUnavailable_(journalFile, JOURNAL));
+  const journalText = readOrUnavailable_(journalFile, JOURNAL);
+  const parsed = J.parseJournal(journalText);
   if (parsed.bad.length) throw unavailableResetTrim_(folder, WHY.badJournal(parsed.bad));
   // Trimmed: every line left is unpulled (ADR 002).
-  return {
-    folder: folder, course: course, push: push, dirs: dirs, lines: parsed.lines, summary: J.summary(parsed.lines),
+  const c = {
+    folder: folder, course: course, push: push, dirs: dirs, journalFile: journalFile, journalText: journalText,
+    lines: parsed.lines, summary: J.summary(parsed.lines),
   };
+  rollForward_(c);
+  return c;
 }
 
 // Duplicate files and damaged journals are repaired by hand, and a repaired journal may hold lines that were
@@ -193,8 +240,12 @@ function unavailableResetTrim_(folder, reason) {
   return new Unavailable_(reason);
 }
 
+function listedFile_(c, rel) {
+  return fileIn_(c.dirs[dirOf_(rel)], baseOf_(rel));
+}
+
 function readListed_(c, rel) {
-  return readOrUnavailable_(fileIn_(c.dirs[dirOf_(rel)], baseOf_(rel)), rel);
+  return readOrUnavailable_(listedFile_(c, rel), rel);
 }
 
 function readJson_(files, name, missing) {
@@ -247,6 +298,63 @@ function pulledThisPush_(c) {
   const newest = pulls[pulls.length - 1];
   const header = core_().Journal.parseJournal(readOrUnavailable_(newest, 'archive/' + newest.getName())).lines[0];
   return !!header && header.kind === 'pull' && header.push === c.push.push_id;
+}
+
+// ---- saving (ADR 002: the journal first, then the CSVs) ----
+
+// save.planSave over the files of the edited columns.
+function planFor_(c, edits, restoring) {
+  const names = edits.map(function (e) { return e.column; });
+  const files = {};
+  c.course.columns.forEach(function (col) {
+    if (names.indexOf(col.name) >= 0 && !(col.file in files)) files[col.file] = readListed_(c, col.file);
+  });
+  return core_().Save.planSave(files, c.course, edits, restoring);
+}
+
+function savedCells_(plan) {
+  return plan.changes.map(function (ch) { return { student_id: ch.student_id, column: ch.column, value: ch.value }; });
+}
+
+// {batch, ts, push} of a new batch: b-YYYYMMDD-HHMMSS-xxxx on the server clock.
+function batchMeta_(c) {
+  const now = new Date();
+  const tz = Session.getScriptTimeZone();
+  const hex = ('000' + Math.floor(Math.random() * 65536).toString(16)).slice(-4);
+  return {
+    batch: 'b-' + Utilities.formatDate(now, tz, 'yyyyMMdd-HHmmss') + '-' + hex,
+    ts: Utilities.formatDate(now, tz, ISO_FORMAT), push: c.push.push_id,
+  };
+}
+
+// SPEC "Saving" step 3: the pending marker, the journal with one line per change (one write), each changed CSV
+// once, then the marker cleared. A failure in between is completed or dropped by the next call (rollForward_).
+function writeBatch_(c, plan, meta) {
+  const J = core_().Journal;
+  const lines = J.cellLines(meta, plan.changes);
+  setPending_(c.folder, { batch: meta.batch, kind: 'cell' });
+  const sep = c.journalText === '' || c.journalText.slice(-1) === '\n' ? '' : '\n';
+  const added = lines.map(function (l) { return JSON.stringify(l) + '\n'; }).join('');
+  writeText_(c.journalFile, c.journalText + sep + added);
+  Object.keys(plan.texts).forEach(function (rel) { writeText_(listedFile_(c, rel), plan.texts[rel]); });
+  clearPending_(c.folder);
+  c.lines = c.lines.concat(lines);
+  c.summary = J.summary(c.lines);
+}
+
+// Completes a save that stopped after its journal append: each cell of the pending batch that still holds its
+// `original` gets its `value`. A batch that never reached the journal is just forgotten (edges 35, 36).
+function rollForward_(c) {
+  const pending = getPending_(c.folder);
+  if (!pending) return;
+  const edits = c.lines.filter(function (l) { return l.batch === pending.batch && l.kind === 'cell'; })
+    .sort(function (a, b) { return a.seq - b.seq; })
+    .map(function (l) { return { student_id: l.student_id, column: l.column, value: l.value, original: l.original }; });
+  if (edits.length) {
+    const plan = planFor_(c, edits, true);
+    Object.keys(plan.texts).forEach(function (rel) { writeText_(listedFile_(c, rel), plan.texts[rel]); });
+  }
+  clearPending_(c.folder);
 }
 
 // ---- trim (ADR 002) ----
