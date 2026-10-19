@@ -51,7 +51,7 @@
       "title": "**Save, draft, Undo**: `saveBatch` with the conflict check, pending marker + roll-forward, journal append, cell splice. Retry, Discard, leave-page warning, localStorage draft with age, storage-refused warning. `undoLastSave` (newest first, conflicts kept). `<J>.undo.edits` (first 10 cells + count) for the Undo dialog. Message formatters `saveResult`, `draftAge`, `undoTitle`, `undoResult` in `journal.js` (\"(N files)\" from `columns[].file`). `gas_run.js` and `e2e.sh` (all steps except 6e)"
     },
     {
-      "status": "todo",
+      "status": "passed",
       "attempts": 0,
       "id": "T8",
       "title": "**Student detail and wide table**: tap a student for the full row with per-category weighted %, `dropped` mark, Coursework Total, Final Score and Grade, live from saved values + unsaved edits, editable there. Wide screens get the whole course table with the same marks and editing; narrow widths fall back to column mode"

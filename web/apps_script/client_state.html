@@ -18,6 +18,9 @@ const state = {
   editsPush: null,   // push_id the unsaved edits were made on (an older one after a draft from before a push)
   notFound: new Set(),  // editKeys the last Save reported `not found`
   grades: [],        // Grades.computeGrades over the saved values plus the unsaved edits, one per row
+  gradeById: new Map(),  // student_id -> its entry in grades
+  groups: new Map(), // student_id -> Class Group from the roster (shown in the detail)
+  view: 'scores',    // 'table' (wide screens only) or 'scores'
   column: null,      // the picked columns[].name in column mode
   search: '',        // the search box text
   saving: false,     // a Save or Undo is on its way: edits are locked
@@ -99,6 +102,18 @@ function useCourse(reply) {
   state.rows = Grades.mergeCourse(reply.course, reply.roster, reply.files);
   state.byId = new Map(state.rows.map((r) => [r.student_id, r]));
   state.max = Grades.fillDefaultMax(reply.course);
+  state.groups = classGroups(reply.roster);
+}
+
+// Class Group per student, when the roster has that column.
+function classGroups(rosterText) {
+  const doc = Csv.parse(rosterText);
+  const header = doc.header.map((h) => h.trim());
+  const iId = header.indexOf('Student ID');
+  const iGroup = header.indexOf('Class Group');
+  const groups = new Map();
+  if (iId >= 0 && iGroup >= 0) for (const r of doc.rows) groups.set((r[iId] || '').trim(), (r[iGroup] || '').trim());
+  return groups;
 }
 
 // Back to the course list: the unsaved edits stay only in the draft.
@@ -109,6 +124,15 @@ function closeCourse() {
 
 function recompute() {
   state.grades = Grades.computeGrades(state.open.course, state.rows, Array.from(state.edits.values()));
+  state.gradeById = new Map(state.grades.map((g) => [g.student_id, g]));
+}
+
+// A student's grades from the saved values plus the unsaved edits, or (S4.2 preview) with one more value typed
+// into `column` and not yet committed.
+function gradeOf(row, column, value) {
+  if (column == null) return state.gradeById.get(row.student_id);
+  const overlay = Array.from(state.edits.values()).concat({ student_id: row.student_id, column, value });
+  return Grades.computeGrades(state.open.course, [row], overlay)[0];
 }
 
 // ---- Draft (gw:draft:<folder>): IDs and values only, no names (S8.4, S8.8) ----
@@ -316,6 +340,18 @@ function refusalText(text, reason) {
   }
   if (reason === 'negative') return "'" + text + "' is negative; scores start at 0";
   return "'" + text + "' isn't a score. Use a number (8.5), ขส, or leave it blank.";
+}
+
+function editCount(row) {
+  let n = 0;
+  for (const e of state.edits.values()) if (e.student_id === row.student_id) n += 1;
+  return n;
+}
+
+// Attendance text that isn't a code counts as 0 and is drawn red (S6, "not a code").
+function badCode(value) {
+  const code = value.trim();
+  return code !== '' && !Object.prototype.hasOwnProperty.call(Grades.CODE_VALUE, code);
 }
 
 // Above the column's max (accepted, drawn red: S3.5, edge 41).

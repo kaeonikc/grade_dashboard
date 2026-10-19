@@ -23,3 +23,5 @@
 {"ts": "2026-10-18T23:13:18", "event": "task_started", "role": "engineer", "note": "T7"}
 {"ts": "2026-10-19T08:28:02", "event": "task_passed", "role": "engineer", "note": "T7: e2e steps 1-13 pass; step 14 (full node suite) waits on T9/T10 tests; accepted by lead"}
 {"ts": "2026-10-19T08:28:02", "event": "note", "role": "lead", "note": "For review: roll-forward after availability check (SPEC orders before trim); saveBatch takes 3rd arg push; planSave 4th arg restoring; roll-forward handles cell lines only (T10 adds config)"}
+{"ts": "2026-10-19T08:28:02", "event": "task_started", "role": "engineer", "note": "T8"}
+{"ts": "2026-10-19T09:01:20", "event": "task_passed", "role": "engineer", "note": "T8"}
