@@ -27,3 +27,6 @@
 {"ts": "2026-10-19T09:01:20", "event": "task_passed", "role": "engineer", "note": "T8"}
 {"ts": "2026-10-19T09:01:21", "event": "task_started", "role": "engineer", "note": "T9"}
 {"ts": "2026-10-19T09:18:00", "event": "task_passed", "role": "engineer", "note": "T9"}
+{"ts": "2026-10-19T09:18:00", "event": "task_started", "role": "engineer", "note": "T10"}
+{"ts": "2026-10-19T09:32:52", "event": "task_passed", "role": "engineer", "note": "T10"}
+{"ts": "2026-10-19T09:32:52", "event": "note", "role": "lead", "note": "For review: config roll-forward checked only by a scratch script (scratchpad/t10_rollforward.js), not in the suite; save.js now injected into the browser too (ADR 004 lists csv/grades/journal)"}

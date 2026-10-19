@@ -1,7 +1,7 @@
 <script>
 'use strict';
 // Screens (web/SPEC.md "Interface"): the course list, opening a course, column mode, attendance, the student detail,
-// the wide table, and the Fill, Save, Discard, Undo, Leave and More dialogs.
+// the wide table, the Grading tab, and the Fill, Save, Discard, Undo, Leave and More dialogs.
 // Every piece of course data goes in as text (textContent), never as HTML.
 
 const SLOW_MS = 8000;
@@ -169,6 +169,7 @@ function courseView(draft) {
     ...[['scores', 'Scores'], ['attendance', 'Attendance'], ['grading', 'Grading']].map(
       ([view, label]) => viewButton(view, label, 'tab')));
   cm.wrap = el('div', { class: 'table-wrap' });
+  cm.grading = el('div', { class: 'grading' });
   cm.list = el('ul', { class: 'rows' });
   cm.list.addEventListener('keydown', attendanceKey);
   cm.empty = el('div', { class: 'empty' });
@@ -185,7 +186,8 @@ function courseView(draft) {
   cm.dock = el('div', { class: 'dock' }, cm.alert, cm.status, el('div', { class: 'action-bar' }, cm.saveBtn), cm.tabs);
   cm.announce = el('p', { class: 'sr-only', 'aria-live': 'polite' });
   cm.banner = draftBanner(draft);
-  return [head, cm.banner, cm.views, picker, cm.list, cm.empty, cm.wrap, cm.announce, cm.dock, cm.bar].filter(Boolean);
+  return [head, cm.banner, cm.views, picker, cm.list, cm.empty, cm.wrap, cm.grading, cm.announce, cm.dock, cm.bar]
+    .filter(Boolean);
 }
 
 function viewButton(view, label, cls) {
@@ -208,10 +210,13 @@ function renderView() {
     cm.wrap.replaceChildren();
     cm.items = [];
     cm.list.replaceChildren();
+    cm.empty.replaceChildren();
     keypad(false);
-    cm.empty.replaceChildren(el('p', { class: 'muted' }, 'Weights and grade boundaries are not editable here yet.'));
+    renderGrading();
     refreshChrome();
   } else if (table) {
+    cfg = null;
+    cm.grading.replaceChildren();
     cm.items = [];
     cm.list.replaceChildren();
     cm.empty.replaceChildren();
@@ -220,7 +225,9 @@ function renderView() {
     refreshCounts();
   } else {
     tb = null;
+    cfg = null;
     cm.wrap.replaceChildren();
+    cm.grading.replaceChildren();
     renderColumn();
   }
   if (det) renderDetail();
@@ -1439,14 +1446,161 @@ function doUndo(t) {
 // ---- 12. Leaving with unsaved edits (S8.7) ----
 function leave(then) {
   const n = state.edits.size;
+  const forms = CONFIG_PARTS.filter(formChanged)
+    .map((part) => (part === 'weights' ? 'Weights not saved.' : 'Boundaries not saved.')).join(' ');
   const go = () => { closeCourse(); then(); };
-  if (!n) return go();
+  if (!n && !forms) return go();
   if (state.saving) return;
+  if (!n) {
+    const f = dialog(forms, el('div', { class: 'sheet-actions' },
+      autofocused(button('Keep editing', () => f.close(), 'btn outline')),
+      button('Leave', () => { f.close(); go(); }, 'btn outline')));
+    return;
+  }
   const d = dialog(el('span', {}, F.plural(n, 'unsaved edit') + ' in ', data('span', {}, state.open.course.course_name)),
     el('p', {}, 'They stay on this device as a draft if you leave without saving.'),
+    forms ? el('p', { class: 'warn' }, forms) : null,
     el('div', { class: 'sheet-actions' }, autofocused(button('Keep editing', () => d.close(), 'btn outline'))),
     el('div', { class: 'sheet-actions' }, button('Leave, keep draft', () => { d.close(); go(); }, 'btn outline'),
       button('Save and leave', () => { d.close(); doSave(false, go); })));
+}
+
+// ---- 13. Grading: weights and boundaries (S10) ----
+let cfg = null;  // the Grading tab: per part, its fields, sum and preview lines, buttons and the "Saving…" text
+
+function renderGrading() {
+  cfg = {};
+  cm.grading.replaceChildren(...CONFIG_PARTS.map(configSection),
+    el('p', { class: 'muted' }, "Undo last save doesn't cover weights or boundaries: change them back here."));
+  for (const part of CONFIG_PARTS) refreshConfig(part);
+}
+
+// One form: a labelled input per key (no control adds or removes a key, S10.4), its checks, Reset and Save.
+function configSection(part) {
+  const weights = part === 'weights';
+  const form = configForm(part);
+  const c = { fields: [], working: null };
+  cfg[part] = c;
+  const rows = configKeys(part).map((key, i) => {
+    const id = 'cfg-' + part + '-' + i;
+    const input = el('input', { id, type: 'text', class: 'score', inputmode: 'decimal', autocomplete: 'off',
+      'aria-describedby': id + '-msg' });
+    input.value = form[key];
+    input.addEventListener('input', () => {
+      form[key] = input.value;
+      refreshConfig(part);
+    });
+    const msg = el('p', { class: 'msg', id: id + '-msg' });
+    const li = el('li', { class: 'row' }, data('label', { for: id }, key),
+      el('span', { class: 'cell' }, input, el('span', { class: 'mark', 'aria-hidden': 'true' }, '*')), msg);
+    c.fields.push({ key, input, msg, li });
+    return li;
+  });
+  if (!weights) {
+    c.lowest = el('span', { class: 'muted' });
+    rows.push(el('li', { class: 'row' }, el('span', {}, 'F'), c.lowest));
+  }
+  c.sum = weights ? el('p', {}) : null;
+  c.preview = el('div', { class: 'cfg-preview' });
+  c.reset = button('Reset', () => {
+    delete state.forms[part];
+    renderGrading();
+  }, 'btn outline');
+  c.save = button('', () => doSaveConfig(part));
+  return el('section', { class: 'cfg', 'aria-labelledby': 'cfg-' + part },
+    el('h2', { id: 'cfg-' + part }, weights ? 'Weights' : 'Grade boundaries (highest first)'),
+    el('ul', { class: 'rows' }, ...rows), c.sum, c.preview, el('div', { class: 'sheet-actions' }, c.reset, c.save));
+}
+
+// Field messages and `*` marks, the sum line, the F row, the grade preview and the buttons, from the form.
+function refreshConfig(part) {
+  const c = cfg[part];
+  const form = configForm(part);
+  const problems = new Map(configProblems(part).map((p) => [p.field, p]));
+  for (const f of c.fields) {
+    const p = problems.get(f.key);
+    f.li.classList.toggle('is-unsaved', configChanged(part, f.key));
+    f.msg.textContent = p ? configMessage(p, form) : '';
+    f.input.classList.toggle('refused', !!p);
+    f.input.setAttribute('aria-invalid', String(!!p));
+    f.input.readOnly = state.saving;
+  }
+  const values = problems.size ? null : configValues(part);
+  if (c.lowest) {
+    const typed = c.fields.map((f) => Save.configNumber(form[f.key])).filter((n) => n.ok).map((n) => n.value);
+    c.lowest.textContent = 'below ' + Math.min(...(typed.length ? typed : Object.values(state.open.course[part])));
+  }
+  if (c.sum) {
+    const warning = values && Save.sumWarning(values);
+    c.sum.hidden = !values;
+    c.sum.className = warning ? 'warn' : 'muted';
+    c.sum.textContent = warning ? '⚠ ' + warning : 'Weights sum to 1';
+  }
+  const changed = formChanged(part);
+  c.preview.replaceChildren(...(values && changed ? previewLines(part, values) : []));
+  c.reset.disabled = state.saving || !changed;
+  c.save.disabled = state.saving || !changed || problems.size > 0;
+  c.save.textContent = state.saving && c.working ? c.working : part === 'weights' ? 'Save weights' : 'Save boundaries';
+}
+
+// `With these weights {n} grades change.` (▸ lists `{id} {name}: B → B+`) or `No grade changes.`
+function previewLines(part, values) {
+  const changes = gradeChanges(part, values);
+  if (!changes.length) return [el('p', { class: 'muted' }, 'No grade changes.')];
+  const text = 'With these ' + (part === 'weights' ? 'weights ' : 'boundaries ') +
+    (changes.length === 1 ? '1 grade changes.' : changes.length + ' grades change.');
+  return [el('details', {}, el('summary', {}, text), el('ul', { class: 'cell-lines' }, ...changes.map((ch) =>
+    el('li', {}, el('span', { class: 'id' }, ch.row.student_id), ' ', data('span', {}, ch.row.name),
+      ': ' + ch.from + ' → ' + ch.to))))];
+}
+
+function doSaveConfig(part) {
+  const weights = part === 'weights';
+  cfg[part].working = weights ? 'Saving weights…' : 'Saving boundaries…';
+  cm.alert.replaceChildren();
+  saveConfig(part).then((reply) => {
+    renderView();
+    if (reply.ok) {
+      if (!weights) return say('Boundaries saved. Grades updated.');
+      return say(reply.warning ? 'Weights saved (they sum to ' + Save.weightTotal(reply.course.weights) +
+        '). Totals and grades updated.' : 'Weights saved. Totals and grades updated.');
+    }
+    if (reply.code === 'STALE_CONFIG') return configStale(part, reply.current);
+    if (reply.code === 'INVALID') return configRefused(part, reply);
+    if (reply.code === 'BUSY') {
+      return alertBox('Another save is running; try again.', button('Retry', () => doSaveConfig(part), 'btn outline'));
+    }
+    alertBox('Not saved: ' + reply.message);
+  }, (err) => {
+    renderView();
+    alertBox(failureKind(err) === 'offline' ? "You're offline. Connect, then try again."
+      : "Google didn't answer. Try again in a moment.", button('Retry', () => doSaveConfig(part), 'btn outline'));
+  });
+  for (const p of CONFIG_PARTS) refreshConfig(p);
+  refreshChrome();
+}
+
+// Another device saved this part after the page loaded (S10.5): nothing was written; the teacher picks.
+function configStale(part, current) {
+  const keys = part === 'weights' ? state.open.course.category_order.filter((k) => k in current) : Object.keys(current);
+  const done = (apply) => () => {
+    cm.alert.replaceChildren();
+    apply();
+    renderView();
+  };
+  alertBox(el('span', {}, (part === 'weights' ? 'Weights' : 'Boundaries') +
+    ' were changed on another device after you opened them. Nothing was saved.', el('br'),
+    'On Drive now: ' + keys.map((k) => k + ' ' + current[k]).join(', ')),
+  button('Use Drive values', done(() => { useConfig(part, current); delete state.forms[part]; }), 'btn outline'),
+  button('Keep mine', done(() => keepForm(part, current)), 'btn outline'));
+}
+
+// INVALID from the server: the field's message, as the live check words it.
+function configRefused(part, reply) {
+  const f = cfg[part].fields.find((x) => x.key === reply.field);
+  if (!f || reply.reason === 'keys') return alertBox('Not saved: ' + reply.message);
+  f.msg.textContent = configMessage(reply, configForm(part));
+  f.input.focus();
 }
 
 // ---- More sheet ----

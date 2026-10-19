@@ -8,6 +8,7 @@ const LOCK_WAIT_MS = 25000;
 const NOTE_NONE = 'Nothing to undo';
 const NOTE_PULLED = 'Already pulled to the Mac; use `grader undo` there';
 const UNDO_CHANGED = 'Another device saved since this page loaded. Reload to see the newest save, then try again.';
+const CONFIG_STALE = 'Changed on another device after this page loaded. Nothing was saved.';
 const ISO_FORMAT = "yyyy-MM-dd'T'HH:mm:ssXXX";
 
 const NOT_AVAILABLE_HTML =
@@ -59,8 +60,9 @@ function core_() {
 
 // For Index.html: the same module source the server and the tests run, plus the instances (ADR 004).
 function clientCore_() {
-  return [gwCsv, gwGrades, gwJournal].map(String).join('\n') +
-    '\nconst Csv = gwCsv();\nconst Grades = gwGrades(Csv);\nconst Journal = gwJournal();\n';
+  return [gwCsv, gwGrades, gwJournal, gwSave].map(String).join('\n') +
+    '\nconst Csv = gwCsv();\nconst Grades = gwGrades(Csv);\nconst Journal = gwJournal();\n' +
+    'const Save = gwSave(Csv, Grades);\n';
 }
 
 // ---- server functions (google.script.run) ----
@@ -130,6 +132,25 @@ function undoLastSave(folderName, batch) {
       ok: true, batch: meta && meta.batch, undoes: batch, saved: savedCells_(plan), already: plan.already,
       conflicts: plan.conflicts, journal: journalReply_(c),
     };
+  });
+}
+
+// Saves the weights or grade boundaries typed on the Grading tab (SPEC "Config save"): one `config` journal line,
+// then course.json. A weights sum other than 1 comes back as `warning` and is saved (S10.2).
+function saveConfig(folderName, part, value, original) {
+  return withCourse_(folderName, function (c) {
+    const plan = core_().Save.planConfig(c.course, part, value, original);
+    if (plan.code === 'STALE_CONFIG') {
+      return Object.assign(fail_('STALE_CONFIG', CONFIG_STALE), { current: plan.current });
+    }
+    if (!plan.ok) return Object.assign(fail_('INVALID', plan.field + ': not saved, the value was refused'), plan);
+    const meta = batchMeta_(c);
+    setPending_(c.folder, { batch: meta.batch, kind: 'config' });
+    appendJournal_(c, [core_().Journal.configLine(meta, part, plan.value, c.course[part])]);
+    c.course = plan.course;
+    writeCourse_(c);
+    clearPending_(c.folder);
+    return { ok: true, batch: meta.batch, course: plan.course, warning: plan.warning, journal: journalReply_(c) };
   });
 }
 
@@ -330,30 +351,48 @@ function batchMeta_(c) {
 // SPEC "Saving" step 3: the pending marker, the journal with one line per change (one write), each changed CSV
 // once, then the marker cleared. A failure in between is completed or dropped by the next call (rollForward_).
 function writeBatch_(c, plan, meta) {
-  const J = core_().Journal;
-  const lines = J.cellLines(meta, plan.changes);
   setPending_(c.folder, { batch: meta.batch, kind: 'cell' });
-  const sep = c.journalText === '' || c.journalText.slice(-1) === '\n' ? '' : '\n';
-  const added = lines.map(function (l) { return JSON.stringify(l) + '\n'; }).join('');
-  writeText_(c.journalFile, c.journalText + sep + added);
+  appendJournal_(c, core_().Journal.cellLines(meta, plan.changes));
   Object.keys(plan.texts).forEach(function (rel) { writeText_(listedFile_(c, rel), plan.texts[rel]); });
   clearPending_(c.folder);
+}
+
+// The journal = its text + one line per entry, in one write; the course's lines and counts follow.
+function appendJournal_(c, lines) {
+  const sep = c.journalText === '' || c.journalText.slice(-1) === '\n' ? '' : '\n';
+  const added = lines.map(function (l) { return JSON.stringify(l) + '\n'; }).join('');
+  c.journalText = c.journalText + sep + added;
+  writeText_(c.journalFile, c.journalText);
   c.lines = c.lines.concat(lines);
-  c.summary = J.summary(c.lines);
+  c.summary = core_().Journal.summary(c.lines);
+}
+
+// course.json in web-push's layout (indent 1, Thai as is, final newline); numbers in JS form (`10`, not `10.0`).
+function writeCourse_(c) {
+  writeText_(fileIn_(c.dirs[''], 'course.json'), JSON.stringify(c.course, null, 1) + '\n');
 }
 
 // Completes a save that stopped after its journal append: each cell of the pending batch that still holds its
-// `original` gets its `value`. A batch that never reached the journal is just forgotten (edges 35, 36).
+// `original` gets its `value`, and a config part that still equals its `original` gets its `value`. A batch that
+// never reached the journal is just forgotten (edges 35, 36).
 function rollForward_(c) {
   const pending = getPending_(c.folder);
   if (!pending) return;
-  const edits = c.lines.filter(function (l) { return l.batch === pending.batch && l.kind === 'cell'; })
-    .sort(function (a, b) { return a.seq - b.seq; })
+  const batch = c.lines.filter(function (l) { return l.batch === pending.batch; })
+    .sort(function (a, b) { return a.seq - b.seq; });
+  const edits = batch.filter(function (l) { return l.kind === 'cell'; })
     .map(function (l) { return { student_id: l.student_id, column: l.column, value: l.value, original: l.original }; });
   if (edits.length) {
     const plan = planFor_(c, edits, true);
     Object.keys(plan.texts).forEach(function (rel) { writeText_(listedFile_(c, rel), plan.texts[rel]); });
   }
+  batch.forEach(function (l) {
+    if (l.kind !== 'config' || !core_().Save.sameConfig(c.course[l.part], l.original)) return;
+    const part = {};
+    part[l.part] = l.value;
+    c.course = Object.assign({}, c.course, part);
+    writeCourse_(c);
+  });
   clearPending_(c.folder);
 }
 

@@ -102,7 +102,12 @@
   .search-row { display: flex; align-items: center; gap: 0.5rem; }
   .search-row .search { flex: 1; min-width: 0; }
   .fill-btn { flex-shrink: 0; white-space: nowrap; }
-  .view-grading .col-picker, .view-grading .action-bar { display: none; }
+  .view-grading .col-picker, .view-grading .action-bar, .view-grading .empty { display: none; }
+  .grading { max-width: 32rem; }
+  .cfg { padding-bottom: 1rem; border-bottom: 1px solid var(--line); }
+  .cfg h2 { font-size: 1.125rem; margin: 1rem 0 0; }
+  .cfg-preview summary { min-height: 2.75rem; padding-top: 0.5rem; cursor: pointer; }
+  .cfg-preview p { margin: 0.5rem 0 0; }
   .rows { list-style: none; margin: 0; padding: 0; }
   .row {
     display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: 0.75rem;

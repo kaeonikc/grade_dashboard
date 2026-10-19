@@ -1,7 +1,7 @@
 <script>
 'use strict';
 // Browser state (web/SPEC.md "Modules"): the course list, the open course with its grades, and the server calls.
-// Csv, Grades and Journal come from the injected modules (Index.html, ADR 004).
+// Csv, Grades, Journal and Save come from the injected modules (Index.html, ADR 004).
 
 const DRAFT_PREFIX = 'gw:draft:';
 const UI_PREFIX = 'gw:ui:';
@@ -26,6 +26,7 @@ const state = {
   search: '',        // the search box text
   saving: false,     // a Save or Undo is on its way: edits are locked
   storageOff: false, // localStorage refused a write: the draft can't be kept (S8.8)
+  forms: {},         // Grading tab: {weights|grade_boundaries: {key: text as typed}}, kept across tabs until saved
 };
 
 // google.script.run as a promise. A failed call (network, server exception, time limit) rejects.
@@ -74,6 +75,7 @@ function openCourse(folder) {
     useCourse(reply);
     state.edits = new Map();
     state.notFound = new Set();
+    state.forms = {};
     state.editsPush = reply.push.push_id;
     state.search = '';
     state.storageOff = !storageWorks();
@@ -122,6 +124,7 @@ function classGroups(rosterText) {
 function closeCourse() {
   state.open = null;
   state.edits = new Map();
+  state.forms = {};
 }
 
 function recompute() {
@@ -278,11 +281,107 @@ function failureKind(err) {
 
 // The browser's own prompt where it works; iOS Safari often ignores it, so the draft is the real protection.
 window.addEventListener('beforeunload', (e) => {
-  if (state.open && state.edits.size) {
+  if (state.open && (state.edits.size || CONFIG_PARTS.some(formChanged))) {
     e.preventDefault();
     e.returnValue = '';
   }
 });
+
+// ---- Grading: weights and boundaries (S10). Undo last save doesn't cover them ----
+const CONFIG_PARTS = ['weights', 'grade_boundaries'];
+
+// The keys in the order shown: categories in category_order, letters in their stored order (never re-sorted).
+function configKeys(part) {
+  const values = state.open.course[part];
+  return part === 'weights' ? state.open.course.category_order.filter((k) => k in values) : Object.keys(values);
+}
+
+// The form of a part: the texts as typed, else the course values as course.json holds them (`0.25`).
+function configForm(part) {
+  if (!state.forms[part]) state.forms[part] = textsOf(state.open.course[part]);
+  return state.forms[part];
+}
+
+function textsOf(values) {
+  return Object.fromEntries(Object.keys(values).map((k) => [k, String(values[k])]));
+}
+
+// A field whose text doesn't mean the course value (marked `*`).
+function configChanged(part, key) {
+  const n = Save.configNumber(configForm(part)[key]);
+  return !(n.ok && n.value === state.open.course[part][key]);
+}
+
+function formChanged(part) {
+  return !!state.forms[part] && configKeys(part).some((k) => configChanged(part, k));
+}
+
+// The same checks the server makes (save.configProblems): [{field, reason, upper?}] in the stored key order.
+function configProblems(part) {
+  return Save.configProblems(part, Object.keys(state.open.course[part]), configForm(part));
+}
+
+// The form as numbers, or null while a field is refused.
+function configValues(part) {
+  if (configProblems(part).length) return null;
+  const form = configForm(part);
+  return Object.fromEntries(Object.keys(state.open.course[part]).map((k) => [k, Save.configNumber(form[k]).value]));
+}
+
+// Copy table cfg.nan / cfg.comma / cfg.negative / cfg.empty / cfg.order.
+function configMessage(p, form) {
+  const text = String(form[p.field]).trim();
+  if (p.reason === 'order') return p.field + ' ' + text + ' must be lower than ' + p.upper + ' ' + form[p.upper].trim();
+  if (p.reason === 'empty') return p.field + ': enter a number (0 is allowed)';
+  if (p.reason === 'negative') return p.field + ": can't be negative";
+  if (p.reason === 'comma') {
+    return p.field + ': use . for decimals (' + (/^\d+,\d+$/.test(text) ? text.replace(',', '.') : '0.25') + ')';
+  }
+  return p.field + ": '" + text + "' isn't a number (e.g. 0.25)";
+}
+
+// The grades that change if `values` replace the part (the preview), over the same saved values and unsaved edits
+// as the grades shown: [{row, from, to}].
+function gradeChanges(part, values) {
+  const course = Object.assign({}, state.open.course, { [part]: values });
+  const next = Grades.computeGrades(course, state.rows, Array.from(state.edits.values()));
+  return next.map((g, i) => ({ row: state.rows[i], from: state.grades[i].grade, to: g.grade }))
+    .filter((c) => c.from !== c.to);
+}
+
+// A part as Drive now holds it: maxima derived from weights, totals and grades follow (ADR 003).
+function useConfig(part, values) {
+  state.open.course = Object.assign({}, state.open.course, { [part]: values });
+  state.max = Grades.fillDefaultMax(state.open.course);
+  recompute();
+}
+
+// After STALE_CONFIG, "Keep mine": the course takes the Drive values, the form keeps what was typed, so the next
+// Save starts from the Drive values.
+function keepForm(part, current) {
+  const form = configForm(part);
+  useConfig(part, current);
+  state.forms[part] = Object.fromEntries(Object.keys(current).map((k) => [k, k in form ? form[k] : String(current[k])]));
+}
+
+// Sends the form with the values it started from. Resolves with the server reply (applied when ok).
+function saveConfig(part) {
+  state.saving = true;
+  const form = Object.assign({}, configForm(part));
+  return server('saveConfig', state.open.folder, part, form, state.open.course[part]).then((reply) => {
+    state.saving = false;
+    setNow(reply);
+    if (reply.ok) {
+      state.open.journal = reply.journal;
+      useConfig(part, reply.course[part]);
+      delete state.forms[part];
+    }
+    return reply;
+  }, (err) => {
+    state.saving = false;
+    throw err;
+  });
+}
 
 // ---- UI memory per device (gw:ui:<folder>): column names and the tab only, no PII ----
 function uiMemory(folder) {

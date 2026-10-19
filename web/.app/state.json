@@ -63,7 +63,7 @@
       "title": "**Attendance and Fill**: session column with today preselected, P/L/A/X taps that move to the next student, `EA` shown and kept, no session add/rename/remove, never touching the xlsx. Fill: whole column or only empty cells (unsaved values count as filled), \"N cells will change\", 0 does nothing, validation, attendance choices P/L/A/X/Clear"
     },
     {
-      "status": "todo",
+      "status": "passed",
       "attempts": 0,
       "id": "T10",
       "title": "**Weights and boundaries editor**: `saveConfig` with a journaled `config` line, number validation naming the field, fixed key sets, boundaries strictly descending in stored letter order (else `INVALID` naming the letter; never re-sorted), sum ≠ 1 warning (Save allowed), stale-config refusal. Totals recompute (weight-derived maxima included). e2e step 6e"
