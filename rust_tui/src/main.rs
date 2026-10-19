@@ -3,6 +3,7 @@ mod bridge;
 mod style;
 mod app;
 mod edits;
+mod grades;
 mod ui;
 
 use app::{App, AppEvent};

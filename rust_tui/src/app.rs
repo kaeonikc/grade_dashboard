@@ -638,6 +638,14 @@ impl App {
                     return;
                 }
             }
+            // Strictly descending in the order shown, as the web app checks; the dialog stays open to fix it
+            let values: std::collections::BTreeMap<String, f64> =
+                boundaries_map.iter().map(|(k, v)| (k.clone(), *v)).collect();
+            if let Some(msg) = crate::grades::boundary_problem(&self.settings_keys, &values) {
+                self.error = Some(msg);
+                return;
+            }
+            self.error = None;
         }
 
         self.loading = true;
@@ -897,7 +905,9 @@ impl App {
         self.settings_keys.clear();
         self.settings_textareas.clear();
 
-        for (grade, val) in &data.grade_boundaries {
+        // Scale order (A, B+, B, ...), not the map's text order (A, B, B+, ...)
+        for grade in crate::grades::grade_order(&data.grade_boundaries) {
+            let val = data.grade_boundaries[&grade];
             let mut ta = tui_textarea::TextArea::new(vec![format!("{:.1}", val)]);
             ta.move_cursor(tui_textarea::CursorMove::End);
             ta.set_cursor_line_style(ratatui::style::Style::default().bg(self.theme.highlight));
@@ -906,7 +916,7 @@ impl App {
                     .fg(self.theme.info)
                     .bg(self.theme.panel_bg)
             );
-            self.settings_keys.push(grade.clone());
+            self.settings_keys.push(grade);
             self.settings_textareas.push(ta);
         }
     }
@@ -1837,6 +1847,23 @@ mod tests {
 
     fn pending(app: &App, row: usize, col: &str) -> Option<String> {
         app.edits.get(&app.student_id_at(row), col).map(|p| p.value.clone())
+    }
+
+    #[test]
+    fn boundaries_dialog_lists_letters_in_scale_order() {
+        let mut app = course_app("homework", "hw1", 0);
+        app.start_editing_boundaries();
+        assert_eq!(app.settings_keys, ["A", "B+", "B", "C+", "C", "D+", "D"]);
+    }
+
+    #[test]
+    fn boundaries_out_of_order_stay_open_with_the_message() {
+        let mut app = course_app("homework", "hw1", 0);
+        app.start_editing_boundaries();
+        app.settings_textareas[1] = tui_textarea::TextArea::new(vec!["69".to_string()]); // B+ under B 70
+        press(&mut app, KeyCode::Enter);
+        assert!(app.editing_boundaries && !app.loading, "not saved, dialog open");
+        assert_eq!(app.error.as_deref(), Some("B 70 must be lower than B+ 69"));
     }
 
     #[test]

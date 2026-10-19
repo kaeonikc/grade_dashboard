@@ -1,4 +1,5 @@
-"""Repo hygiene for grade_web (S13.3): no secrets, Drive IDs or account names; existing tests and rust_tui untouched."""
+"""Repo hygiene for grade_web (S13.3): no secrets, Drive IDs or account names; existing tests and rust_tui untouched
+(except the approved grade-order change)."""
 import re
 import subprocess
 
@@ -71,7 +72,13 @@ def test_existing_conftest_fixtures_unchanged():
     assert now.startswith(old.rstrip("\n")), "existing conftest.py content was edited"
 
 
+# The one approved grade-tui change on this branch: the boundaries dialog's letter order and check
+# (SPEC_grade_order.md D7). Anything else under rust_tui/ is still off limits.
+RUST_TUI_APPROVED = {"rust_tui/src/grades.rs", "rust_tui/src/app.rs", "rust_tui/src/main.rs"}
+
+
 @needs_git
 def test_rust_tui_untouched():
-    r = git("diff", "--quiet", BASE, "--", "rust_tui/")
-    assert r.returncode == 0, git("diff", "--stat", BASE, "--", "rust_tui/").stdout
+    changed = set(git("diff", "--name-only", BASE, "--", "rust_tui/").stdout.split())
+    changed |= set(git("ls-files", "--others", "--exclude-standard", "rust_tui/").stdout.split())
+    assert changed <= RUST_TUI_APPROVED, sorted(changed - RUST_TUI_APPROVED)
