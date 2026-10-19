@@ -24,6 +24,9 @@ const state = {
   tab: 'summary',    // grade-tui's tab (SPEC_web_tabs.md): 'summary', 'raw', 'analytics' or 'grading'
   category: '*',     // Raw Details' category (a category name, '*' = All columns on wide screens)
   menu: false,       // the ☰ Categories menu is shown
+  attSession: false, // Raw Details › attendance shows one session (attendance taking) instead of the grid
+  attRisk: false,    // the attendance grid shows only students under 80% (SPEC_attendance_grid.md)
+  attSort: false,    // the attendance grid lists the lowest % first
   view: 'summary',   // what renders, from tab + category + width (modeOf): 'summary', 'table' (wide), 'scores',
                      // 'attendance' (phone), 'analytics' or 'grading'
   column: null,      // the picked columns[].name in Scores (and the table's Fill column)
@@ -90,6 +93,9 @@ function openCourse(folder) {
     const nav = Grades.navFromMemory(ui, reply.course);
     state.tab = nav.tab;
     state.category = nav.category;
+    state.attSession = false;
+    state.attRisk = false;
+    state.attSort = false;
     state.session = todaySession();
     const draft = restoreDraft();
     recompute();
@@ -446,6 +452,11 @@ function rememberMenu(open) {
   } catch (e) {
     // only the menu preference is lost
   }
+}
+
+// The attendance grid's numbers: per student and per session over the sessions held so far, unsaved edits included.
+function attStats() {
+  return Grades.attendanceStats(state.rows, sessions(), cellValue, today());
 }
 
 // grade-tui's Analytics › Overview and the grade distribution over the grades shown (unsaved edits included).

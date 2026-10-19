@@ -369,6 +369,38 @@
   .bp-out { stroke: var(--danger); stroke-width: 3; }
   .bp-axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 0.875rem; }
 
+  /* 7b. Attendance grid (SPEC_attendance_grid.md): chips in the grade colours, numbered sessions, footer */
+  .att-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0 0 0.5rem; }
+  .toggle[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+  .view-attgrid .fill-btn { display: none; }
+  .att-chip {
+    display: inline-flex; align-items: center; justify-content: center; min-width: 1.75rem; height: 1.75rem;
+    padding: 0 0.25rem; border: 2px solid currentColor; border-radius: 0.5rem; background: var(--bg2); font-weight: 700;
+  }
+  .att-P { color: var(--grade-b); }
+  .att-L { color: var(--grade-dp); }
+  .att-A { color: var(--grade-f); }
+  .att-X { color: var(--grade-a); }
+  .att-blank { border-style: dashed; color: var(--muted); }
+  .att-grid td.c-code { min-width: 2.75rem; padding: 0 0.25rem; text-align: center; }
+  .att-grid thead th.c-code { min-width: 2.75rem; max-width: 3.5rem; }
+  .att-head { display: flex; flex-direction: column; align-items: center; line-height: 1.2; }
+  .att-n { font-weight: 700; }
+  .att-d { font-size: 0.8125rem; font-weight: 400; color: var(--muted); }
+  .att-head.today { color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); }
+  .att-head.today .att-d { color: var(--accent); font-weight: 600; }
+  .att-dot { height: 0.75rem; line-height: 0.75rem; color: var(--mark); }
+  .tb td.c-att { background: var(--bg2); text-align: right; }
+  .tb td.at-risk { color: var(--danger); font-weight: 700; }
+  .tb td.bad { font-weight: 700; }
+  .att-foot td {
+    position: sticky; bottom: 0; z-index: 1; background: var(--bg2); font-weight: 600; text-align: center;
+    border-top: 2px solid var(--line);
+  }
+  .att-foot td.c-id, .att-foot td.c-name { z-index: 3; text-align: left; }
+  .att-grid.compact .c-name { left: 0; width: 9rem; min-width: 9rem; max-width: 9rem; }
+  .att-grid .c-name .sub { display: block; margin-top: -0.125rem; font-size: 0.8125rem; line-height: 1.1; }
+
   /* 7. Wide table: view switch, frozen ID and Name, sticky header row, computed columns on grey */
   .views, .table-wrap { display: none; }
   @media (min-width: 960px) { .views { display: flex; gap: 0.5rem; padding: 0.5rem 0 0; } }

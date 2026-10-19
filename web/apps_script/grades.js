@@ -368,6 +368,56 @@ function gwGrades(Csv) {
     return d.toISOString().slice(0, 10);
   }
 
+  // ---- Attendance grid (SPEC_attendance_grid.md) ----
+  const ATT_KIND = { P: 'P', L: 'L', A: 'A', X: 'X', EA: 'X' };
+  const attZero = () => ({ P: 0, L: 0, A: 0, X: 0, blank: 0 });
+
+  // Per student and per session, over the sessions held so far (dated today or earlier; an undated header once any
+  // row has a code there). Points as computeGrades (CODE_VALUE); EA counts as X; an invalid code counts nowhere.
+  // textOf(row, column) = the cell with unsaved edits applied; today = 'YYYY-MM-DD'.
+  // -> {students: Map(student_id -> {held, total, pct, counts, atRisk}), sessions: [{name, held, present, counts}]}
+  function attendanceStats(rows, sessions, textOf, today) {
+    const code = (r, s) => String(textOf(r, s.name) == null ? '' : textOf(r, s.name)).trim();
+    const held = sessions.map((s) => {
+      const d = sessionDate(s.header);
+      return d ? d <= today : rows.some((r) => code(r, s) !== '');
+    });
+    const perSession = sessions.map((s, i) => ({ name: s.name, held: held[i], present: 0, counts: attZero() }));
+    const students = new Map();
+    for (const r of rows) {
+      const st = { held: 0, total: 0, pct: null, counts: attZero(), atRisk: false };
+      sessions.forEach((s, i) => {
+        const c = code(r, s);
+        const kind = c === '' ? 'blank' : ATT_KIND[c];
+        if (kind) perSession[i].counts[kind] += 1;
+        if (kind && kind !== 'blank' && kind !== 'A') perSession[i].present += 1;
+        if (!held[i]) return;
+        st.held += 1;
+        if (has(CODE_VALUE, c)) st.total += CODE_VALUE[c];
+        if (kind) st.counts[kind] += 1;
+      });
+      if (st.held) {
+        // Points are multiples of 0.2: tenths as an integer keep 80% exact (no 79.999… from float sums).
+        st.pct = (Math.round(st.total * 10) * 10) / st.held;
+        st.atRisk = st.pct < 80;
+      }
+      students.set(r.student_id, st);
+    }
+    return { students, sessions: perSession };
+  }
+
+  // `9.6 / 10 · 96%` (the % rounded down, so a flagged row never reads 80%), or `—` before the first held session.
+  function fmtAttTotal(st) {
+    if (!st || !st.held) return '—';
+    return st.total.toFixed(1) + ' / ' + st.held + ' · ' + Math.floor(st.pct) + '%';
+  }
+
+  // `16 Jun 2026` -> `16/6`; an undated header as written.
+  function shortDate(header) {
+    const d = sessionDate(header);
+    return d ? +d.slice(8, 10) + '/' + +d.slice(5, 7) : String(header == null ? '' : header);
+  }
+
   // Fill Column (S7): the cells that change when `value` goes in `column`, over every row. mode 'empty' takes only
   // blank cells, 'whole' every cell; an unsaved value (overlay) counts as the cell's value, and a cell that already
   // means `value` is left out. Returns [{student_id, value}].
@@ -387,6 +437,7 @@ function gwGrades(Csv) {
     ABSENT, CODE_VALUE, classify, sameCell, canonicalValue, validateTyped, round2, letterGrade, mergeCourse,
     fillDefaultMax, computeGrades, sessionDate, fillTargets, GRADE_SCALE, gradeOrder, gradeRanges, distribution,
     gradeClass, pyRound2, quantile, analytics, TABS, navCategories, columnsOf, firstCategory, navFromMemory,
+    attendanceStats, fmtAttTotal, shortDate,
   };
 }
 if (typeof module !== 'undefined') module.exports = (Csv) => gwGrades(Csv || require('./csv.js')());

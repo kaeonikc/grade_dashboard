@@ -7,7 +7,8 @@ account reads course copies in `My Drive/grade_web/<course>/`. `grader web-push`
 Status: the web app follows grade-tui's tabs: [1] Summary Scores, [2] Raw Details (one category at a time, picked
 from the ☰ Categories menu; the table on wide screens, column mode on phones, with Fill, Save and undo), [3] Analytics
 › Overview (statistics, grade distribution, histogram, box plot) and [4] Grading (weights and boundaries, each
-letter's interval, live distribution). See `../SPEC_web_tabs.md` and `../SPEC_grade_order.md`.
+letter's interval, live distribution). Attendance opens as an overview grid like grade-tui's (`../SPEC_attendance_grid.md`). See also
+`../SPEC_web_tabs.md` and `../SPEC_grade_order.md`.
 
 The web app is 10 files in `apps_script/`, pushed as they are (no build step):
 

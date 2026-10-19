@@ -159,8 +159,9 @@ function courseView(draft) {
     onclick: clearSearch }, '×');
   cm.fill = button('Fill…', openFill, 'btn outline fill-btn');
   cm.label = el('label', { for: 'col' });
+  cm.gridBack = button('‹ Grid', () => { state.attSession = false; renderView(); }, 'btn outline grid-back');
   const picker = el('section', { class: 'col-picker' }, cm.label,
-    el('div', { class: 'col-row' }, cm.prev, cm.select, cm.next), cm.line,
+    el('div', { class: 'col-row' }, cm.gridBack, cm.prev, cm.select, cm.next), cm.line,
     el('div', { class: 'search-row' }, el('div', { class: 'search' }, cm.search, cm.clear), cm.fill));
 
   // grade-tui's tabs (SPEC_web_tabs.md): a strip on wide screens, the bottom tab bar on phones (CSS shows one).
@@ -173,6 +174,20 @@ function courseView(draft) {
     el('p', { class: 'menu-title' }, 'Categories'), cm.menuList);
   cm.menu.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !WIDE.matches) closeDrawer(); });
   cm.scrim = el('div', { class: 'scrim', 'aria-hidden': 'true', onclick: () => closeDrawer() });
+  // The attendance grid's toolbar (SPEC_attendance_grid.md A1, A11)
+  cm.takeToday = button('Take today ›', () => { const t = todaySession(); if (t) openSession(t); }, 'btn outline');
+  cm.riskBtn = button('At risk only', () => {
+    state.attRisk = !state.attRisk;
+    refreshAttBar();
+    if (tb) searchTable();
+  }, 'btn outline toggle');
+  cm.sortBtn = button('', () => {
+    state.attSort = !state.attSort;
+    refreshAttBar();
+    renderTable();
+  }, 'btn outline toggle');
+  cm.attBar = el('div', { class: 'att-bar', role: 'group', 'aria-label': 'Attendance grid' }, cm.takeToday,
+    cm.riskBtn, cm.sortBtn);
   cm.summary = el('div', { class: 'summary' });
   cm.overview = el('div', { class: 'overview' });
   cm.wrap = el('div', { class: 'table-wrap' });
@@ -193,7 +208,7 @@ function courseView(draft) {
   cm.dock = el('div', { class: 'dock' }, cm.alert, cm.status, el('div', { class: 'action-bar' }, cm.saveBtn), cm.tabs);
   cm.announce = el('p', { class: 'sr-only', 'aria-live': 'polite' });
   cm.banner = draftBanner(draft);
-  return [head, cm.banner, cm.views, picker, cm.list, cm.empty, cm.summary, cm.overview, cm.wrap, cm.grading,
+  return [head, cm.banner, cm.views, picker, cm.attBar, cm.list, cm.empty, cm.summary, cm.overview, cm.wrap, cm.grading,
     cm.announce, cm.dock, cm.bar, cm.scrim, cm.menu].filter(Boolean);
 }
 
@@ -208,10 +223,11 @@ function tabButton(tab, label, cls) {
 
 // What renders for the tab and category: Raw Details is the table on wide screens and column mode (Scores, or
 // Attendance for the attendance category) on phones. All columns ('*') is wide only.
+// Attendance is the grid (the table, both widths) until a session is opened (SPEC_attendance_grid.md A1).
 function modeOf() {
   if (state.tab !== 'raw') return state.tab;
-  if (WIDE.matches) return 'table';
-  return state.category === 'attendance' ? 'attendance' : 'scores';
+  if (state.category === 'attendance') return state.attSession ? 'attendance' : 'table';
+  return WIDE.matches ? 'table' : 'scores';
 }
 
 // A category always opens on one of its columns: the picked one when it belongs there, else its first.
@@ -232,7 +248,12 @@ function renderView() {
   normalizeNav();
   const v = state.view = modeOf();
   const wideSummary = v === 'summary' && WIDE.matches;
+  const grid = v === 'table' && state.category === 'attendance';
   document.body.classList.toggle('view-table', v === 'table' || wideSummary);
+  document.body.classList.toggle('view-attgrid', grid);
+  cm.attBar.hidden = !grid;
+  cm.gridBack.hidden = v !== 'attendance';
+  if (grid) refreshAttBar();
   for (const k of ['grading', 'summary', 'analytics']) document.body.classList.toggle('view-' + k, v === k);
   for (const b of [...cm.views.children, ...cm.tabs.children]) {
     b.setAttribute('aria-pressed', String(b.dataset.tab === state.tab));
@@ -274,6 +295,7 @@ function renderView() {
 function setTab(tab) {
   if (!Grades.TABS.includes(tab)) return;
   state.tab = tab;
+  state.attSession = false;
   rememberUi();
   renderView();
 }
@@ -281,6 +303,7 @@ function setTab(tab) {
 function setCategory(category) {
   state.tab = 'raw';
   state.category = category;
+  state.attSession = false;
   normalizeNav();
   rememberUi();
   renderView();
@@ -480,7 +503,8 @@ function commit(it) {
 // After a cell of `row` changed: every view that shows the student, the counts and the badge.
 function changed(row) {
   for (const it of cm.items) if (it.row === row) refreshItem(it);
-  if (tb && tb.byId.has(row.student_id)) paintRow(tb.byId.get(row.student_id));
+  if (tb && tb.grid) refreshAttGrid();
+  else if (tb && tb.byId.has(row.student_id)) paintRow(tb.byId.get(row.student_id));
   if (det && det.row === row) {
     for (const it of det.items) refreshItem(it);
     refreshSummary();
@@ -698,8 +722,9 @@ function renderDetail() {
   det.items = [];
   det.sections = [];
   const col = currentColumn();
+  const table = state.category === 'attendance' ? 'Attendance' : 'Table';
   const from = state.view === 'summary' ? 'Summary' : state.view === 'analytics' ? 'Overview'
-    : state.view === 'table' ? 'Table' : col ? col.name : state.view === 'attendance' ? 'Attendance' : 'Scores';
+    : state.view === 'table' ? table : col ? col.name : state.view === 'attendance' ? 'Attendance' : 'Scores';
   const back = button('‹ ' + from, closeDetail, 'btn outline det-back');
   back.setAttribute('aria-label', 'Back to ' + from);
   det.badge = el('button', { type: 'button', class: 'badge unsaved', hidden: '', onclick: openSaveSheet });
@@ -846,6 +871,7 @@ let tb = null;  // the table: column specs, one record per student, the focused 
 // A Raw Details category (not All columns) shows only its own columns and total.
 function tableColumns() {
   const course = state.open.course;
+  if (state.category === 'attendance') return attColumns();
   const one = state.category !== '*';
   const specs = [{ kind: 'id', label: 'Student ID' }, { kind: 'name', label: 'Name' }];
   for (const cat of one ? [state.category] : Grades.navCategories(course)) {
@@ -878,13 +904,17 @@ function buildTable() {
     return;
   }
   const specs = tableColumns();
-  tb = { specs, recs: [], byId: new Map(), cur: null, edit: null, picker: null };
+  const grid = state.category === 'attendance';
+  tb = { specs, recs: [], byId: new Map(), cur: null, edit: null, picker: null, grid, heads: [], att: null };
+  if (grid) setAtt();
   const head = el('tr', { role: 'row', 'aria-rowindex': '1' }, ...specs.map(headCell));
-  const body = el('tbody', {}, ...state.rows.map(tableRow));
+  const body = el('tbody', {}, ...(grid && state.attSort ? byAttendance(state.rows) : state.rows).map(tableRow));
   tb.none = el('tr', { hidden: '' }, el('td', { class: 'tb-none', colspan: String(specs.length) }));
   body.append(tb.none);
-  const table = el('table', { class: 'tb', role: 'grid', 'aria-label': 'Course table',
+  const cls = 'tb' + (grid ? ' att-grid' : '') + (grid && !WIDE.matches ? ' compact' : '');
+  const table = el('table', { class: cls, role: 'grid', 'aria-label': grid ? 'Attendance' : 'Course table',
     'aria-rowcount': String(state.rows.length + 1), 'aria-colcount': String(specs.length) }, el('thead', {}, head), body);
+  if (grid) table.append(attFoot());
   // A click on an ID or computed cell keeps focus where it was (they aren't focusable).
   table.addEventListener('mousedown', (e) => { if (e.target.closest('td:not([data-c])')) e.preventDefault(); });
   table.addEventListener('click', tableClick);
@@ -896,21 +926,145 @@ function buildTable() {
   tb.pop = el('p', { class: 'tb-pop', role: 'alert', hidden: '' });
   cm.wrap.replaceChildren(table, tb.pop);
   // Focusing a cell scrolls it clear of the sticky header row and the frozen ID and Name.
-  const name = head.children[1];
+  const nameAt = specs.findIndex((x) => x.kind === 'name');
+  const name = head.children[nameAt];
   cm.wrap.style.scrollPaddingTop = head.offsetHeight + 'px';
   cm.wrap.style.scrollPaddingLeft = name.offsetLeft + name.offsetWidth + 'px';
   if (tb.recs.length) {
-    tb.cur = { r: 0, c: 1 };
-    tb.recs[0].tds[1].tabIndex = 0;
+    tb.cur = { r: 0, c: nameAt };
+    tb.recs[0].tds[nameAt].tabIndex = 0;
   }
   markPicked();
   searchTable();
+  if (grid) {
+    refreshAttGrid();
+    scrollToLatest(head, name);
+  }
+}
+
+// ---- 7b. Attendance grid (SPEC_attendance_grid.md): the table for the attendance category, both widths ----
+const ATT_COLUMNS = [['total', 'Total'], ['P', 'P'], ['L', 'L'], ['A', 'A'], ['X', 'X'], ['blank', 'blank']];
+
+// (ID,) Name, one `code` column per session (numbered), then Total and the code counts. Phones: no ID column (the ID
+// goes under the name in the frozen column).
+function attColumns() {
+  return (WIDE.matches ? [{ kind: 'id', label: 'Student ID' }] : []).concat({ kind: 'name', label: 'Name' },
+    sessions().map((col, i) => ({ kind: 'code', col, n: i + 1 })),
+    ATT_COLUMNS.map(([key, label]) => ({ kind: 'att', key, label })));
+}
+
+function setAtt() {
+  tb.att = attStats();
+  tb.attHeld = new Map(tb.att.sessions.map((x) => [x.name, x]));
+}
+
+// Lowest % first; ties keep roster order; no held session yet goes last (A11).
+function byAttendance(rows) {
+  const att = attStats();
+  const key = (r) => {
+    const st = att.students.get(r.student_id);
+    return st && st.pct !== null ? st.pct : Infinity;
+  };
+  return rows.slice().sort((a, b) => (key(a) === key(b) ? 0 : key(a) - key(b)));
+}
+
+// P L A X chips (EA as X); a blank in a held session is a dashed chip; anything else as written (shown invalid).
+function attChip(value, column) {
+  const code = String(value == null ? '' : value).trim();
+  const kind = { P: 'P', L: 'L', A: 'A', X: 'X', EA: 'X' }[code];
+  if (kind) return el('span', { class: 'att-chip att-' + kind }, code);
+  if (code === '') {
+    const held = tb && tb.attHeld && tb.attHeld.get(column);
+    return held && held.held ? el('span', { class: 'att-chip att-blank' }, el('span', { class: 'sr-only' }, 'blank'))
+      : '';
+  }
+  return THAI.test(code) ? data('span', {}, value) : value;
+}
+
+function paintAttCell(row, s, td) {
+  const st = tb.att && tb.att.students.get(row.student_id);
+  if (s.key === 'total') {
+    const risk = !!(st && st.atRisk);
+    td.replaceChildren(Grades.fmtAttTotal(st), risk ? el('span', { 'aria-hidden': 'true' }, ' ⚠') : '',
+      risk ? el('span', { class: 'sr-only' }, ', under 80%') : '');
+    td.classList.toggle('at-risk', risk);
+    return;
+  }
+  const n = st ? st.counts[s.key] : 0;
+  td.textContent = n;
+  td.classList.toggle('bad', s.key === 'A' && n > 0);
+}
+
+// The footer: each session's present count (P+L+X+EA); the full counts in its title and accessible name (A10).
+function attFoot() {
+  tb.foot = tb.specs.map((s) => el('td', { class: 'c-' + s.kind }));
+  tb.foot[tb.specs.findIndex((x) => x.kind === 'name')].textContent = 'Present';
+  return el('tfoot', {}, el('tr', { class: 'att-foot' }, ...tb.foot));
+}
+
+const countsText = (c) => 'P ' + c.P + ' · L ' + c.L + ' · A ' + c.A + ' · X ' + c.X + ' · blank ' + c.blank;
+
+// Every number of the grid from the current values: rows, headers (today; `•` = a held session with blanks), footer.
+function refreshAttGrid() {
+  setAtt();
+  for (const rec of tb.recs) paintRow(rec);
+  const now = today();
+  for (const { b, s } of tb.heads) {
+    const x = tb.attHeld.get(s.col.name);
+    const isToday = Grades.sessionDate(s.col.header) === now;
+    b.classList.toggle('today', isToday);
+    b.querySelector('.att-dot').textContent = x.held && x.counts.blank ? '•' : '';
+    b.setAttribute('aria-label', s.col.header + (isToday ? ', today' : '') + ': ' + countsText(x.counts) +
+      '. Open this session');
+  }
+  tb.specs.forEach((s, c) => {
+    if (s.kind !== 'code') return;
+    const x = tb.attHeld.get(s.col.name);
+    tb.foot[c].textContent = x.present;
+    tb.foot[c].title = countsText(x.counts);
+    tb.foot[c].setAttribute('aria-label', s.col.header + ': ' + x.present + ' present (' + countsText(x.counts) + ')');
+  });
+}
+
+// Opens with the latest held session and Total in view (A4).
+function scrollToLatest(head, name) {
+  const held = tb.specs.map((s, c) => [s, c]).filter(([s]) => s.kind === 'code' && tb.attHeld.get(s.col.name).held);
+  if (!held.length) return;
+  const th = head.children[held[held.length - 1][1]];
+  cm.wrap.scrollLeft = Math.max(0, th.offsetLeft - (name.offsetLeft + name.offsetWidth) - 2 * th.offsetWidth);
+}
+
+// The one-session view (today's attendance taking) for a session; `‹ Grid` comes back.
+function openSession(column) {
+  state.tab = 'raw';
+  state.category = 'attendance';
+  state.session = column;
+  state.attSession = true;
+  rememberUi();
+  renderView();
+}
+
+function refreshAttBar() {
+  const t = todaySession();
+  cm.takeToday.disabled = !t;
+  cm.takeToday.textContent = t ? 'Take today ›' : 'No session today';
+  cm.riskBtn.setAttribute('aria-pressed', String(state.attRisk));
+  cm.sortBtn.setAttribute('aria-pressed', String(state.attSort));
+  cm.sortBtn.textContent = state.attSort ? 'Sort: Lowest %' : 'Sort: Roster';
 }
 
 // Headers verbatim; a counted column's header selects it (for Fill…); computed ones announce "computed".
 function headCell(s, c) {
   const th = el('th', { role: 'columnheader', scope: 'col', 'aria-colindex': String(c + 1), class: 'c-' + s.kind });
-  if (s.col) {
+  if (s.n) {
+    // A grid session: its number over the short date; it opens the one-session view (A3).
+    const b = el('button', { type: 'button', class: 'th-btn att-head', 'data-col': s.col.name,
+      onclick: () => openSession(s.col.name) }, el('span', { class: 'att-n' }, String(s.n)),
+    el('span', { class: 'att-d' }, Grades.shortDate(s.col.header)),
+    el('span', { class: 'att-dot', 'aria-hidden': 'true' }));
+    tb.heads.push({ b, s });
+    th.append(b);
+  } else if (s.col) {
     th.append(el('button', { type: 'button', class: 'th-btn', 'data-col': s.col.name,
       onclick: () => { pickColumn(s.col.name); markPicked(); refreshChrome(); } }, data('span', {}, s.col.header)));
   } else {
@@ -931,8 +1085,8 @@ function tableRow(row, r) {
   const tds = tb.specs.map((s, c) => {
     const frozen = s.kind === 'id' || s.kind === 'name';
     const td = el('td', { role: frozen ? 'rowheader' : 'gridcell', 'aria-colindex': String(c + 1), class: 'c-' + s.kind });
-    if (s.kind === 'calc') td.setAttribute('aria-readonly', 'true');
-    if (s.kind !== 'id' && s.kind !== 'calc') {
+    if (s.kind === 'calc' || s.kind === 'att') td.setAttribute('aria-readonly', 'true');
+    if (s.kind !== 'id' && s.kind !== 'calc' && s.kind !== 'att') {
       td.tabIndex = -1;
       td.dataset.r = r;
       td.dataset.c = c;
@@ -961,6 +1115,9 @@ function paintCell(rec, s, td, g) {
   } else if (s.kind === 'name') {
     td.textContent = row.name;
     if (THAI.test(row.name)) td.lang = 'th';
+    if (tb.grid && !WIDE.matches) td.append(el('span', { class: 'sub', lang: 'en' }, row.student_id));
+  } else if (s.kind === 'att') {
+    paintAttCell(row, s, td);
   } else if (s.kind === 'calc') {
     td.textContent = s.cat ? g.pct[s.cat] : s.key === 'coursework_total' ? g.coursework_total || 0 : g[s.key];
     if (s.key === 'grade') td.replaceChildren(el('span', { class: gradeCls(g.grade) }, g.grade));
@@ -972,7 +1129,7 @@ function paintCell(rec, s, td, g) {
     td.classList.toggle('unsaved', !!e);
     td.classList.toggle('over', over);
     td.classList.toggle('invalid', s.kind === 'score' ? Grades.classify(value)[0] === 'invalid' : badCode(value));
-    td.replaceChildren(THAI.test(value) ? data('span', {}, value) : value);
+    td.replaceChildren(s.kind === 'code' ? attChip(value, name) : THAI.test(value) ? data('span', {}, value) : value);
     if (over) td.append(el('span', { 'aria-hidden': 'true' }, '▲'), el('span', { class: 'sr-only' }, ' above max'));
     if (e) td.append(el('span', { class: 'mark', 'aria-hidden': 'true' }, '*'), el('span', { class: 'sr-only' }, ' unsaved'));
   }
@@ -980,12 +1137,15 @@ function paintCell(rec, s, td, g) {
 
 function searchTable() {
   let shown = 0;
+  const riskOnly = tb.grid && state.attRisk;
   for (const rec of tb.recs) {
-    rec.tr.hidden = !matches(rec.row, state.search);
+    const st = riskOnly && tb.att.students.get(rec.row.student_id);
+    rec.tr.hidden = !matches(rec.row, state.search) || (riskOnly && !(st && st.atRisk));
     if (!rec.tr.hidden) shown += 1;
   }
   tb.none.hidden = shown > 0;
-  tb.none.firstChild.replaceChildren(data('span', {}, 'No students match "' + state.search.trim() + '"'));
+  tb.none.firstChild.replaceChildren(state.search.trim() === '' && riskOnly ? 'Nobody is under 80% so far.'
+    : data('span', {}, 'No students match "' + state.search.trim() + '"'));
 }
 
 // Roving focus: the focused cell is the table's one tab stop.
@@ -1178,6 +1338,9 @@ function openPicker(r, c) {
   tb.picker = box;
   cm.wrap.append(box);
   place(box, rec.tds[c]);
+  // Keep it on screen near the right edge (phones: the grid's last sessions).
+  const over = box.getBoundingClientRect().right - cm.wrap.getBoundingClientRect().right;
+  if (over > 0) box.style.left = Math.max(cm.wrap.scrollLeft, parseFloat(box.style.left) - over - 4) + 'px';
   box.querySelector('button').focus();
 }
 
@@ -2001,7 +2164,8 @@ document.addEventListener('keydown', (e) => {
 WIDE.addEventListener('change', () => {
   if (!cm || !cm.list.isConnected) return;
   state.menu = WIDE.matches && menuPref();
-  if (state.view !== modeOf() || state.tab === 'summary' || (state.tab === 'raw' && state.category === '*')) {
+  if (state.view !== modeOf() || state.tab === 'summary' ||
+      (state.tab === 'raw' && (state.category === '*' || state.category === 'attendance'))) {
     renderView();
   } else {
     renderMenu();
