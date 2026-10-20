@@ -1182,6 +1182,8 @@ reloading the tab triggers the browser's own `beforeunload` prompt where support
   Each letter shows its interval under it (`70 ≤ X < 75`; `—` while a field is refused), and letters are coloured
   as in grade-tui (`--grade-*` tokens). The Grade distribution (count and % per letter, then F) follows the saved
   values plus unsaved edits, or the typed weights/boundaries with a `(preview)` tag. See `../SPEC_grade_order.md`.
+  Its bars (and Analytics › Overview's) are filled from the palette tokens `--bar-*`, with a 1px edge in the letter
+  colour in light mode and none in dark mode (`../SPEC_bar_colours.md`).
   No control adds or
   removes a key (S10.4). Inputs `inputmode="decimal"`. Changed fields show `*`.
 - Sum line: `Weights sum to 1` (muted) when it equals 1, else `⚠ weights sum to 1.05` (warning colour). Save stays

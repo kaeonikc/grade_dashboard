@@ -39,6 +39,42 @@ for (const [mode, from] of [['light', 0], ['dark', css.indexOf('prefers-color-sc
   });
 }
 
+// Bar fills from the palette (SPEC_bar_colours.md B1-B4): bars only, an edge in the letter colour in light mode.
+const BARS = { a: '#327df6', bp: '#5ed0fa', b: '#5fce3d', cp: '#fae14c', c: '#f2a983', dp: '#ee7e31', d: '#ec6b71',
+  f: '#ea332b' };
+const DARK = css.indexOf('prefers-color-scheme: dark');
+const edge = (from) => {
+  const i = css.indexOf(':root {', from);
+  return (css.slice(i, css.indexOf('}', i)).match(/--bar-edge:\s*([^;]+);/) || [])[1];
+};
+
+test('bar fills are the palette swatches, shared by light and dark', () => {
+  const light = tokens(0);
+  for (const g of LETTERS) assert.strictEqual(light['bar-' + g], BARS[g], '--bar-' + g);
+  for (const g of LETTERS) assert.ok(!('bar-' + g in tokens(DARK)), 'dark keeps the light --bar-' + g);
+});
+
+test('light bars have a 1px edge in a letter colour reaching 3:1; dark bars have none and their fills reach 3:1', () => {
+  const [light, dark] = [tokens(0), tokens(DARK)];
+  assert.strictEqual(edge(0), '1px');
+  assert.strictEqual(edge(DARK), '0');
+  for (const g of LETTERS) {
+    const r = contrast(light['grade-' + g], light.bg2);
+    assert.ok(r >= 3, 'light edge --grade-' + g + ': ' + r.toFixed(2));
+    const f = contrast(BARS[g], dark.bg2);
+    assert.ok(f >= 3, 'dark fill --bar-' + g + ': ' + f.toFixed(2));
+  }
+});
+
+test('a grade bar is filled from its --bar token and edged with currentColor; histogram bars have no edge', () => {
+  assert.match(css, /\.dist \.bar span \{[^}]*background: var\(--bar-fill, currentColor\)/);
+  assert.match(css, /\.dist \.bar span \{[^}]*box-shadow: inset 0 0 0 var\(--bar-edge\) currentColor/);
+  for (const g of LETTERS) {
+    assert.match(css, new RegExp('\\.dist \\.bar \\.g-' + g + ' \\{ --bar-fill: var\\(--bar-' + g + '\\); \\}'), g);
+  }
+  assert.match(css, /\.dist \.bar span\.plain \{[^}]*box-shadow: none/);
+});
+
 // Phone landscape (SPEC_landscape.md): the short-screen rules that keep the attendance grid in view.
 test('short screens: header scrolls away, grid page scrolls, no text inflation', () => {
   const i = css.indexOf('@media (max-height: 500px)');

@@ -6,6 +6,9 @@
     /* Grade colours: grade-tui's hues, each >= 4.5:1 on --bg and --bg2 (tests/style.test.js) */
     --grade-a: #0b5cad; --grade-bp: #00777a; --grade-b: #2d7a12; --grade-cp: #5a7000;
     --grade-c: #806600; --grade-dp: #9a5b00; --grade-d: #b34700; --grade-f: #b3261e;
+    /* Distribution bar fills from the palette, both modes; light bars get an edge (SPEC_bar_colours.md) */
+    --bar-a: #327df6; --bar-bp: #5ed0fa; --bar-b: #5fce3d; --bar-cp: #fae14c;
+    --bar-c: #f2a983; --bar-dp: #ee7e31; --bar-d: #ec6b71; --bar-f: #ea332b; --bar-edge: 1px;
     color-scheme: light dark;
   }
   @media (prefers-color-scheme: dark) {
@@ -14,6 +17,7 @@
       --danger: #ff8a80; --mark: #f2c14e; --line: #3a3c42; --unsaved-bg: #3d3214;
       --grade-a: #7ab8ff; --grade-bp: #4fd1d1; --grade-b: #8fdc5a; --grade-cp: #c6e04a;
       --grade-c: #f2e14a; --grade-dp: #ffc24d; --grade-d: #ff9a4d; --grade-f: #ff8a80;
+      --bar-edge: 0;
     }
   }
   * { box-sizing: border-box; }
@@ -132,7 +136,14 @@
   .dist .count { text-align: right; }
   .dist .letter { font-weight: 700; }
   .dist .bar { height: 0.875rem; border-radius: 0.25rem; background: var(--bg2); overflow: hidden; }
-  .dist .bar span { display: block; height: 100%; background: currentColor; }
+  .dist .bar span {
+    display: block; height: 100%; background: var(--bar-fill, currentColor);
+    box-shadow: inset 0 0 0 var(--bar-edge) currentColor; border-radius: inherit;
+  }
+  .dist .bar .g-a { --bar-fill: var(--bar-a); } .dist .bar .g-bp { --bar-fill: var(--bar-bp); }
+  .dist .bar .g-b { --bar-fill: var(--bar-b); } .dist .bar .g-cp { --bar-fill: var(--bar-cp); }
+  .dist .bar .g-c { --bar-fill: var(--bar-c); } .dist .bar .g-dp { --bar-fill: var(--bar-dp); }
+  .dist .bar .g-d { --bar-fill: var(--bar-d); } .dist .bar .g-f { --bar-fill: var(--bar-f); }
   .tag-preview { margin-left: 0.5rem; font-size: 0.875rem; font-weight: 400; color: var(--mark); }
   .g-a { color: var(--grade-a); } .g-bp { color: var(--grade-bp); } .g-b { color: var(--grade-b); }
   .g-cp { color: var(--grade-cp); } .g-c { color: var(--grade-c); } .g-dp { color: var(--grade-dp); }
@@ -369,7 +380,7 @@
   .ov-panel h2 { margin: 0 0 0.5rem; font-size: 1.125rem; }
   .ov-stats { display: grid; grid-template-columns: 1fr auto; gap: 0.25rem 1rem; margin: 0; }
   .dist.hist li { grid-template-columns: 4.5rem 1fr 7.5rem; }
-  .dist .bar span.plain { color: var(--accent); }
+  .dist .bar span.plain { color: var(--accent); box-shadow: none; }
   .bp { display: block; width: 100%; height: 3rem; overflow: visible; }
   .bp-line { stroke: var(--text); stroke-width: 1.5; }
   .bp-box { fill: var(--bg2); stroke: var(--text); stroke-width: 1.5; }
