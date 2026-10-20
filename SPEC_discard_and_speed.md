@@ -172,6 +172,18 @@ The Apps Script file count stays at 11 (budget ≤ 11). There are no new depende
 About 0.3–0.5 s per Drive call, all serial, and about 1.3–1.6 s of `google.script.run` overhead per call. The 5 s lock
 wait is unexplained (no other call should have been running); watch it in the version 11 numbers.
 
+## After (version 11, 2026-10-20, same browser and course, after a reload)
+
+| Step | Round trip | Server | Lock wait | Drive | vs baseline |
+|---|---|---|---|---|---|
+| page | 0.04 s | doGet 0.02 s | — | — | Phase 5 (doGet cache) not needed: doGet ≪ 300 ms |
+| list | 2.57 s | 1.13 s | 0.12 s | 4 listings / 0 downloads, cache 3/3 | server −63 %, round trip −41 % |
+| load | 2.15 s | 0.70 s | 0.07 s | 4 listings / 0 downloads, cache 8/8 | server −94 %, round trip −85 % |
+
+The cards draw from `gw:courses` before `list` returns, and `load` here is the prefetch, so the tap itself waits on
+none of it. What is left of each round trip (about 1.4 s) is `google.script.run`'s own overhead. The 5 s lock wait
+didn't come back.
+
 ## Targets
 Fake Drive, enforced by tests:
 - **`listCourses` over the 4 fixtures:** ≤ 4 `Drive.Files.list` calls, whatever the course count. With a warm cache

@@ -566,6 +566,7 @@ web app shows the course as unavailable):
 | save 60 cells on phone 4G | ≤ 5 s (S8.9) |
 | Drive queries: `listCourses` (4 courses), `loadCourse`, `saveBatch` | ≤ 4 each, whatever the course count (`speed.test.js`) |
 | downloads, warm cache: `listCourses`, `loadCourse` | 0 (`speed.test.js`) |
+| server time, warm cache (measured v11): `listCourses` / `loadCourse` | ≤ 1.5 s / ≤ 1.0 s (1.13 s / 0.70 s on 2026-10-20) |
 
 - `deps 0`: no new runtime dependency on either side. The Python code inherits grade_dashboard's existing
   `requirements.txt` unchanged. Apps Script uses only built-in services. Node tests, the server harness and
