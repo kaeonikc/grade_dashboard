@@ -32,6 +32,7 @@ XLS = "files:*.xls *.xlsx *.csv"
 YAML = "files:*.yaml"
 VALUES = {
     ("init", "input"): XLS,
+    ("init", "abbr"): "text",
     ("init", "course_name"): "text",
     ("init", "term"): "text",
     ("init", "course_id"): "text",

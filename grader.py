@@ -26,6 +26,44 @@ def sanitize_for_path(name: str) -> str:
     cleaned = _WHITESPACE_RUN.sub('_', cleaned.strip())
     return cleaned
 
+_ABBR = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]{0,29}$')
+_CLASSLIST_ABBR = re.compile(r'^repclasslist_(.+)\.(xls|xlsx|csv)$', re.IGNORECASE)
+
+def _resolve_abbr(abbr, input_file, course_id, course_name, sec_num) -> tuple[str, str]:
+    """
+    The short ASCII name that `grader init` puts in the folder and file names (SPEC.md Part B), with where it came
+    from: --abbr, else <ABBR> of repclasslist_<ABBR>.xls, else asked on a terminal (default: the course ID), else
+    the course ID. An invalid --abbr exits before anything is created.
+    """
+    from_file = None
+    if input_file:
+        name = Path(input_file).name
+        m = _CLASSLIST_ABBR.match(name)
+        if m and _ABBR.match(m.group(1)):
+            from_file = m.group(1)
+        elif m:
+            print(f"⚠️ '{name}': '{m.group(1)}' can't be an abbreviation (ASCII letters, digits, _ and - only); ignoring it.")
+    if abbr is not None:
+        if not _ABBR.match(abbr):
+            print(f"❌ --abbr '{abbr}': use 1–30 ASCII letters, digits, _ or -, starting with a letter or digit (e.g. ModPhys).")
+            sys.exit(1)
+        if from_file and from_file != abbr:
+            print(f"ℹ️  --abbr {abbr} overrides {from_file} from the file name")
+        return abbr, "--abbr"
+    if from_file:
+        return from_file, "file name"
+    default = re.sub(r'[^A-Za-z0-9_-]', '-', str(course_id or '')).strip('-_')[:30] or "course"
+    if not sys.stdin.isatty():
+        print(f"⚠️ no abbreviation given (--abbr or repclasslist_<ABBR>.xls); using the course ID {default}")
+        return default, "course ID"
+    sec = f", SEC {sec_num}" if sec_num else ""
+    print(f"Course {course_id} {course_name}{sec}")
+    while True:
+        answer = input(f"Abbreviation for folder/file names [{default}]: ").strip() or default
+        if _ABBR.match(answer):
+            return answer, "asked"
+        print("   ASCII letters, digits, _ and - only, e.g. ModPhys")
+
 def find_course_dir(term_name: str, course_id: str, sec_num) -> Path:
     """
     Locate an existing course directory by matching term/course_id/sec_num inside its
@@ -480,7 +518,7 @@ def create_empty_category_csv(category: str, columns: list, student_registry: pd
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     student_rows.to_csv(csv_path, index=False)
 
-def init_course(course_name: str, term_name: str, course_id: str, input_file: str = None):
+def init_course(course_name: str, term_name: str, course_id: str, input_file: str = None, abbr: str = None):
     if input_file:
         input_path = Path(input_file)
         if not input_path.exists():
@@ -503,17 +541,13 @@ def init_course(course_name: str, term_name: str, course_id: str, input_file: st
         course_id = course_id if course_id else metadata.get('course_id')
         course_name = course_name if course_name else metadata.get('course_name')
         sec_num = metadata.get('sec_num', 'Unknown')
-
-        name_for_path = sanitize_for_path(course_name)
-        if not name_for_path:
-            print(f"⚠️ Warning: Could not determine course_name; falling back to course_id ('{course_id}') for folder/file naming.")
-            name_for_path = sanitize_for_path(course_id)
-
-        folder_name = f"{term_name}_{name_for_path}_SEC_{sec_num}_grading"
+        abbr, source = _resolve_abbr(abbr, input_file, course_id, course_name, sec_num)
+        prefix = f"{term_name}_{abbr}_SEC_{sec_num}"
     else:
-        name_for_path = sanitize_for_path(course_name)
-        folder_name = f"{term_name}_{name_for_path}_grading"
+        abbr, source = _resolve_abbr(abbr, None, course_id, course_name, None)
+        prefix = f"{term_name}_{abbr}"
         sec_num = None
+    folder_name = prefix  # the file prefix too; the Thai course_name stays in config.yaml
 
     base_dir = Path(folder_name)
     if base_dir.exists():
@@ -532,10 +566,8 @@ def init_course(course_name: str, term_name: str, course_id: str, input_file: st
     reports_dir.mkdir(parents=True)
 
     if input_file:
-        config_filename = f"{term_name}_{name_for_path}_SEC_{sec_num}_config.yaml"
-        config_path = course_info_dir / config_filename
-        csv_filename = f"{term_name}_{name_for_path}_SEC_{sec_num}_student_info.csv"
-        csv_path = course_info_dir / csv_filename
+        config_path = course_info_dir / f"{prefix}_config.yaml"
+        csv_path = course_info_dir / f"{prefix}_student_info.csv"
 
         temp_yaml_path = course_info_dir / "temp_metadata.yaml"
         from course_info_prep.convert_student_info import convert_excel_to_csv_and_yaml
@@ -552,14 +584,14 @@ def init_course(course_name: str, term_name: str, course_id: str, input_file: st
         save_attendance_excel(att_path, clean_df, class_cols)
         _attendance_csv(base_dir)
         
-        print(f"✅ Successfully created course structure at: {base_dir}")
+        note = f"   (abbreviation {abbr} from the file name)" if source == "file name" else ""
+        print(f"✅ Successfully created course structure at: {base_dir}{note}")
         print(f"✅ Generated student list at: {csv_path}")
         print(f"✅ Generated config at: {config_path}")
         print(f"✅ Generated initial attendance sheet at: {att_path}")
     else:
-        config_filename = f"{term_name}_{name_for_path}_config.yaml"
-        config_path = course_info_dir / config_filename
-        
+        config_path = course_info_dir / f"{prefix}_config.yaml"
+
         with open(config_path, "w") as f:
             f.write(f"""course_id: "{course_id}"
 course_name: "{course_name}"
@@ -768,7 +800,12 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
         else:
             config_path = info_dir / f"{term_name}_{name_for_path}_SEC_{sec_num}_config.yaml"
 
-        csv_path = info_dir / f"{term_name}_{name_for_path}_SEC_{sec_num}_student_info.csv"
+        # The course's own prefix (from its config file name), so a course named after its abbreviation
+        # (or an older Thai name) never gets a second, differently named roster.
+        if config_files:
+            csv_path = info_dir / f"{get_course_file_prefix(target_dir)}_student_info.csv"
+        else:
+            csv_path = info_dir / f"{term_name}_{name_for_path}_SEC_{sec_num}_student_info.csv"
         
         # Back up existing files (history/ snapshot for `grader undo`, plus the old .bak copies)
         from src.history import snapshot
@@ -1613,10 +1650,9 @@ def mock_course():
     hardcoded, unmistakably-fake course (identified by its fixed term/course_name).
     """
     mock_term = "0"
-    mock_course_name = "ฟิสิกส์ทั่วไป (ข้อมูลจำลอง)"
-    name_for_path = sanitize_for_path(mock_course_name)
+    name_for_path = "GenPhysMock"  # the abbreviation, as `grader init` names courses; course_name stays Thai
 
-    base_dir = Path("courses") / f"{mock_term}_{name_for_path}_grading"
+    base_dir = Path("courses") / f"{mock_term}_{name_for_path}"
     if base_dir.exists():
         shutil.rmtree(base_dir)
 
@@ -1860,6 +1896,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser_init.add_argument("--course_name", help="Course display/short name (e.g. 'General Relativity')")
     parser_init.add_argument("--term", help="The term for the course (e.g. '2026_S2')")
     parser_init.add_argument("--course_id", help="The course ID (e.g. 'PHYS1102')")
+    parser_init.add_argument("--abbr", help="Short ASCII name for the folder and file names (e.g. 'ModPhys'). "
+                                            "Default: ABBR of repclasslist_ABBR.xls, else asked")
 
     # mkdb command
     parser_mkdb = subparsers.add_parser("mkdb", help="Create empty database files for all categories from config")
@@ -1969,7 +2007,7 @@ if __name__ == "__main__":
         # Programmatic validation for init arguments
         if not args.input and (not args.course_name or not args.term or not args.course_id):
             parser.error("Either --input / -i, or all of (--course_name, --term, --course_id) must be specified.")
-        init_course(args.course_name, args.term, args.course_id, args.input)
+        init_course(args.course_name, args.term, args.course_id, args.input, args.abbr)
     elif args.command == "mkdb":
         mkdb_course(args.config_file, args.input)
     elif args.command == "update":

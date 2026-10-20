@@ -254,7 +254,7 @@ def test_init_input_offers_class_lists_and_folders(fx):
 @zsh_only
 def test_init_modes_exclude_each_other(fx):
     after_i = names(group(tab(fx, "grader init -i x.xls -"), "option"))
-    assert "--term" not in after_i and "--course_id" not in after_i
+    assert "--abbr" in after_i and "--term" not in after_i and "--course_id" not in after_i
     after_term = names(group(tab(fx, "grader init --term 2026_S1 -"), "option"))
     assert "--course_id" in after_term and "-i" not in after_term and "--input" not in after_term
 

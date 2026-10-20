@@ -21,7 +21,7 @@ category's default has a bare header (`4`, not `4 (10pts)`). See "Points" below.
 
 | Thing | Owner | exam may |
 |---|---|---|
-| Course folder `<term>_<name>[_SEC_<n>]_grading/` | grade_dashboard (`grader init`) | read it |
+| Course folder `<term>_<abbr>_SEC_<n>/` (from 2026-10-20; `<abbr>` from `--abbr` or `repclasslist_<abbr>.xls`), older ones `<term>_<name>[_SEC_<n>]_grading/`. `<prefix>` is the stem of `course_info/<prefix>_config.yaml`, never derived from the folder name | grade_dashboard (`grader init`) | read it |
 | Roster `course_info/<prefix>_student_info.csv` (`Student ID,Name,Class Group`) | grade_dashboard (`grader init/update -i repclasslist.xls`) | read it; never write it |
 | Config `course_info/<prefix>_config.yaml` (`data_mapping`, `weights`, …) | grade_dashboard (you, `grader sync`) | read it; **never write it** |
 | Score files `data/<prefix>_<category>.csv` | grade_dashboard (`grader mkdb/update`) | change the cells of its mapped columns; **add** its own missing part columns; fix their header points; recompute that file's `total` |

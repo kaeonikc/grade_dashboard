@@ -97,10 +97,21 @@ grader init -i repclasslist_IndustPhysics.xls
 The class list is read for the term (`ภาคการศึกษา 1/2569` → `2026_S1`), course code and name, section, teacher,
 class day/time/room and exam schedule. It also reads every student row (`รหัสประจำตัว`, `ชื่อ`, `หมู่เรียน`).
 
+**The folder is named after the course's abbreviation**, which `grader init` takes from, in this order:
+
+1. `--abbr IndustPhysics`
+2. the class list's file name `repclasslist_<ABBR>.xls` (`.xlsx`/`.csv` too). Rename the download, as above.
+3. a question, `Abbreviation for folder/file names [<course ID>]:` (Enter takes the course ID). Without a terminal,
+   the course ID is used and a warning says so.
+
+An abbreviation is 1–30 ASCII letters, digits, `_` or `-` (no Thai, no spaces), so you can type the folder name
+without switching keyboards. The Thai course name stays in `config.yaml` (`course_name:`), and the dashboard, grade-tui
+and grade_web show it.
+
 It creates:
 
 ```
-2026_S1_ฟิสิกส์สำหรับอุตสาหกรรม_SEC_51_grading/
+2026_S1_IndustPhysics_SEC_51/
 ├── course_info/
 │   ├── <prefix>_config.yaml        grading scheme + course details
 │   └── <prefix>_student_info.csv   the roster: Student ID, Name, Class Group
@@ -109,16 +120,19 @@ It creates:
     └── <prefix>_attendance.csv     its copy that the dashboard reads
 ```
 
-`<prefix>` is the folder name without `_grading`, for example `2026_S1_ฟิสิกส์สำหรับอุตสาหกรรม_SEC_51`.
+`<prefix>` is the folder name, for example `2026_S1_IndustPhysics_SEC_51`. Courses created before 2026-10-20 have
+the Thai name and `_grading` (`2026_S1_ฟิสิกส์สำหรับอุตสาหกรรม_SEC_51_grading/`, prefix without `_grading`). They keep
+working as they are: every tool takes the prefix from `course_info/<prefix>_config.yaml`, not from the folder name.
 
 **The roster is the single student list.** grade-tui, `exam mark roster` and `exam submit scores` all use
 `course_info/<prefix>_student_info.csv`. Change it only with `grader update -i` (see
 [section 12](#12-changes-during-the-semester)). Don't edit it by hand.
 
 Without a class list you can run `grader init --course_name "General Relativity" --term 2026_S2 --course_id PHYS4101`.
-This gives an empty roster that you fill in yourself.
+This gives an empty roster that you fill in yourself. The folder is `2026_S2_<ABBR>/` (add `--abbr GR`, or
+answer the question).
 
-**Practice course:** `grader mock` creates `courses/0_ฟิสิกส์ทั่วไป_(ข้อมูลจำลอง)_grading` with 30 made-up students and
+**Practice course:** `grader mock` creates `courses/0_GenPhysMock` with 30 made-up students and
 a few deliberate problems (scores over the maximum, missing scores, invalid attendance codes). Use it to try things
 out.
 
@@ -192,7 +206,7 @@ comments in it are lost.
 ## 5. Score files
 
 ```bash
-cd 2026_S1_…_SEC_51_grading
+cd 2026_S1_IndustPhysics_SEC_51
 grader mkdb
 ```
 
@@ -519,7 +533,7 @@ the same way: whichever side you edited wins. If you changed a header's points b
 
 | Problem | Cause and fix |
 |---|---|
-| `grade-tui` shows "No course directories found" | Run it from the term folder (the one that holds the `*_grading` folders) or inside a course folder. |
+| `grade-tui` shows "No course directories found" | Run it from the term folder (the one that holds the course folders) or inside a course folder. |
 | A category is 0 for everybody | Its weight has no columns in `data_mapping`, or the column names in the config and the CSV header differ. Run `grader update`. |
 | Percentages look too low or too high | A column has no `(Npts)`. Add the points in the config and run `grader update`. |
 | Warning "… is not a score … counted as 0" | Text in a score cell. Use a number, leave it empty, or `ขส`. |
@@ -539,7 +553,7 @@ the same way: whichever side you edited wins. If you changed a header's points b
 
 | Command | Does |
 |---|---|
-| `grader init -i <class list.xls>` | create a course folder from the class list |
+| `grader init -i <class list.xls> [--abbr ABBR]` | create a course folder from the class list, named `<term>_<ABBR>_SEC_<n>` |
 | `grader init --course_name N --term 2026_S1 --course_id C` | create one without a class list |
 | `grader mkdb [config.yaml]` | create the missing score files from `data_mapping` |
 | `grader update -i <class list.xls>` | merge a newer class list into the roster |
