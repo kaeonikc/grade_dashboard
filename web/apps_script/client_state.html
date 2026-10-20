@@ -8,6 +8,8 @@ const UI_PREFIX = 'gw:ui:';
 const MENU_KEY = 'gw:nav:menu';  // the ☰ menu on wide screens, per device ('0' closed); never a course folder name
 const COURSES_KEY = 'gw:courses';  // the last course list, drawn before Drive answers (SPEC_discard_and_speed.md D6)
 const LAST_KEY = 'gw:last';        // the course folder opened last on this device, prefetched with the list (D8)
+// A course's `folder` is its path in grade_web, `<course>` or `<group>/<course>` (SPEC_semester_groups.md D4): every
+// key above that names a course uses it.
 const FRESH_MS = 60000;            // a course in memory this young opens without a recheck (D7)
 const KEEP_COURSES = 3;            // courses kept in this tab's memory
 
@@ -15,6 +17,7 @@ const state = {
   now: null,         // server time of the last reply: every {ago} counts from it, never from the device clock
   nowAt: 0,          // device clock (ms) when `now` arrived
   courses: null,     // listCourses().courses
+  courseGroups: [],  // listCourses().groups: the semester groups in grade_web, [{name, count}]
   open: null,        // the loadCourse reply of the open course (its journal kept current by every reply)
   rows: [],          // Grades.mergeCourse: students in Raw Details order
   byId: new Map(),   // student_id -> row
@@ -87,7 +90,11 @@ function loadCourses() {
   return server('listCourses').then((reply) => {
     setNow(reply);
     state.courses = reply.ok ? reply.courses : null;
-    if (reply.ok) rememberCourseList(reply);
+    state.courseGroups = reply.ok ? reply.groups || [] : [];
+    if (reply.ok) {
+      migrateKeys(reply.courses);
+      rememberCourseList(reply);
+    }
     return reply;
   });
 }
@@ -104,13 +111,76 @@ function courseListCache() {
 
 function rememberCourseList(reply) {
   const courses = reply.courses.map((c) => (c.available
-    ? { folder: c.folder, available: true, course_id: c.course_id, course_name: c.course_name, term: c.term,
-      pushed_at: c.pushed_at, unpulled: c.unpulled, last_saved: c.last_saved, older_push: c.older_push }
-    : { folder: c.folder, available: false, reason: c.reason }));
+    ? { folder: c.folder, group: c.group, available: true, course_id: c.course_id, course_name: c.course_name,
+      term: c.term, pushed_at: c.pushed_at, unpulled: c.unpulled, last_saved: c.last_saved,
+      older_push: c.older_push }
+    : { folder: c.folder, group: c.group, available: false, reason: c.reason }));
   try {
-    localStorage.setItem(COURSES_KEY, JSON.stringify({ v: 1, saved_at: reply.now, courses }));
+    localStorage.setItem(COURSES_KEY, JSON.stringify({ v: 1, saved_at: reply.now, courses,
+      groups: reply.groups || [] }));
   } catch (e) {
     // no cache: the list waits for Drive next time, as before
+  }
+}
+
+// ---- Courses moved into a semester group (SPEC_semester_groups.md D4, D6) ----
+
+// The localStorage keys that start with `prefix` ([] when storage is blocked).
+function storedKeys(prefix) {
+  const out = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(prefix)) out.push(key);
+    }
+  } catch (e) {
+    // nothing to list
+  }
+  return out;
+}
+
+// A draft, UI memory or gw:last kept under a bare course name that the list no longer has moves to the course's
+// path in a group, when exactly one group holds a course of that name and nothing is kept under that path yet.
+function migrateKeys(courses) {
+  const paths = new Set(courses.map((c) => c.folder));
+  const moved = new Map();  // bare name -> its one path in a group (null: in several groups)
+  for (const c of courses) {
+    if (!c.group) continue;
+    const name = c.folder.slice(c.group.length + 1);
+    moved.set(name, moved.has(name) ? null : c.folder);
+  }
+  const target = (name) => (name && !name.includes('/') && !paths.has(name) ? moved.get(name) : null);
+  try {
+    for (const prefix of [DRAFT_PREFIX, UI_PREFIX]) {
+      for (const key of storedKeys(prefix)) {
+        const to = target(key.slice(prefix.length));
+        if (!to || localStorage.getItem(prefix + to) != null) continue;
+        localStorage.setItem(prefix + to, localStorage.getItem(key));
+        localStorage.removeItem(key);
+      }
+    }
+    const to = target(localStorage.getItem(LAST_KEY));
+    if (to) localStorage.setItem(LAST_KEY, to);
+  } catch (e) {
+    // kept where they are: a course that no longer matches shows as a draft left behind
+  }
+}
+
+// Drafts on this device for courses the list doesn't have (a semester shortcut removed): [{folder, count}].
+function strandedDrafts(courses) {
+  const paths = new Set(courses.map((c) => c.folder));
+  return storedKeys(DRAFT_PREFIX).map((key) => key.slice(DRAFT_PREFIX.length))
+    .filter((folder) => !paths.has(folder))
+    .map((folder) => ({ folder, count: draftCount(folder) }))
+    .filter((d) => d.count > 0)
+    .sort((a, b) => (a.folder < b.folder ? -1 : 1));
+}
+
+function dropDraft(folder) {
+  try {
+    localStorage.removeItem(DRAFT_PREFIX + folder);
+  } catch (e) {
+    // storage blocked: nothing was kept either
   }
 }
 

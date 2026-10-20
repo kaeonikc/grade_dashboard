@@ -90,7 +90,7 @@ test('ac2_1 listCourses lists two courses with unpulled and last saved', (t) => 
   assert.strictEqual(r.ok, true);
   assert.strictEqual(r.courses.length, 2);
   const c1 = r.courses.find((c) => c.folder === H.F1);
-  assert.deepStrictEqual(c1, { folder: H.F1, available: true, course_id: 'MOCK', course_name: 'ฟิสิกส์จำลอง',
+  assert.deepStrictEqual(c1, { folder: H.F1, group: null, available: true, course_id: 'MOCK', course_name: 'ฟิสิกส์จำลอง',
     term: '2027_S1', pushed_at: '2027-01-19T20:15:00+07:00', unpulled: 3, last_saved: '2027-01-20T09:45:00+07:00',
     older_push: false });
   const c2 = r.courses.find((c) => c.folder === H.F2);
@@ -112,7 +112,7 @@ test('ac2_3 course without course.json is unavailable, the other opens', (t) => 
   fs.rmSync(path.join(folders[H.F2], 'course.json'));
   const r = call(gas, 'listCourses');
   assert.strictEqual(r.ok, true);
-  assert.deepStrictEqual(r.courses.find((c) => c.folder === H.F2), { folder: H.F2, available: false,
+  assert.deepStrictEqual(r.courses.find((c) => c.folder === H.F2), { folder: H.F2, group: null, available: false,
     reason: 'course.json is missing. Push the course again from the Mac: grader web-push' });
   assert.strictEqual(call(gas, 'loadCourse', H.F1).ok, true);
   const bad = call(gas, 'loadCourse', H.F2);

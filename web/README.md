@@ -1,13 +1,21 @@
 # grade_web
 
 View and edit grade_dashboard courses from an iPhone or any browser. A Google Apps Script web app on the CMRU
-account reads course copies in `My Drive/grade_web/<course>/`. `grader web-push` puts a course there, and
-`grader web-pull` brings the web edits back to the Mac copy (the master). The design is in `SPEC.md`.
+account reads course copies on Drive. `grader web-push` puts a course in `My Drive/grade_courses/<semester>/<course>/`
+(the semester is the folder the course sits in on the Mac, such as `2569-1`), and `grader web-pull` brings the web
+edits back to the Mac copy (the master). The design is in `SPEC.md` and `../SPEC_semester_groups.md`.
 
-A course folder kept somewhere else on Drive (another folder, a shared drive, or shared with this account) can be
-added with a Drive shortcut in `grade_web/`: the app lists it under the shortcut's name. The folder it points to
-must hold a pushed course (course.json, push.json, web_edits.jsonl, from `grader web-push`); otherwise it shows as
-unavailable with "course.json is missing".
+The phone lists what `My Drive/grade_web/` holds. Each term:
+1. Push the term's courses from the Mac: `grader web-push` in each course folder.
+2. In Drive, right-click `grade_courses/2569-1` › Organise › Add shortcut › `grade_web`. The phone then lists that
+   term's courses under the heading 2569-1.
+3. At the end of the term, after the last `grader web-pull`, remove the shortcut from `grade_web`. The copies stay in
+   `grade_courses/2569-1`, untouched, and the phone no longer lists them.
+
+A shortcut to a single course folder works too, and so do courses pushed before semester folders (folders directly
+in `grade_web`). web-push names such an old copy when it pushes the course to its semester folder; delete it in
+Drive then. No sharing is needed when `grade_courses` is in the same CMRU My Drive. A folder in another account's
+Drive needs edit access shared to the CMRU account.
 
 Status: the web app follows grade-tui's tabs: [1] Summary Scores, [2] Raw Details (one category at a time, picked
 from the ☰ Categories menu; the table on wide screens, column mode on phones, with Fill, Save and undo), [3] Analytics

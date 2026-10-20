@@ -198,10 +198,11 @@ def _unpulled_lines(lines: list[dict]) -> list[str]:
     return out
 
 
-def push(course: Path, root: Path, force: bool = False) -> None:
+def push(course: Path, root: Path, force: bool = False, semester: str | None = None) -> None:
     """Prints as it goes. Raises Refused (nothing written) when the course or the Drive copy isn't ready."""
     course = Path(course).resolve()
-    mirror = webdrive.mirror_of(root, course)
+    mirror, old = webdrive.place_of(root, course, semester)
+    old = webdrive.old_copy(mirror, old)
     print(f"🔄 Web push: {course.name} → {webdrive.shown(root, mirror)}")
     ids, warnings = check_course(course)
     for w in warnings:
@@ -209,8 +210,17 @@ def push(course: Path, root: Path, force: bool = False) -> None:
 
     copies = webdrive.conflict_copies(mirror)
     if copies:
-        raise Refused(f"❌ Drive has duplicate files in {webdrive.FOLDER}/{course.name}/: {', '.join(copies)}. Fix "
+        raise Refused(f"❌ Drive has duplicate files in {webdrive.label(mirror)}/: {', '.join(copies)}. Fix "
                       "them as the README's \"Duplicate files\" says, then run again.")
+    old_waiting = webdrive.unpulled(old) if old else []
+    if old_waiting:  # even with --force: those edits are on a copy this push doesn't replace (SPEC_semester_groups D7)
+        n = len(old_waiting)
+        raise Refused("\n".join(
+            [f"❌ The old copy {webdrive.shown(root, old)} has {n} web edit{'s' if n != 1 else ''} not pulled yet "
+             f"(last saved {fmt_time(webdrive.last_saved(old_waiting))}):"]
+            + _unpulled_lines(old_waiting)
+            + ["   Bring them in first:  grader web-pull         (preview, then --yes)",
+               "   Nothing on Drive was changed."]))
     waiting = webdrive.unpulled(mirror)
     if waiting and not force:
         n = len(waiting)
@@ -282,3 +292,10 @@ def push(course: Path, root: Path, force: bool = False) -> None:
     print(f"✅ Pushed {fmt_time(now.isoformat())}. 0 edits waiting to be pulled.")
     print("   Wait until Drive for Desktop shows \"up to date\", then open grade_web on your phone.")
     print("   Bring web edits back with: grader web-pull")
+    if old:
+        print(f"   The old copy {webdrive.shown(root, old)} is no longer updated: delete it in Drive (it has no edits "
+              "waiting).")
+    linked = Path(root) / webdrive.FOLDER
+    if old or not ((linked / mirror.parent.name).exists() or (linked / course.name).exists()):
+        print(f"   The phone lists it once grade_web has a shortcut to {webdrive.label(mirror.parent)}: in Drive, "
+              f"right-click {mirror.parent.name} › Organise › Add shortcut › grade_web (once per term).")

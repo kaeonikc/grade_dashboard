@@ -90,7 +90,7 @@ function showCourses() {
       state.nowAt = Date.now();
     }
     status.textContent = 'Checking Drive…';
-    show(head, status, courseList(cached.courses));
+    show(head, status, ...courseList(cached.courses, cached.groups || []));
   } else {
     show(head, el('div', { class: 'card placeholder', 'aria-hidden': 'true' }),
       el('div', { class: 'card placeholder', 'aria-hidden': 'true' }), el('p', { class: 'muted' }, 'Loading courses…'));
@@ -108,8 +108,10 @@ function showCourses() {
   };
   loadCourses().then((reply) => {
     if (!here()) return;
-    if (reply.ok && reply.courses.length) {
-      replace(courseList(reply.courses));
+    const groups = reply.ok ? reply.groups || [] : [];
+    if (reply.ok && (reply.courses.length || groups.length)) {
+      const left = strandedList(reply.courses);
+      replace(...courseList(reply.courses, groups), ...(left ? [left] : []));
       const last = lastCourse();
       if (reply.courses.some((c) => c.available && c.folder === last)) prefetch(last);
       return;
@@ -134,15 +136,59 @@ function showCourses() {
   });
 }
 
-function courseList(courses) {
+// The cards, under one heading per semester group (newest name first) and then "Other courses" for the courses
+// directly in grade_web (SPEC_semester_groups.md D5). With no groups there are no headings.
+function courseList(courses, groups) {
   const names = courses.filter((c) => c.available).map((c) => c.course_name);
   const shared = (name) => names.indexOf(name) !== names.lastIndexOf(name);
-  return el('ul', { class: 'courses' }, ...courses.map((c) => el('li', {}, c.available
+  const cards = (list) => el('ul', { class: 'courses' }, ...list.map((c) => el('li', {}, c.available
     ? courseCard(c, shared(c.course_name))
     : el('div', { class: 'card unavailable' },
       el('p', { class: 'card-title' }, '⚠ ', data('span', {}, c.folder), ' ',
         el('span', { class: 'tag' }, 'Unavailable')),
       el('p', {}, c.reason)))));
+  const named = groups.map((g) => g.name);
+  for (const c of courses) if (c.group && !named.includes(c.group)) named.push(c.group);
+  if (!named.length) return [cards(courses)];
+  const out = [];
+  for (const name of named.sort((a, b) => (a < b ? 1 : -1))) {
+    const list = courses.filter((c) => c.group === name);
+    out.push(el('section', { class: 'group' }, data('h2', { class: 'group-head' }, name), list.length ? cards(list)
+      : el('p', { class: 'muted' }, 'No pushed courses in ', data('span', {}, name), '.')));
+  }
+  const other = courses.filter((c) => !c.group);
+  if (other.length) out.push(el('section', { class: 'group' }, el('h2', { class: 'group-head' }, 'Other courses'),
+    cards(other)));
+  return out;
+}
+
+// Drafts on this device for courses no longer in grade_web, each with Discard (SPEC_semester_groups.md D6). Only
+// from a fresh list that has something in it, so a Drive hiccup never offers to discard.
+function strandedList(courses) {
+  const left = strandedDrafts(courses);
+  if (!left.length) return null;
+  const box = el('section', { class: 'stranded' });
+  const draw = () => {
+    const now = strandedDrafts(courses);
+    if (!now.length) return box.remove();
+    box.replaceChildren(...now.map((d) => el('p', {}, el('span', {}, 'Unsaved edits for a course no longer in ' +
+      'grade_web: ', data('span', {}, d.folder), ' (' + F.plural(d.count, 'edit') + ')'),
+      button('Discard', () => openStranded(d, draw), 'btn outline'))));
+  };
+  draw();
+  return box;
+}
+
+function openStranded(d, done) {
+  const dlg = dialog('Discard ' + F.plural(d.count, 'unsaved edit') + '?',
+    el('p', {}, 'For ', data('span', {}, d.folder), ". They were never saved to Drive and can't be brought back."),
+    el('div', { class: 'sheet-actions' }, autofocused(button('Keep edits', () => dlg.close(), 'btn outline')),
+      button('Discard ' + F.plural(d.count, 'edit'), () => {
+        dlg.close();
+        dropDraft(d.folder);
+        done();
+        app.querySelector('h1').focus();
+      }, 'btn danger')));
 }
 
 function courseCard(c, showFolder) {

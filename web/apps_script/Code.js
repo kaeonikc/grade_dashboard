@@ -27,6 +27,7 @@ const WHY = {
   badJournal: (lines) => JOURNAL + ' has damaged lines: ' + lines.join(', ') +
     '. See the README, "Damaged journal", then reload.',
   readError: (file) => "Couldn't read " + file + ' from Drive. Try again in a minute.',
+  slash: 'The folder name has a / in it. Rename it in Drive, then reload.',
 };
 
 // `?timing=1` shows the timing line (SPEC_discard_and_speed.md D2); the page then carries doGet's own time.
@@ -75,25 +76,31 @@ function clientCore_() {
 
 // ---- server functions (google.script.run) ----
 
-// {ok, now, courses}: every folder under grade_web, each available or not (S2.1, S2.3). The courses share each
-// Drive listing and cache lookup, so the cost hardly grows with their number.
+// {ok, now, courses, groups}: every course grade_web shows, each available or not (S2.1, S2.3), and its semester
+// groups [{name, count}] (SPEC_semester_groups.md). A course's `folder` is its path in grade_web (`<course>` or
+// `<group>/<course>`), the id the browser passes back. The courses share each Drive listing and cache lookup, so
+// the cost hardly grows with their number.
 function listCourses() {
   return withLock_('listCourses', function () {
     const root = gradeWebFolder_();
     if (!root) return fail_('NOT_FOUND', 'No pushed courses: run `grader web-push` on the Mac');
-    const folders = subfolders_(root);
-    const opened = openCourses_(folders, true);
-    const courses = folders.map(function (folder, i) {
-      const c = opened[i].c;
-      if (!c) return { folder: folder.name, available: false, reason: opened[i].reason };
+    const found = coursesIn_(root);
+    const open = found.courses.filter(function (c) { return c.folder; });
+    const opened = openCourses_(open.map(function (c) { return c.folder; }), true, found.listed);
+    const courses = found.courses.map(function (f) {
+      if (!f.folder) return { folder: f.path, group: f.group, available: false, reason: f.reason };
+      const it = opened[open.indexOf(f)];
+      const c = it.c;
+      if (!c) return { folder: f.path, group: f.group, available: false, reason: it.reason };
       return {
-        folder: folder.name, available: true, course_id: c.course.course_id, course_name: c.course.course_name,
+        folder: f.path, group: f.group, available: true, course_id: c.course.course_id,
+        course_name: c.course.course_name,
         term: c.course.term, pushed_at: c.push.pushed_at, unpulled: c.summary.unpulled,
         last_saved: c.summary.last_saved,
         older_push: c.lines.some(function (l) { return l.push !== c.push.push_id; }),
       };
     });
-    return { ok: true, courses: courses };
+    return { ok: true, courses: courses, groups: found.groups };
   });
 }
 
@@ -192,13 +199,15 @@ function timed_(name, t0, t1, reply) {
 }
 
 // Runs fn(c) under the lock on an available course (roll-forward and trim done); else NOT_FOUND / UNAVAILABLE.
-// `cache` only for display calls: a call that writes or conflict-checks reads every file fresh (D5).
-function withCourse_(name, folderName, fn, cache) {
+// `path` is the course's path in grade_web, as listCourses gave it. `cache` only for display calls: a call that
+// writes or conflict-checks reads every file fresh (D5).
+function withCourse_(name, path, fn, cache) {
   return withLock_(name, function () {
     const root = gradeWebFolder_();
-    const folder = root && subfolders_(root).filter(function (f) { return f.name === folderName; })[0];
-    if (!folder) return fail_('NOT_FOUND', 'No pushed course named ' + folderName);
-    const opened = openCourses_([folder], !!cache)[0];
+    const found = root && coursesIn_(root);
+    const hit = found && found.courses.filter(function (c) { return c.folder && c.path === path; })[0];
+    if (!hit) return fail_('NOT_FOUND', 'No pushed course named ' + path);
+    const opened = openCourses_([hit.folder], !!cache, found.listed)[0];
     if (!opened.c) return fail_('UNAVAILABLE', opened.reason);
     return fn(opened.c);
   });
@@ -218,6 +227,48 @@ function nowIso_() {
   return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), ISO_FORMAT);
 }
 
+// ---- courses: which ones grade_web shows (SPEC_semester_groups.md D3) ----
+
+// {courses: [{path, group, folder} or {path, group, reason}], groups: [{name, count}], listed: {<folder id>:
+// [record]}}. An item in grade_web that holds course.json, push.json or the journal is a course. Any other item is
+// a group (a semester folder, usually a shortcut): its subfolders holding one of those files are its courses, and
+// anything else in it is left out. `listed` keeps the listings made here, so openCourses_ doesn't repeat them.
+function coursesIn_(root) {
+  const tops = subfolders_(root);
+  const listed = childrenOf_(tops.map(function (f) { return f.id; }));
+  const courses = [];
+  const groups = [];
+  tops.forEach(function (top) {
+    if (!isCourse_(listed[top.id])) {
+      groups.push({ name: top.name, subs: listed[top.id].filter(function (r) { return r.folder; }) });
+    } else if (top.name.indexOf('/') >= 0) {
+      courses.push({ path: top.name, group: null, reason: WHY.slash });
+    } else {
+      courses.push({ path: top.name, group: null, folder: top });
+    }
+  });
+  const inner = childrenOf_([].concat.apply([], groups.map(function (g) {
+    return g.subs.map(function (f) { return f.id; });
+  })));
+  Object.keys(inner).forEach(function (id) { listed[id] = inner[id]; });
+  groups.forEach(function (g) {
+    g.count = 0;
+    g.subs.sort(function (a, b) { return a.name < b.name ? -1 : 1; }).forEach(function (sub) {
+      if (!isCourse_(inner[sub.id])) return;
+      g.count++;
+      const path = g.name + '/' + sub.name;
+      courses.push((g.name + sub.name).indexOf('/') >= 0 ? { path: path, group: g.name, reason: WHY.slash }
+        : { path: path, group: g.name, folder: sub });
+    });
+  });
+  return { courses: courses, groups: groups.map(function (g) { return { name: g.name, count: g.count }; }),
+    listed: listed };
+}
+
+function isCourse_(records) {
+  return (records || []).some(function (r) { return !r.folder && TOP_FILES.indexOf(r.name) >= 0; });
+}
+
 // ---- courses: trim, then the availability check ----
 
 function Unavailable_(reason) {
@@ -229,10 +280,13 @@ function Unavailable_(reason) {
 // availability check (SPEC "Course availability", the same order and reasons as one course at a time), the journals,
 // and a pending save rolled forward. Returns per folder {c} or {reason}; c = {folder, course, push, dirs: {<rel dir>:
 // [record]}, archive: [record], journalFile, journalText, lines, summary, cache}. With `cache` (display calls), files
-// unchanged since they were cached are not downloaded; a course with a save pending reads fresh anyway.
-function openCourses_(folders, cache) {
+// unchanged since they were cached are not downloaded; a course with a save pending reads fresh anyway. `listed`
+// ({<folder id>: [record]}, from coursesIn_) saves listing the course folders again.
+function openCourses_(folders, cache, listed) {
   const props = PropertiesService.getScriptProperties().getProperties();
-  const tops = childrenOf_(folders.map(function (f) { return f.id; }));
+  const tops = Object.assign({}, listed);
+  const unlisted = folders.filter(function (f) { return !(f.id in tops); }).map(function (f) { return f.id; });
+  if (unlisted.length) Object.assign(tops, childrenOf_(unlisted));
   const its = folders.map(function (folder) {
     const tree = { '': tops[folder.id] };
     return { folder: folder, tree: tree, top: filesOf_(tree['']), reason: null,

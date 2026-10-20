@@ -1812,7 +1812,7 @@ def web_push(sub, args):
     from src.webdrive import Refused, drive_root
     course = _web_course(sub, args.course)
     try:
-        webpush.push(course, drive_root(args.drive_root), force=args.force)
+        webpush.push(course, drive_root(args.drive_root), force=args.force, semester=args.semester)
     except Refused as e:
         print(e)
         sys.exit(1)
@@ -1831,7 +1831,7 @@ def web_pull(sub, args):
     from src.webdrive import Refused, drive_root
     course = _web_course(sub, args.course)
     try:
-        code = webpull.pull(course, drive_root(args.drive_root), yes=args.yes)
+        code = webpull.pull(course, drive_root(args.drive_root), yes=args.yes, semester=args.semester)
     except Refused as e:
         print(e)
         sys.exit(1)
@@ -1902,16 +1902,20 @@ if __name__ == "__main__":
     parser_web_push = subparsers.add_parser(
         "web-push", help="Copy a course to Google Drive for the grade_web app (phone or browser)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Copy a course to Google Drive (My Drive/grade_web/<course folder>/) so the grade_web app can\n"
-                    "open it. Reads the course and never writes into it. Refuses while web edits are waiting to be\n"
-                    "pulled, so nothing made on the phone is lost.",
+        description="Copy a course to Google Drive (My Drive/grade_courses/<semester>/<course folder>/, the semester\n"
+                    "being the folder the course sits in on the Mac). The grade_web app lists it once My Drive/\n"
+                    "grade_web/ has a shortcut to that semester folder. Reads the course and never writes into it.\n"
+                    "Refuses while web edits are waiting to be pulled, so nothing made on the phone is lost.",
         epilog="examples:\n"
                "  grader web-push                                   # inside 9_ฟิสิกส์จำลอง_grading/\n"
                "  grader web-push courses/9_ฟิสิกส์จำลอง_grading\n"
                "  grader web-pull                                   # later: see what the web changed")
     parser_web_push.add_argument("--force", action="store_true",
                                  help="Push even if web edits are waiting to be pulled. They are kept in "
-                                      "grade_web/<course>/archive/ marked as discarded, never deleted")
+                                      "<course>/archive/ on Drive marked as discarded, never deleted")
+    parser_web_push.add_argument("--semester", metavar="NAME",
+                                 help="Semester folder on Drive (default: the name of the folder the course is in, "
+                                      "e.g. 2569-1). The folder above it is $GRADE_WEB_COURSES, else grade_courses")
     parser_web_push.add_argument("--drive-root", metavar="DIR",
                                  help='Your "My Drive" folder (default: $GRADE_WEB_DRIVE_ROOT, else the Google '
                                       "Drive for Desktop folder of your @g.cmru.ac.th account)")
@@ -1931,6 +1935,9 @@ if __name__ == "__main__":
                "  grader undo                     # take the whole pull back")
     parser_web_pull.add_argument("-y", "--yes", action="store_true",
                                  help="Apply the changes (default: preview only, nothing written)")
+    parser_web_pull.add_argument("--semester", metavar="NAME",
+                                 help="Semester folder on Drive, as given to web-push (default: the name of the "
+                                      "folder the course is in)")
     parser_web_pull.add_argument("--drive-root", metavar="DIR",
                                  help='Your "My Drive" folder (default: $GRADE_WEB_DRIVE_ROOT, else the Google '
                                       "Drive for Desktop folder of your @g.cmru.ac.th account)")

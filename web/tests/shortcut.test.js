@@ -59,17 +59,15 @@ test('a save through the shortcut writes the target folder, and its markers use 
   assert.ok(!Object.keys(gas.props()).some((k) => k.startsWith('pending:')));
 });
 
-test('a shortcut whose target is gone is unavailable; a shortcut to a file is not a course', (t) => {
+test('a shortcut whose target is gone is an empty group; a shortcut to a file is not a course', (t) => {
   const { gas, dir, target } = setup(t);
   fs.symlinkSync(path.join(dir, 'grade_web', H.F2, 'course.json'), path.join(dir, 'grade_web', 'a file shortcut'));
   fs.rmSync(target, { recursive: true });
   const list = gas.call('listCourses');
-  assert.deepStrictEqual(list.courses.map((x) => x.folder).sort(), [H.F2, LINK].sort());
-  const gone = list.courses.find((x) => x.folder === LINK);
-  assert.deepStrictEqual([gone.available, gone.reason],
-    [false, 'course.json is missing. Push the course again from the Mac: grader web-push']);
-  assert.strictEqual(list.courses.find((x) => x.folder === H.F2).available, true);
-  assert.strictEqual(gas.call('loadCourse', LINK).code, 'UNAVAILABLE');
+  assert.deepStrictEqual(list.courses.map((x) => x.folder), [H.F2]);
+  assert.strictEqual(list.courses[0].available, true);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(list.groups)), [{ name: LINK, count: 0 }]);
+  assert.strictEqual(gas.call('loadCourse', LINK).code, 'NOT_FOUND');
 });
 
 test('listings include shared drives, where a shortcut target may live', (t) => {

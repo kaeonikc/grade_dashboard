@@ -146,7 +146,7 @@ def test_ac1_5_attendance_needing_sync_refuses(web_course_att, drive_root):
     assert "run `grader sync` first" in out
     assert any("9900000002" in l and "20 Jan 2027" in l and "xlsx P" in l and "csv A" in l for l in out.splitlines()), out
     assert tree_sha(drive_root) == {}
-    assert not (drive_root / "grade_web").exists()
+    assert not (drive_root / "grade_courses").exists() and not (drive_root / "grade_web").exists()
     assert tree_sha(web_course_att) == before
 
 
@@ -156,7 +156,7 @@ def test_ac1_6_non_utf8_csv_refused(web_course, drive_root):
     code, out = push(web_course)
     assert code == 1
     assert f"❌ data/{P1}_homework.csv is not UTF-8 text" in out
-    assert not (drive_root / "grade_web").exists()
+    assert not (drive_root / "grade_courses").exists() and not (drive_root / "grade_web").exists()
 
 
 def test_ac1_7_stale_drive_file_removed(web_course, drive_root):
@@ -200,7 +200,7 @@ def test_ac1_8_default_root_resolution(web_course, tmp_path):
     one.mkdir(parents=True)
     r = grader_proc(["web-push", web_course], cwd=tmp_path, home=home, unset=["GRADE_WEB_DRIVE_ROOT"])
     assert r.returncode == 0, r.stdout + r.stderr
-    assert (one / "grade_web" / F1 / "course.json").exists()
+    assert (one / "grade_courses" / "mac" / F1 / "course.json").exists()
     # two matches: refused
     (cs / "GoogleDrive-other.teacher@g.cmru.ac.th" / "My Drive").mkdir(parents=True)
     r = grader_proc(["web-push", web_course], cwd=tmp_path, home=home, unset=["GRADE_WEB_DRIVE_ROOT"])
@@ -227,7 +227,7 @@ def test_ac1_10_xlsx_score_file_refused(web_course_att, drive_root):
     assert code == 1
     assert f"❌ grade_web reads score files as CSV only: data/{P1}_quiz.xlsx" in out
     assert "attendance.xlsx" not in out.split("CSV only:")[1].splitlines()[0]
-    assert not (drive_root / "grade_web").exists()
+    assert not (drive_root / "grade_courses").exists() and not (drive_root / "grade_web").exists()
 
 
 def test_ac1_11_cwd_default(web_course, drive_root):
@@ -241,7 +241,7 @@ def test_ac1_11_usage_error_outside_a_course(tmp_path):
     empty.mkdir()
     r = grader_proc(["web-push"], cwd=empty)
     assert r.returncode == 2
-    assert "usage: grader web-push [-h] [--force] [--drive-root DIR] [--debug] [COURSE]" in r.stderr
+    assert "usage: grader web-push [-h] [--force] [--semester NAME] [--drive-root DIR]" in r.stderr
     assert "grader web-push: error: no course folder here" in r.stderr
 
 
@@ -304,13 +304,13 @@ def test_edge7_missing_student_id_or_config_refused(web_course, drive_root):
     code, out = push(web_course)
     assert code == 1
     assert f"❌ data/{P1}_homework.csv has no 'Student ID' column" in out
-    assert not (drive_root / "grade_web").exists()
+    assert not (drive_root / "grade_courses").exists() and not (drive_root / "grade_web").exists()
     hw.write_bytes(original)
     (web_course / "course_info" / f"{P1}_config.yaml").unlink()
     code, out = push(web_course)
     assert code == 1
     assert "❌ No config in course_info/" in out
-    assert not (drive_root / "grade_web").exists()
+    assert not (drive_root / "grade_courses").exists() and not (drive_root / "grade_web").exists()
 
 
 def test_edge8_header_only_refused(web_course, drive_root):
@@ -319,7 +319,7 @@ def test_edge8_header_only_refused(web_course, drive_root):
     code, out = push(web_course)
     assert code == 1
     assert f"❌ data/{P1}_final.csv has no students (header only)." in out
-    assert not (drive_root / "grade_web").exists()
+    assert not (drive_root / "grade_courses").exists() and not (drive_root / "grade_web").exists()
     shutil.copyfile(FIXTURES / F1 / "data" / fin.name, fin)
     roster = web_course / "course_info" / f"{P1}_student_info.csv"
     roster.write_text("Student ID,Name,Class Group\n", encoding="utf-8")
@@ -335,7 +335,7 @@ def test_edge17_conflict_copies_refuse_push(web_course, drive_root):
     before = tree_sha(drive_root)
     code, out = push(web_course)
     assert code == 1
-    assert f"❌ Drive has duplicate files in grade_web/{F1}/: web_edits (1).jsonl." in out
+    assert f"❌ Drive has duplicate files in grade_courses/mac/{F1}/: web_edits (1).jsonl." in out
     assert tree_sha(drive_root) == before
 
 
@@ -349,7 +349,7 @@ def test_edge19_unreadable_journal_refuses(web_course, drive_root):
     finally:
         j.chmod(0o644)
     assert code == 1
-    assert f"❌ Couldn't read grade_web/{F1}/web_edits.jsonl (" in out
+    assert f"❌ Couldn't read grade_courses/mac/{F1}/web_edits.jsonl (" in out
     assert not (mirror(drive_root, web_course) / "archive").exists()
 
 

@@ -47,6 +47,8 @@ function setup(t, fixtures) {
       getItem: (k) => (store.has(k) ? store.get(k) : null),
       setItem: (k, v) => { store.set(k, String(v)); },
       removeItem: (k) => { store.delete(k); },
+      get length() { return store.size; },
+      key: (i) => [...store.keys()][i] ?? null,
     },
     performance: { now: () => clock },
     document: { dispatchEvent() {} },
@@ -72,7 +74,7 @@ test('the course list is kept on the device without student data', async (t) => 
   assert.strictEqual(saved.v, 1);
   assert.strictEqual(saved.courses.length, 2);
   assert.deepStrictEqual(Object.keys(saved.courses[0]).sort(), ['available', 'course_id', 'course_name', 'folder',
-    'last_saved', 'older_push', 'pushed_at', 'term', 'unpulled']);
+    'group', 'last_saved', 'older_push', 'pushed_at', 'term', 'unpulled']);
   assert.ok(!/99\d{8}/.test(c.store.get('gw:courses')), 'no student ID');
   assert.ok(!c.store.get('gw:courses').includes('นายสมมติ'), 'no student name');
   assert.deepStrictEqual(JSON.parse(JSON.stringify(c.js('courseListCache')().courses)), saved.courses);
@@ -142,4 +144,48 @@ test('a reply that is not ok drops the course from memory', async (t) => {
   const r = await c.js('recheckCourse')();
   assert.deepStrictEqual([r.reply.ok, r.reply.code, r.draft], [false, 'UNAVAILABLE', undefined]);
   assert.strictEqual(c.js('state').loaded.has(H.F1), false);
+});
+
+// SPEC_semester_groups.md D4, D6: the fixture folders moved into grade_courses/2569-1, linked as grade_web/2569-1.
+function intoGroup(c, fixtures) {
+  const dir = path.dirname(path.dirname(c.folders[fixtures[0]]));
+  const sem = path.join(dir, 'grade_courses', '2569-1');
+  fs.mkdirSync(sem, { recursive: true });
+  for (const f of fixtures) fs.renameSync(c.folders[f], path.join(sem, f));
+  fs.symlinkSync(sem, path.join(dir, 'grade_web', '2569-1'));
+}
+
+const DRAFT = JSON.stringify({ v: 1, made_at: '2027-01-20T09:12:40+07:00', push: 'p-x',
+  edits: [{ student_id: '9900000001', column: 'hw2', value: '9', original: '' }] });
+
+test('a draft, UI memory and gw:last under a bare name follow the course into its group', async (t) => {
+  const c = setup(t, [H.F1, H.F2]);
+  intoGroup(c, [H.F1]);
+  c.store.set('gw:draft:' + H.F1, DRAFT);
+  c.store.set('gw:ui:' + H.F1, '{"v":1,"column":"hw2","tab":"scores"}');
+  c.store.set('gw:last', H.F1);
+  c.store.set('gw:draft:' + H.F2, DRAFT);
+  const r = await c.js('loadCourses')();
+  assert.deepStrictEqual(r.courses.map((x) => x.folder), [H.F2, '2569-1/' + H.F1]);
+  assert.strictEqual(c.store.get('gw:draft:2569-1/' + H.F1), DRAFT);
+  assert.strictEqual(c.store.get('gw:ui:2569-1/' + H.F1), '{"v":1,"column":"hw2","tab":"scores"}');
+  assert.strictEqual(c.store.get('gw:last'), '2569-1/' + H.F1);
+  assert.ok(!c.store.has('gw:draft:' + H.F1) && !c.store.has('gw:ui:' + H.F1));
+  assert.strictEqual(c.store.get('gw:draft:' + H.F2), DRAFT, 'a course still listed keeps its key');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(c.js('strandedDrafts')(r.courses))), []);
+  assert.strictEqual(JSON.parse(c.store.get('gw:courses')).groups[0].name, '2569-1');
+});
+
+test('a draft whose course is no longer listed is offered; one never moves onto a kept draft', async (t) => {
+  const c = setup(t, [H.F1, H.F2]);
+  intoGroup(c, [H.F1]);
+  c.store.set('gw:draft:' + H.F1, DRAFT);
+  c.store.set('gw:draft:2569-1/' + H.F1, DRAFT.replace('"9"', '"7"'));
+  c.store.set('gw:draft:2568-2/old_course', DRAFT);
+  const r = await c.js('loadCourses')();
+  assert.strictEqual(c.store.get('gw:draft:2569-1/' + H.F1), DRAFT.replace('"9"', '"7"'));
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(c.js('strandedDrafts')(r.courses))),
+    [{ folder: '2568-2/old_course', count: 1 }, { folder: H.F1, count: 1 }]);
+  c.js('dropDraft')('2568-2/old_course');
+  assert.ok(!c.store.has('gw:draft:2568-2/old_course'));
 });

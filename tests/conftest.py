@@ -72,6 +72,7 @@ def drive_root(tmp_path, monkeypatch) -> Path:
     root = tmp_path / "My Drive"
     root.mkdir(exist_ok=True)
     monkeypatch.setenv("GRADE_WEB_DRIVE_ROOT", str(root))
+    monkeypatch.delenv("GRADE_WEB_COURSES", raising=False)
     return root
 
 

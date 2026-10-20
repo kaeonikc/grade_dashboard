@@ -79,7 +79,13 @@ def tree_sha(path) -> dict:
 
 
 def mirror(root, course) -> Path:
-    """The Drive mirror folder of a Mac course: <root>/grade_web/<course folder name>/."""
+    """The Drive copy of a Mac course: <root>/grade_courses/<the course's parent folder>/<course folder name>/
+    (SPEC_semester_groups.md D1)."""
+    return Path(root) / "grade_courses" / Path(course).parent.name / Path(course).name
+
+
+def old_mirror(root, course) -> Path:
+    """Where web-push put a course before semester groups: <root>/grade_web/<course folder name>/."""
     return Path(root) / "grade_web" / Path(course).name
 
 

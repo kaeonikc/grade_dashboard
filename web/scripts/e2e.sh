@@ -21,9 +21,11 @@ esac
 GIT_BEFORE="$(git status --porcelain 2>/dev/null || true)"
 F1="9_ฟิสิกส์จำลอง_grading"
 P1="9_ฟิสิกส์จำลอง"
-C="$T/mac/$F1"
+SEM="2569-1"                    # the Mac course sits in a semester folder (SPEC_semester_groups.md)
+C="$T/teachings/$SEM/$F1"
 DRIVE="$T/MyDrive"
-M="$DRIVE/grade_web/$F1"
+M="$DRIVE/grade_courses/$SEM/$F1"
+P="$SEM/$F1"                    # the course's path in grade_web, through the semester shortcut
 PROPS="$T/props.json"
 export GRADE_WEB_DRIVE_ROOT="$DRIVE"
 # Step 6e needs saveConfig (T10). Until Code.js has it, 6e is skipped and the journal holds 6 lines, not 7.
@@ -41,7 +43,7 @@ PY
 
 # ---------------------------------------------------------------------------------------------------------------------
 step 1 "copy fixture F1 to a tmp Mac course"
-mkdir -p "$T/mac" "$DRIVE"
+mkdir -p "$T/teachings/$SEM" "$DRIVE"
 cp -R "web/tests/fixtures/$F1" "$C"
 [ -d "$C/course_info" ] || fail "fixture copy"
 
@@ -87,7 +89,13 @@ for f in "course_info/${P1}_student_info.csv" "data/${P1}_attendance.csv" "data/
   cmp -s "$C/$f" "$M/$f" || fail "$f differs from the Mac file"
 done
 [ "$(shalist "$C")" = "$S0" ] || fail "web-push changed the Mac course folder"
+[ ! -e "$DRIVE/grade_web" ] || fail "web-push wrote into grade_web"
+grep -q "shortcut to grade_courses/$SEM" <<<"$out" || fail "no shortcut hint"
 cp -R "$M" "$T/pushed"
+
+step 3b "the teacher adds the semester shortcut grade_web/$SEM"
+mkdir -p "$DRIVE/grade_web"
+ln -s "$DRIVE/grade_courses/$SEM" "$DRIVE/grade_web/$SEM"
 
 step 4 "a grade-tui edit on the Mac after the push"
 python3 - "$C" <<'PY' || fail "apply_edits on the Mac"
@@ -101,12 +109,12 @@ S1="$(shalist "$C")"
 step 5 "gas_run listCourses"
 gas 2027-01-20T09:00:00+07:00 listCourses > "$T/r.json" || fail "gas_run listCourses"
 check "$T/r.json" '
-c = [x for x in r["courses"] if x["folder"] == "'"$F1"'"][0]
+c = [x for x in r["courses"] if x["folder"] == "'"$P"'"][0]
 assert r["ok"] and c["available"] and c["unpulled"] == 0, r' || fail "course not available with 0 unpulled"
 
 step 6a "gas_run saveBatch: 4 cells"
 E6A='[{"student_id":"9900000001","column":"hw2","value":"9","original":""},{"student_id":"9900000001","column":"20 Jan 2027","value":"P","original":""},{"student_id":"9900000002","column":"20 Jan 2027","value":"A","original":""},{"student_id":"9900000003","column":"hw2","value":"5","original":""}]'
-gas 2027-01-20T09:15:00+07:00 saveBatch "\"$F1\"" "$E6A" > "$T/r.json" || fail "gas_run saveBatch"
+gas 2027-01-20T09:15:00+07:00 saveBatch "\"$P\"" "$E6A" > "$T/r.json" || fail "gas_run saveBatch"
 check "$T/r.json" '
 assert r["ok"] and len(r["saved"]) == 4 and r["conflicts"] == [] and r["journal"]["unpulled"] == 4, r' || fail "save of 4 cells"
 python3 - "$M" "$T/pushed" "$P1" <<'PY' || fail "Drive CSVs or journal after the save"
@@ -132,7 +140,7 @@ for f, targets in ((hw, {"9900000001", "9900000003"}), (att, {"9900000001", "990
 PY
 
 step 6b "gas_run saveBatch from a stale device"
-gas 2027-01-20T09:16:00+07:00 saveBatch "\"$F1\"" '[{"student_id":"9900000001","column":"hw2","value":"6","original":""}]' > "$T/r.json" || fail "gas_run saveBatch"
+gas 2027-01-20T09:16:00+07:00 saveBatch "\"$P\"" '[{"student_id":"9900000001","column":"hw2","value":"6","original":""}]' > "$T/r.json" || fail "gas_run saveBatch"
 check "$T/r.json" '
 assert r["saved"] == [] and len(r["conflicts"]) == 1, r
 c = r["conflicts"][0]
@@ -140,16 +148,16 @@ assert c["reason"] == "changed" and c["now"] == "9" and r["journal"]["unpulled"]
 
 step 6c "resend 6a (Retry after a lost reply)"
 J6="$(shasum -a 256 "$M/web_edits.jsonl")"
-gas 2027-01-20T09:17:00+07:00 saveBatch "\"$F1\"" "$E6A" > "$T/r.json" || fail "gas_run saveBatch"
+gas 2027-01-20T09:17:00+07:00 saveBatch "\"$P\"" "$E6A" > "$T/r.json" || fail "gas_run saveBatch"
 check "$T/r.json" '
 assert r["batch"] is None and len(r["already"]) == 4 and r["saved"] == [] and r["journal"]["unpulled"] == 4, r' || fail "retry not all already"
 [ "$(shasum -a 256 "$M/web_edits.jsonl")" = "$J6" ] || fail "retry changed the journal"
 
 step 6d "save hw1, then Undo last save"
-gas 2027-01-20T09:20:00+07:00 saveBatch "\"$F1\"" '[{"student_id":"9900000002","column":"hw1","value":"4","original":"10"}]' > "$T/r.json" || fail "gas_run saveBatch"
+gas 2027-01-20T09:20:00+07:00 saveBatch "\"$P\"" '[{"student_id":"9900000002","column":"hw1","value":"4","original":"10"}]' > "$T/r.json" || fail "gas_run saveBatch"
 check "$T/r.json" 'assert len(r["saved"]) == 1, r' || fail "hw1 save"
 B6D="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["batch"])' "$T/r.json")"
-gas 2027-01-20T09:21:00+07:00 undoLastSave "\"$F1\"" "\"$B6D\"" > "$T/r.json" || fail "gas_run undoLastSave"
+gas 2027-01-20T09:21:00+07:00 undoLastSave "\"$P\"" "\"$B6D\"" > "$T/r.json" || fail "gas_run undoLastSave"
 check "$T/r.json" '
 assert r["ok"] and len(r["saved"]) == 1 and r["undoes"] == "'"$B6D"'" and r["journal"]["unpulled"] == 6, r' || fail "undo"
 python3 - "$M" "$P1" "$B6D" <<'PY' || fail "undo lines or Drive value"
@@ -167,7 +175,7 @@ if [ "$CONFIG" = 1 ]; then
 step 6e "gas_run saveConfig grade_boundaries A 78"
 B0='{"A":80,"B+":75,"B":70,"C+":65,"C":60,"D+":55,"D":50}'
 B1='{"A":"78","B+":"75","B":"70","C+":"65","C":"60","D+":"55","D":"50"}'
-gas 2027-01-20T09:30:00+07:00 saveConfig "\"$F1\"" '"grade_boundaries"' "$B1" "$B0" > "$T/r.json" || fail "gas_run saveConfig"
+gas 2027-01-20T09:30:00+07:00 saveConfig "\"$P\"" '"grade_boundaries"' "$B1" "$B0" > "$T/r.json" || fail "gas_run saveConfig"
 check "$T/r.json" 'assert r["ok"] and r["warning"] is None and r["journal"]["unpulled"] == 7, r' || fail "config save"
 python3 - "$M/course.json" <<'PY' || fail "course.json boundaries"
 import json, sys
@@ -264,7 +272,7 @@ filt() { grep -E '\./(data|course_info)/|\./history/attendance_sync\.json$' || t
 step 12 "gas_run listCourses (the next locked call trims)"
 gas 2027-01-21T19:00:00+07:00 listCourses > "$T/r.json" || fail "gas_run listCourses"
 check "$T/r.json" '
-c = [x for x in r["courses"] if x["folder"] == "'"$F1"'"][0]
+c = [x for x in r["courses"] if x["folder"] == "'"$P"'"][0]
 assert c["unpulled"] == 0, c' || fail "unpulled after pull"
 [ ! -s "$M/web_edits.jsonl" ] || fail "journal still holds lines after the trim"
 python3 - "$M" "$LINES" <<'PY' || fail "conflict line missing from the archive"
@@ -286,6 +294,36 @@ grep -q '0 edits waiting to be pulled' <<<"$out" || fail "second push line"
 NEWPUSH="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["push_id"])' "$M/push.json")"
 [ "$NEWPUSH" != "$OLDPUSH" ] || fail "push.json has the old push_id"
 [ "$(shalist "$M/archive")" = "$ARCH" ] || fail "web-push touched archive/"
+
+step 13b "the semester shortcut removed: the course leaves the list, its copy stays"
+rm "$DRIVE/grade_web/$SEM"
+gas 2027-01-21T19:10:00+07:00 listCourses > "$T/r.json" || fail "gas_run listCourses"
+check "$T/r.json" 'assert r["ok"] and r["courses"] == [] and r["groups"] == [], r' || fail "course still listed"
+[ -s "$M/push.json" ] || fail "the Drive copy went with the shortcut"
+ln -s "$DRIVE/grade_courses/$SEM" "$DRIVE/grade_web/$SEM"
+gas 2027-01-21T19:11:00+07:00 listCourses > "$T/r.json" || fail "gas_run listCourses"
+check "$T/r.json" 'assert [c["folder"] for c in r["courses"]] == ["'"$P"'"] and r["groups"] == [{"name": "'"$SEM"'", "count": 1}], r' \
+  || fail "course not back with the shortcut"
+
+step 13c "an old flat copy with an unpulled edit makes web-push refuse"
+cp -R "$M" "$DRIVE/grade_web/$F1"
+python3 - "$DRIVE/grade_web/$F1" <<'PY' || fail "making the old copy"
+import json, sys
+from pathlib import Path
+m = Path(sys.argv[1])
+push = json.loads((m / "push.json").read_text(encoding="utf-8"))
+push["push_id"] = "p-20270101-080000"
+(m / "push.json").write_text(json.dumps(push), encoding="utf-8")
+(m / "web_edits.jsonl").write_text(json.dumps({"batch": "b-old", "seq": 1, "ts": "2027-01-02T08:00:00+07:00",
+  "kind": "cell", "push": push["push_id"], "student_id": "9900000001", "column": "hw2", "value": "4",
+  "original": ""}) + "\n", encoding="utf-8")
+PY
+D0="$(shalist "$DRIVE/grade_courses")"
+code=0; out="$(python3 grader.py web-push "$C" 2>&1)" || code=$?
+[ "$code" = 1 ] || fail "web-push exit $code with an old copy holding edits: $out"
+grep -q "The old copy .*grade_web/$F1/ has 1 web edit not pulled" <<<"$out" || fail "old-copy message: $out"
+[ "$(shalist "$DRIVE/grade_courses")" = "$D0" ] || fail "the refused push wrote to Drive"
+rm -rf "$DRIVE/grade_web/$F1"
 
 step 14 "node tests"
 node --test 'web/tests/*.test.js' >"$T/node.log" 2>&1 || { tail -40 "$T/node.log"; fail "node --test"; }

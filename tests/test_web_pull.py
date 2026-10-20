@@ -376,7 +376,7 @@ def test_ac11_16_usage_error_outside_a_course(tmp_path):
     d.mkdir()
     r = grader_proc(["web-pull"], cwd=d)
     assert r.returncode == 2
-    assert "usage: grader web-pull [-h] [-y] [--drive-root DIR] [--debug] [COURSE]" in r.stderr
+    assert "usage: grader web-pull [-h] [-y] [--semester NAME] [--drive-root DIR]" in r.stderr
 
 
 # ---- edges ---------------------------------------------------------------------------------------------------------
@@ -455,7 +455,7 @@ def test_edge17_conflict_copies_refuse_pull(web_course, drive_root):
     before = tree_sha(web_course)
     code, out = pull(web_course, "--yes")
     assert code == 1
-    assert f"❌ Drive has duplicate files in grade_web/{F1}/" in out and f"{P1}_homework (1).csv" in out
+    assert f"❌ Drive has duplicate files in grade_courses/mac/{F1}/" in out and f"{P1}_homework (1).csv" in out
     assert tree_sha(web_course) == before
 
 
@@ -469,7 +469,7 @@ def test_edge19_unreadable_journal_refuses_pull(web_course, drive_root):
     finally:
         j.chmod(0o644)
     assert code == 1
-    assert f"❌ Couldn't read grade_web/{F1}/web_edits.jsonl (" in out
+    assert f"❌ Couldn't read grade_courses/mac/{F1}/web_edits.jsonl (" in out
     assert "Nothing to pull" not in out
 
 

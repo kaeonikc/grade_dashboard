@@ -9,7 +9,8 @@ edits back to the Mac copy (the master) on demand. It has two halves:
 
 - **Web app**: a Google Apps Script web app (`stack.md` rank 4, see `docs/adr/001-stack.md`) on the CMRU account,
   executed as the owner with access "Only myself". It serves plain HTML/CSS/vanilla JS. It reads and edits CSV
-  copies of a course in `My Drive/grade_web/<course>/` and writes each change to an edit journal.
+  copies of a course in `My Drive/grade_courses/<semester>/<course>/`, listed through the shortcuts in
+  `My Drive/grade_web/` (SPEC_semester_groups.md), and writes each change to an edit journal.
 - **Mac**: two new `grader` subcommands inside grade_dashboard (rank 1 core, existing interpreter and
   `requirements.txt`, no new dependency). `web-push` copies a course to Drive and writes a resolved `course.json`.
   `web-pull` replays the journal through grade-tui's own `apply_edits` as one undoable history entry.
@@ -24,7 +25,7 @@ Paths are relative to the grade_dashboard repo root.
 | Path | Responsibility |
 |---|---|
 | **Mac side (Python)** | |
-| `grader.py` (edited; `grader` is a git-tracked symlink to it, and so is `~/.mytools/bin/grader`) | Adds `web-push [COURSE] [--force] [--drive-root DIR] [--debug]` and `web-pull [COURSE] [-y/--yes] [--drive-root DIR] [--debug]`: parse args, resolve the course, print, set the exit code. No logic beyond that. Without `--debug`, an unexpected exception prints one line (`❌ Unexpected error: {message}. Run again with --debug for the details.`) and exits 1. With `--debug`, it prints the traceback. web-push has no `--yes` (it never asks), so there is nothing to alias there |
+| `grader.py` (edited; `grader` is a git-tracked symlink to it, and so is `~/.mytools/bin/grader`) | Adds `web-push [COURSE] [--force] [--semester NAME] [--drive-root DIR] [--debug]` and `web-pull [COURSE] [-y/--yes] [--semester NAME] [--drive-root DIR] [--debug]`: parse args, resolve the course, print, set the exit code. No logic beyond that. Without `--debug`, an unexpected exception prints one line (`❌ Unexpected error: {message}. Run again with --debug for the details.`) and exits 1. With `--debug`, it prints the traceback. web-push has no `--yes` (it never asks), so there is nothing to alias there |
 | `src/webdrive.py` (new) | The Drive side of the contract: resolve the Drive root, mirror paths, read/parse the journal (bad line numbers), archived keys, unpulled lines, conflict-copy check, write archive files |
 | `src/webpush.py` (new) | web-push: read-only checks of the Mac course, staging copy, `build_course_json`, copy the pushed set, remove stale files, `--force` discard archive |
 | `src/webpull.py` (new) | web-pull: net change per cell/config part, classification against the Mac (apply/already/conflict/skip/no change), preview text, apply in one `history.Entry`, archive |
@@ -64,7 +65,7 @@ Paths are relative to the grade_dashboard repo root.
 
 ## Data flow
 ```
- Mac (master)                                         Google Drive, CMRU account: My Drive/grade_web/<course folder>/
+ Mac (master)                                         Google Drive, CMRU account: My Drive/grade_courses/<semester>/<course folder>/
  <term>_<name>_grading/                               (seen on the Mac through Drive for Desktop, which may lag)
 
  course_info/<prefix>_config.yaml ─┐  grader web-push               course.json   (resolved config; web rewrites on config save)
@@ -87,8 +88,12 @@ Paths are relative to the grade_dashboard repo root.
 ## Data model and file formats
 
 ### Drive layout
+The copies live in semester folders, and grade_web holds what the phone lists: shortcuts the teacher adds in Drive,
+usually one per semester (SPEC_semester_groups.md). Courses pushed before that may still be folders in grade_web.
 ```
 My Drive/grade_web/
+  2569-1 → grade_courses/2569-1               ← a Drive shortcut (a group: the phone lists its courses under 2569-1)
+My Drive/grade_courses/2569-1/                ← 2569-1 = the folder the Mac course sits in (or --semester)
   9_ฟิสิกส์จำลอง_grading/                     ← same name as the Mac course folder
     course.json                               ← web-push; rewritten by a web config save
     push.json                                 ← web-push only
@@ -201,12 +206,13 @@ not listed in the entry's `files`, so `grader undo` never "restores" it.
 `{"id":"20270121-180000_grader_web-pull","ts":"…","tool":"grader","action":"web-pull","files":["data/9_ฟิสิกส์จำลอง_homework.csv","data/9_ฟิสิกส์จำลอง_attendance.csv","data/9_ฟิสิกส์จำลอง_attendance.xlsx","history/attendance_sync.json","course_info/9_ฟิสิกส์จำลอง_config.yaml"],"cells":3,"note":"web pull: 3 cells, weights","journal":"web_edits_20270121-180000.jsonl"}`
 
 ### Browser storage (localStorage, per device)
-**Draft**: key `gw:draft:<course folder>`. Value
+**Draft**: key `gw:draft:<course path>`, the course's path in grade_web (`<course>` or `<group>/<course>`, as
+`listCourses` gives it in `folder`; SPEC_semester_groups.md D4). Value
 `{"v":1,"made_at":"2027-01-20T09:12:40+07:00","push":"p-20270119-201500","edits":[{"student_id":"9900000001","column":"hw2","value":"9","original":""}]}`.
 IDs and values only, no names. Replaced on every unsaved change, removed after a fully successful Save or a
 Discard. Always offered on reopen, whatever its age (S8.4).
 
-**UI memory**: key `gw:ui:<course folder>`. Value `{"v":1,"column":"hw2","tab":"scores"}`, where `column` is a
+**UI memory**: key `gw:ui:<course path>`. Value `{"v":1,"column":"hw2","tab":"scores"}`, where `column` is a
 `columns[].name` or null and `tab` ∈ `scores`, `attendance`, `grading`, `table`. It holds no PII and no grades:
 column names and the tab only. It is written when the column or tab changes and read on open (the "column used last on
 this device"). An unknown column or tab is ignored. If a write fails, the storage-refused strip shows (S8.8). Nothing
@@ -216,7 +222,9 @@ else is lost.
 […]}` with the `listCourses` fields of each course (folder, course id/name/term, push time, journal counts, or the
 unavailable reason). No student data. Written after every successful `listCourses`, drawn at once on the next visit.
 
-**Last course** (D8): key `gw:last`, a course folder name, written when a course opens. The list prefetches it.
+**Last course** (D8): key `gw:last`, a course path, written when a course opens. When a fresh list no longer has a
+draft's, UI memory's or gw:last's bare course name but exactly one group has that course, the key moves to its path;
+a draft whose course isn't listed at all is shown under the list with Discard (SPEC_semester_groups.md D4, D6). The list prefetches it.
 
 Opened courses are kept in the tab's memory only (at most 3, never in storage); see SPEC_discard_and_speed.md D7.
 
@@ -301,7 +309,7 @@ except an error code and a course folder name (no names, IDs or scores).
 
 | Function | Request | Success reply |
 |---|---|---|
-| `listCourses()` | — | `{ok, now, courses:[{folder, available:true, course_id, course_name, term, pushed_at, unpulled, last_saved, older_push}, {folder, available:false, reason}]}`. `older_push` (boolean) is true when at least one **unpulled** journal line (after trim) has a `push` different from the current `push.json` `push_id`. That only happens when web-push ran while Drive for Desktop hadn't yet synced a web save (ADR 002). Such lines are still pulled normally and still block the next push, and Undo never offers them |
+| `listCourses()` | — | `{ok, now, courses:[{folder, group, available:true, course_id, course_name, term, pushed_at, unpulled, last_saved, older_push}, {folder, group, available:false, reason}], groups:[{name, count}]}`. `folder` is the course's path in grade_web and `group` its group's name or null (SPEC_semester_groups.md); every other function takes that path as `folderName`. `older_push` (boolean) is true when at least one **unpulled** journal line (after trim) has a `push` different from the current `push.json` `push_id`. That only happens when web-push ran while Drive for Desktop hadn't yet synced a web save (ADR 002). Such lines are still pulled normally and still block the next push, and Undo never offers them |
 | `loadCourse(folder)` | course folder name | `{ok, folder, course:<course.json>, push:<push.json>, roster:"<text>", files:{"data/…csv":"<text>"}, journal:<J>}` |
 | `saveBatch(folder, edits)` | `edits: [{student_id, column, value, original}]` | `{ok, batch|null, ts, saved:[{student_id,column,value}], already:[…], conflicts:[{student_id,column,now,reason}], files, push_changed, journal:<J>}` |
 | `undoLastSave(folder, batch)` | the batch the teacher confirmed | `{ok, batch, undoes, saved, already, conflicts, journal:<J>}` |
@@ -317,9 +325,11 @@ unreadable file, conflict copies: message names the files), `BUSY`, `INVALID` (+
 `listCourses` never fails for one bad course. That course is `available:false` with its `reason` (S2.3).
 
 ### Course availability (checked by `listCourses` and `loadCourse`)
-A course is a folder in `grade_web/`, or a Drive shortcut there to a folder (named by the shortcut; its files,
-pending and trim markers are the target folder's). A shortcut to a file is not a course. A shortcut whose target is
-gone or not shared is unavailable ("course.json is missing").
+An item in `grade_web/` (a folder, or a Drive shortcut to one, named by the shortcut; its files, pending and trim
+markers are the target folder's) that holds `course.json`, `push.json` or `web_edits.jsonl` is a course. Any other
+item is a group: its subfolders that hold one of those files are its courses, path `<group>/<course>`; anything else
+in it is left out, and a group with none shows "No pushed courses in <group>." A shortcut to a file is not a course.
+A shortcut whose target is gone or not shared is an empty group. A name with `/` is unavailable (why.slash).
 Unavailable when `course.json` or `push.json` is missing or not valid JSON, when a file listed in `course.json` is
 missing, when `web_edits.jsonl` is missing or has lines that aren't valid JSON (reason names the line numbers and
 points to the README's "Damaged journal"; freezing the course keeps the hand repair single-writer), or when `journal.conflictCopies` finds two files with the same name in a folder, or a name like
@@ -394,7 +404,9 @@ the Saving steps 3a-3d with one `config` line, then the rewritten `course.json`.
   `Path.home() / "Library/CloudStorage"` glob `GoogleDrive-*@g.cmru.ac.th/My Drive`. `src/webdrive.py` must use
   `Path.home()` (never a literal `~` path or `$HOME` read elsewhere), so tests can point it at a fake HOME. Zero or several matches → exit 1 asking for
   `--drive-root`. The repo holds no account name and no Drive IDs (S13.3). Missing root → exit 1 naming the path,
-  nothing written (S1.9, edge 18). The mirror is `<root>/grade_web/<Mac course folder name>/`.
+  nothing written (S1.9, edge 18). The mirror is `<root>/grade_courses/<semester>/<Mac course folder name>/`, the
+  semester being the Mac course's parent folder name or `--semester`, and `grade_courses` being `$GRADE_WEB_COURSES`
+  when set. web-pull also reads an old flat copy `<root>/grade_web/<course>/` (SPEC_semester_groups.md D7, D8).
 - pytest: `tests/conftest.py` sets `GRADE_WEB_DRIVE_ROOT` to a tmp folder for every test (autouse). Fixtures live in
   `web/tests/fixtures/`. Nothing touches `~/Library/CloudStorage` or `~/cmru/teachings` (S1.8).
 
@@ -1457,11 +1469,12 @@ except Thai names and long paths. Times print as `20 Jan 2027 09:15`. Unexpected
 
 #### `grader web-push -h`
 ```
-usage: grader web-push [-h] [--force] [--drive-root DIR] [--debug] [COURSE]
+usage: grader web-push [-h] [--force] [--semester NAME] [--drive-root DIR] [--debug] [COURSE]
 
-Copy a course to Google Drive (My Drive/grade_web/<course folder>/) so the grade_web app can
-open it. Reads the course and never writes into it. Refuses while web edits are waiting to be
-pulled, so nothing made on the phone is lost.
+Copy a course to Google Drive (My Drive/grade_courses/<semester>/<course folder>/, the semester
+being the folder the course sits in on the Mac). The grade_web app lists it once My Drive/
+grade_web/ has a shortcut to that semester folder. Reads the course and never writes into it.
+Refuses while web edits are waiting to be pulled, so nothing made on the phone is lost.
 
 positional arguments:
   COURSE            Course folder (default: the folder you're in, if it has course_info/)
@@ -1469,9 +1482,11 @@ positional arguments:
 options:
   -h, --help        show this help message and exit
   --force           Push even if web edits are waiting to be pulled. They are kept in
-                    grade_web/<course>/archive/ marked as discarded, never deleted
-  --drive-root DIR  Your "My Drive" folder (default: $GRADE_WEB_DRIVE_ROOT, else the Google
-                    Drive for Desktop folder of your @g.cmru.ac.th account)
+                    <course>/archive/ on Drive marked as discarded, never deleted
+  --semester NAME   Semester folder on Drive (default: the name of the folder the course is in,
+                    e.g. 2569-1). The folder above it is $GRADE_WEB_COURSES, else grade_courses
+  --drive-root DIR  Your "My Drive" folder (default: $GRADE_WEB_DRIVE_ROOT, else the Google Drive
+                    for Desktop folder of your @g.cmru.ac.th account)
   --debug           Show the full traceback on unexpected errors
 
 examples:
@@ -1507,7 +1522,7 @@ examples:
 #### Sample session: push (fixture, empty Drive root)
 ```
 $ cd courses/9_ฟิสิกส์จำลอง_grading && grader web-push
-🔄 Web push: 9_ฟิสิกส์จำลอง_grading → My Drive/grade_web/9_ฟิสิกส์จำลอง_grading/
+🔄 Web push: 9_ฟิสิกส์จำลอง_grading → My Drive/grade_courses/2569-1/9_ฟิสิกส์จำลอง_grading/
    ฟิสิกส์จำลอง (MOCK, 2027_S1) · 3 students · 8 counted columns
   ✍️  course.json
   ✍️  course_info/9_ฟิสิกส์จำลอง_student_info.csv
@@ -1532,7 +1547,7 @@ Variants inside the same layout:
 #### Sample session: push refused, unpulled edits (S1.3), then `--force` (S1.4)
 ```
 $ grader web-push
-🔄 Web push: 9_ฟิสิกส์จำลอง_grading → My Drive/grade_web/9_ฟิสิกส์จำลอง_grading/
+🔄 Web push: 9_ฟิสิกส์จำลอง_grading → My Drive/grade_courses/2569-1/9_ฟิสิกส์จำลอง_grading/
 ❌ 3 web edits haven't been pulled yet (last saved 20 Jan 2027 09:15):
      9900000001  20 Jan 2027   (blank) → P     20 Jan 2027 09:15
      9900000002  20 Jan 2027   (blank) → A     20 Jan 2027 09:15
@@ -1543,7 +1558,7 @@ $ grader web-push
 $ echo $?
 1
 $ grader web-push --force
-🔄 Web push: 9_ฟิสิกส์จำลอง_grading → My Drive/grade_web/9_ฟิสิกส์จำลอง_grading/
+🔄 Web push: 9_ฟิสิกส์จำลอง_grading → My Drive/grade_courses/2569-1/9_ฟิสิกส์จำลอง_grading/
 ⚠️  3 web edits not pulled are dropped from this push. They are kept in
     archive/web_edits_20270121-175500_discarded.jsonl
    ฟิสิกส์จำลอง (MOCK, 2027_S1) · 3 students · 8 counted columns
@@ -1557,7 +1572,7 @@ Journal: 7 unpulled lines (two attendance codes, hw2 for `9900000001` blank → 
 `9900000002` blank → 9 then 9 → 8, a weights line, and a line for `9900000099`).
 ```
 $ grader web-pull
-🔄 Web pull: My Drive/grade_web/9_ฟิสิกส์จำลอง_grading/ → 9_ฟิสิกส์จำลอง_grading
+🔄 Web pull: My Drive/grade_courses/2569-1/9_ฟิสิกส์จำลอง_grading/ → 9_ฟิสิกส์จำลอง_grading
    ฟิสิกส์จำลอง (MOCK, 2027_S1) · pushed 19 Jan 2027 20:15 (p-20270119-201500)
    Journal: 7 edits not pulled · last saved 20 Jan 2027 09:45
    (grade_web shows the same two numbers. If not, wait for Drive to sync and run again.)
@@ -1620,7 +1635,7 @@ Line formats used in the lists:
 | Invalid journal lines (S11.13, edge 29) | `❌ web_edits.jsonl has lines that aren't valid JSON: 3, 7. Nothing was applied, archived or pushed. See the README, "Damaged journal".` | 1 |
 | Unpulled edits at push | see sample session | 1 |
 | `--force` | see sample session | 0 |
-| Mirror missing at pull | `❌ 9_ฟิสิกส์จำลอง_grading hasn't been pushed: My Drive/grade_web/9_ฟิสิกส์จำลอง_grading/ doesn't exist. Push it with: grader web-push` | 1 |
+| Mirror missing at pull | `❌ 9_ฟิสิกส์จำลอง_grading hasn't been pushed: My Drive/grade_courses/2569-1/9_ฟิสิกส์จำลอง_grading/ doesn't exist. Push it with: grader web-push` | 1 |
 | Other course on Drive (S11.14, edge 20) | `❌ The Drive copy is another course: Drive has MOCK 2027_S1, this folder is PHYS1120 2027_S2. Nothing was pulled. Check the folder names.` | 1 |
 | Nothing to pull (S11.10) | `✅ Nothing to pull: no web edits since the last pull.` | 0 |
 | Only already-applied lines, preview | `Nothing to change on the Mac: all {n} edits are already applied. Run grader web-pull --yes to mark them pulled.` | 0 |

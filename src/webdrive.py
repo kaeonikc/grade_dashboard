@@ -1,8 +1,10 @@
 """
 The Drive side of grade_web (web/SPEC.md "Data model and file formats", "Mac commands").
 
-A pushed course lives in <My Drive>/grade_web/<Mac course folder name>/. The Mac sees it through Google Drive for
-Desktop, so every rule here is about never losing a line of the edit journal (docs/adr/002):
+A pushed course lives in <My Drive>/grade_courses/<semester>/<Mac course folder name>/, the semester being the Mac
+course's parent folder (SPEC_semester_groups.md). The phone lists what grade_web/ holds: shortcuts the teacher adds in
+Drive, usually one per semester. Courses pushed before that sit in grade_web/<course>/ itself, and are still pulled
+from there. The Mac sees all of it through Google Drive for Desktop, so every rule here is about never losing a line of the edit journal (docs/adr/002):
 
     web_edits.jsonl      written by the web app only; the Mac reads it and at most creates it empty
     archive/*.jsonl      written by the Mac only, always as a new file; a journal line whose `batch#seq` is in
@@ -22,6 +24,8 @@ from pathlib import Path
 from src.csvio import atomic_write_bytes
 
 ENV = "GRADE_WEB_DRIVE_ROOT"
+COURSES_ENV = "GRADE_WEB_COURSES"  # the folder in My Drive that holds the semester folders
+COURSES = "grade_courses"
 FOLDER = "grade_web"
 JOURNAL = "web_edits.jsonl"
 ARCHIVE = "archive"
@@ -55,8 +59,48 @@ def drive_root(arg=None) -> Path:
     return root
 
 
-def mirror_of(root, course) -> Path:
-    return Path(root) / FOLDER / Path(course).name
+def courses_dir() -> str:
+    name = os.environ.get(COURSES_ENV) or COURSES
+    if "/" in name:
+        raise Refused(f"❌ ${COURSES_ENV} is a single folder name in My Drive (no /): {name}. Nothing was written.")
+    return name
+
+
+def place_of(root, course, semester=None) -> tuple[Path, Path]:
+    """(the Drive copy, the old flat copy): <root>/grade_courses/<semester>/<course> and <root>/grade_web/<course>.
+    The semester is the course's parent folder on the Mac unless given."""
+    course = Path(course)
+    if semester is not None and (not semester.strip() or "/" in semester):
+        raise Refused(f"❌ --semester is a single folder name (no /): {semester}. Nothing was written.")
+    return (Path(root) / courses_dir() / (semester or course.parent.name) / course.name,
+            Path(root) / FOLDER / course.name)
+
+
+def old_copy(new: Path, old: Path) -> Path | None:
+    """`old` when it is a copy of its own, not the new copy seen through a grade_web shortcut. Drive for Desktop may
+    show a shortcut as a link or as a folder of its own; a folder with the same push_id counts as the same copy."""
+    if not old.is_dir():
+        return None
+    if new.exists() and os.path.samefile(old, new):
+        return None
+    ids = [_push_id(p) for p in (old, new)]
+    return None if ids[0] and ids[0] == ids[1] else old
+
+
+def _push_id(mirror: Path):
+    try:
+        return json.loads((mirror / "push.json").read_text(encoding="utf-8")).get("push_id")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def label(mirror) -> str:
+    """A Drive copy as named in messages: from its grade_courses or grade_web folder on (`grade_courses/2569-1/X`)."""
+    parts = Path(mirror).parts
+    for i in range(len(parts) - 1, -1, -1):
+        if parts[i] in (FOLDER, courses_dir()):
+            return "/".join(parts[i:])
+    return Path(mirror).name
 
 
 def shown(root, path) -> str:
@@ -88,7 +132,7 @@ def journal(mirror) -> list[dict]:
     try:
         raw = path.read_bytes()
     except OSError as e:
-        raise Refused(f"❌ Couldn't read {FOLDER}/{Path(mirror).name}/{JOURNAL} ({e.strerror or e}). If Drive for "
+        raise Refused(f"❌ Couldn't read {label(mirror)}/{JOURNAL} ({e.strerror or e}). If Drive for "
                       "Desktop shows it as online-only, wait for it to download, then run again.")
     lines, bad = [], []
     for n, text in enumerate(raw.split(b"\n"), 1):

@@ -272,17 +272,32 @@ def _file_note(file: Path) -> str:
     return " (total column refreshed)" if any(is_total(h) for h in read_csv_text(file).header) else ""
 
 
-def pull(course: Path, root: Path, yes: bool = False) -> int:
+def copy_to_pull(root: Path, course: Path, semester: str | None = None) -> Path:
+    """The Drive copy web-pull reads (SPEC_semester_groups.md D8): the semester copy, or the old flat copy in
+    grade_web. When both exist, the one with edits not pulled; both with edits is refused."""
+    new, old = webdrive.place_of(root, course, semester)
+    found = [p for p in (new, webdrive.old_copy(new, old)) if p and (p / "push.json").is_file()]
+    if not found:
+        raise Refused(f"❌ {course.name} hasn't been pushed: {webdrive.shown(root, new)} doesn't exist. Push it "
+                      "with: grader web-push")
+    if len(found) == 1:
+        return found[0]
+    waiting = [p for p in found if webdrive.unpulled(p)]
+    if len(waiting) == 2:
+        raise Refused(f"❌ Two Drive copies of {course.name} have web edits not pulled: {webdrive.shown(root, new)} "
+                      f"and {webdrive.shown(root, old)}. Nothing was pulled. Keep the edits of one: delete the other "
+                      "copy in Drive (its edits are lost), then run again.")
+    return waiting[0] if waiting else new
+
+
+def pull(course: Path, root: Path, yes: bool = False, semester: str | None = None) -> int:
     """Prints as it goes and returns the exit code. Raises Refused (nothing written) when it can't pull."""
     course = Path(course).resolve()
-    mirror = webdrive.mirror_of(root, course)
+    mirror = copy_to_pull(root, course, semester)
     print(f"🔄 Web pull: {webdrive.shown(root, mirror)} → {course.name}")
-    if not (mirror / "push.json").is_file():
-        raise Refused(f"❌ {course.name} hasn't been pushed: {webdrive.shown(root, mirror)} doesn't exist. Push it "
-                      "with: grader web-push")
     copies = webdrive.conflict_copies(mirror)
     if copies:
-        raise Refused(f"❌ Drive has duplicate files in {webdrive.FOLDER}/{course.name}/: {', '.join(copies)}. Fix "
+        raise Refused(f"❌ Drive has duplicate files in {webdrive.label(mirror)}/: {', '.join(copies)}. Fix "
                       "them as the README's \"Duplicate files\" says, then run again.")
     pushed = json.loads((mirror / "push.json").read_text(encoding="utf-8"))
     config = raw_config(course)
