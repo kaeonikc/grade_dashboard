@@ -3,7 +3,16 @@
 
 const GRADE_WEB = 'grade_web';
 
+// Drive work of the current server call, for the ?timing=1 line and the log (withLock_ resets it): listings,
+// downloads, and content-cache hits and misses. Counts only, never names.
+let io = { list: 0, read: 0, hit: 0, miss: 0 };
+
+function resetIo_() {
+  io = { list: 0, read: 0, hit: 0, miss: 0 };
+}
+
 function untrashed_(it) {
+  io.list++;
   const items = [];
   while (it.hasNext()) {
     const item = it.next();
@@ -42,6 +51,7 @@ function filesIn_(folder) {
 
 // UTF-8 text; a BOM stays as U+FEFF.
 function readText_(file) {
+  io.read++;
   return file.getBlob().getDataAsString();
 }
 

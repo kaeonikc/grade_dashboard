@@ -10,6 +10,7 @@ const NOTE_PULLED = 'Already pulled to the Mac; use `grader undo` there';
 const UNDO_CHANGED = 'Another device saved since this page loaded. Reload to see the newest save, then try again.';
 const CONFIG_STALE = 'Changed on another device after this page loaded. Nothing was saved.';
 const ISO_FORMAT = "yyyy-MM-dd'T'HH:mm:ssXXX";
+const DOGET_SLOT = '/*DOGET_MS*/null';  // in Index.html, replaced by doGet's time in ms
 
 const NOT_AVAILABLE_HTML =
   '<h1>Not available</h1><p>This page opens only for the Google account that owns it.</p>';
@@ -28,12 +29,19 @@ const WHY = {
   readError: (file) => "Couldn't read " + file + ' from Drive. Try again in a minute.',
 };
 
-function doGet() {
+// `?timing=1` shows the timing line (SPEC_discard_and_speed.md D2); the page then carries doGet's own time.
+function doGet(e) {
+  const t0 = Date.now();
   // Defence in depth behind "Only myself" (S2.2).
   if (Session.getActiveUser().getEmail() !== Session.getEffectiveUser().getEmail()) {
     return page_(HtmlService.createHtmlOutput(NOT_AVAILABLE_HTML));
   }
-  return page_(HtmlService.createTemplateFromFile('Index').evaluate());
+  const template = HtmlService.createTemplateFromFile('Index');
+  template.timing = !!(e && e.parameter && e.parameter.timing === '1');
+  const out = template.evaluate();
+  const ms = Date.now() - t0;
+  console.log('doGet ms=' + ms);
+  return page_(out.setContent(out.getContent().replace(DOGET_SLOT, String(ms))));
 }
 
 function page_(output) {
@@ -69,7 +77,7 @@ function clientCore_() {
 
 // {ok, now, courses}: every folder under grade_web, each available or not (S2.1, S2.3).
 function listCourses() {
-  return withLock_(function () {
+  return withLock_('listCourses', function () {
     const root = gradeWebFolder_();
     if (!root) return fail_('NOT_FOUND', 'No pushed courses: run `grader web-push` on the Mac');
     const courses = subfolders_(root).map(function (folder) {
@@ -93,7 +101,7 @@ function listCourses() {
 
 // {ok, folder, course, push, roster, files, journal}: everything the browser needs to show and compute a course.
 function loadCourse(folderName) {
-  return withCourse_(folderName, function (c) {
+  return withCourse_('loadCourse', folderName, function (c) {
     const files = {};
     c.course.files.forEach(function (rel) { files[rel] = readListed_(c, rel); });
     return {
@@ -106,7 +114,7 @@ function loadCourse(folderName) {
 // Writes the unsaved edits [{student_id, column, value, original}] that still match Drive (SPEC "Saving").
 // `push` = the push the edits were made on (a restored draft may predate the current one, edge 38).
 function saveBatch(folderName, edits, push) {
-  return withCourse_(folderName, function (c) {
+  return withCourse_('saveBatch', folderName, function (c) {
     const plan = planFor_(c, edits, false);
     const meta = plan.changes.length ? batchMeta_(c) : null;
     if (meta) writeBatch_(c, plan, meta);
@@ -121,7 +129,7 @@ function saveBatch(folderName, edits, push) {
 // Reverts the batch the teacher confirmed, if it is still the one Undo offers (SPEC "Undo last save"). Cells
 // changed since come back as conflicts and keep their value (S9.2).
 function undoLastSave(folderName, batch) {
-  return withCourse_(folderName, function (c) {
+  return withCourse_('undoLastSave', folderName, function (c) {
     const journal = journalReply_(c);
     if (!journal.undo) return Object.assign(fail_('UNDO_UNAVAILABLE', journal.undo_note), { journal: journal });
     if (journal.undo.batch !== batch) return Object.assign(fail_('UNDO_CHANGED', UNDO_CHANGED), { journal: journal });
@@ -138,7 +146,7 @@ function undoLastSave(folderName, batch) {
 // Saves the weights or grade boundaries typed on the Grading tab (SPEC "Config save"): one `config` journal line,
 // then course.json. A weights sum other than 1 comes back as `warning` and is saved (S10.2).
 function saveConfig(folderName, part, value, original) {
-  return withCourse_(folderName, function (c) {
+  return withCourse_('saveConfig', folderName, function (c) {
     const plan = core_().Save.planConfig(c.course, part, value, original);
     if (plan.code === 'STALE_CONFIG') {
       return Object.assign(fail_('STALE_CONFIG', CONFIG_STALE), { current: plan.current });
@@ -156,24 +164,35 @@ function saveConfig(folderName, part, value, original) {
 
 // ---- locking and replies ----
 
-// Runs fn under the script lock; every reply carries the server time `now`.
-function withLock_(fn) {
+// Runs fn under the script lock; every reply carries the server time `now` and its `timing`.
+function withLock_(name, fn) {
+  const t0 = Date.now();
+  resetIo_();
   const lock = LockService.getScriptLock();
   try {
     lock.waitLock(LOCK_WAIT_MS);
   } catch (e) {
-    return withNow_(fail_('BUSY', 'Another save is running; try again'));
+    return withNow_(timed_(name, t0, Date.now(), fail_('BUSY', 'Another save is running; try again')));
   }
+  const t1 = Date.now();
   try {
-    return withNow_(fn());
+    return withNow_(timed_(name, t0, t1, fn()));
   } finally {
     lock.releaseLock();
   }
 }
 
+// The reply's `timing` for the ?timing=1 line, and one log line: milliseconds and Drive counts, never data.
+function timed_(name, t0, t1, reply) {
+  reply.timing = { ms: Date.now() - t0, lock_ms: t1 - t0, list: io.list, read: io.read, hit: io.hit, miss: io.miss };
+  console.log(name + ' ms=' + reply.timing.ms + ' lock=' + reply.timing.lock_ms + ' list=' + io.list +
+    ' read=' + io.read + ' hit=' + io.hit + ' miss=' + io.miss);
+  return reply;
+}
+
 // Runs fn(c) under the lock on an available course (roll-forward and trim done); else NOT_FOUND / UNAVAILABLE.
-function withCourse_(folderName, fn) {
-  return withLock_(function () {
+function withCourse_(name, folderName, fn) {
+  return withLock_(name, function () {
     const root = gradeWebFolder_();
     const folder = root && subfolder_(root, folderName);
     if (!folder) return fail_('NOT_FOUND', 'No pushed course named ' + folderName);

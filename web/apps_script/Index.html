@@ -8,6 +8,8 @@
   <body>
     <main id="app"></main>
     <script>
+const TIMING = <?= timing ? 'true' : 'false' ?>;  // ?timing=1: the timing line (SPEC_discard_and_speed.md D2)
+const DOGET_MS = /*DOGET_MS*/null;  // doGet's own time in ms, filled in by doGet
 <?!= clientCore_() ?>
     </script>
     <?!= include_('client_state') ?>

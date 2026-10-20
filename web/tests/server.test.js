@@ -535,3 +535,26 @@ test('ac10_4 saveConfig keeps the stored letter order', (t) => {
     Object.assign({}, B0, { A: 78 }));
   assert.deepStrictEqual([bad.ok, bad.code, bad.field], [false, 'INVALID', 'B+']);
 });
+
+// ---- ?timing=1 (SPEC_discard_and_speed.md D2) ----
+test('doGet takes ?timing=1 and fills in its own time', (t) => {
+  const { gas } = setup(t, { [H.F1]: {} });
+  const off = gas.doGet({ parameter: {} }).content;
+  assert.match(off, /const TIMING = false;/);
+  assert.match(off, /const DOGET_MS = \d+;/);
+  assert.match(gas.doGet({ parameter: { timing: '1' } }).content, /const TIMING = true;/);
+  assert.match(gas.logText(), /^doGet ms=\d+$/m);
+});
+
+test('every reply carries its timing, and the log line holds counts only', (t) => {
+  const { gas } = setup(t, { [H.F1]: {} });
+  for (const [name, args] of [['listCourses', []], ['loadCourse', [H.F1]], ['saveBatch', [H.F1, [S81[0]]]]]) {
+    const r = call(gas, name, ...args);
+    assert.deepStrictEqual(Object.keys(r.timing), ['ms', 'lock_ms', 'list', 'read', 'hit', 'miss'], name);
+    assert.ok(Object.values(r.timing).every((v) => Number.isInteger(v) && v >= 0), name);
+    assert.ok(r.timing.list > 0 && r.timing.read > 0, name + ' counted its Drive work');
+    assert.match(gas.logText(), new RegExp('^' + name + ' ms=\\d+ lock=\\d+ list=\\d+ read=\\d+ hit=\\d+ miss=\\d+$', 'm'));
+  }
+  gas.lockTimeout = true;
+  assert.strictEqual(call(gas, 'loadCourse', H.F1).timing.list, 0, 'BUSY replies are timed too');
+});

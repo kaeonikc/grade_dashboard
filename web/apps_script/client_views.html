@@ -40,6 +40,30 @@ function show(...nodes) {
   if (h) { h.setAttribute('tabindex', '-1'); h.focus(); }
 }
 
+// ---- ?timing=1 (SPEC_discard_and_speed.md D2): times and Drive counts only, never course data ----
+const TIMING_LABELS = { listCourses: 'list', loadCourse: 'load', saveBatch: 'save', undoLastSave: 'undo',
+  saveConfig: 'config' };
+const timingLine = TIMING ? el('p', { class: 'timing', 'aria-hidden': 'true' }) : null;
+
+function secs(ms) {
+  return (ms / 1000).toFixed(2) + ' s';
+}
+
+// `page 0.90 s (doGet 0.12 s) · list 2.80 s (server 1.60 s, lock 0.00 s, Drive 26 list / 12 read, cache 0/0) · …`
+function refreshTiming() {
+  if (!timingLine) return;
+  const parts = state.pageMs == null ? [] :
+    ['page ' + secs(state.pageMs) + (DOGET_MS == null ? '' : ' (doGet ' + secs(DOGET_MS) + ')')];
+  for (const [name, t] of Object.entries(state.timing)) {
+    const v = t.server;
+    parts.push((TIMING_LABELS[name] || name) + ' ' + secs(t.total) + (v ? ' (server ' + secs(v.ms) + ', lock ' +
+      secs(v.lock_ms) + ', Drive ' + v.list + ' list / ' + v.read + ' read, cache ' + v.hit + '/' + (v.hit + v.miss) +
+      ')' : ''));
+  }
+  timingLine.textContent = parts.join(' · ');
+}
+document.addEventListener('gw:timing', refreshTiming);
+
 function notice(title, body, ...buttons) {
   return el('section', { class: 'notice' }, el('p', { class: 'notice-title' }, title),
     body ? el('p', { class: 'muted' }, body) : null, el('div', { class: 'actions' }, ...buttons));
@@ -48,12 +72,16 @@ function notice(title, body, ...buttons) {
 // ---- 2. Course list (S2.1, S2.3) ----
 function listHeader() {
   return el('header', { class: 'page-head' }, el('h1', {}, 'grade_web'),
-    el('p', { class: 'muted' }, 'Courses on Drive'));
+    el('p', { class: 'muted' }, 'Courses on Drive'), timingLine);
 }
 
 function showCourses() {
   show(listHeader(), el('div', { class: 'card placeholder', 'aria-hidden': 'true' }),
     el('div', { class: 'card placeholder', 'aria-hidden': 'true' }), el('p', { class: 'muted' }, 'Loading courses…'));
+  if (state.pageMs == null) {
+    state.pageMs = performance.now();
+    refreshTiming();
+  }
   loadCourses().then((reply) => {
     if (reply.ok && reply.courses.length) return show(listHeader(), courseList(reply.courses));
     if (reply.ok || reply.code === 'NOT_FOUND') {
@@ -143,7 +171,7 @@ function courseView(draft) {
       data('h1', { class: 'course-name' }, o.course.course_name), cm.badge,
       el('button', { type: 'button', class: 'icon', 'aria-label': 'More', 'aria-haspopup': 'dialog', onclick: openMore },
         '⋯')),
-    cm.headLine, cm.strip);
+    cm.headLine, cm.strip, timingLine);
 
   cm.select = el('select', { id: 'col', class: 'col-select' });
   cm.select.addEventListener('change', () => choose(cm.select.value));

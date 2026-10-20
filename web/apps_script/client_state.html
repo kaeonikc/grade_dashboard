@@ -35,12 +35,20 @@ const state = {
   saving: false,     // a Save or Undo is on its way: edits are locked
   storageOff: false, // localStorage refused a write: the draft can't be kept (S8.8)
   forms: {},         // Grading tab: {weights|grade_boundaries: {key: text as typed}}, kept across tabs until saved
+  timing: {},        // ?timing=1: the last round trip per server function, {total ms, server: reply.timing}
+  pageMs: null,      // ?timing=1: ms from the page's start to the first screen
 };
 
-// google.script.run as a promise. A failed call (network, server exception, time limit) rejects.
+// google.script.run as a promise. A failed call (network, server exception, time limit) rejects. Each reply's round
+// trip is kept for the ?timing=1 line (SPEC_discard_and_speed.md D2).
 function server(name, ...args) {
+  const t0 = performance.now();
   return new Promise((resolve, reject) => {
-    google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[name](...args);
+    google.script.run.withSuccessHandler((reply) => {
+      state.timing[name] = { total: performance.now() - t0, server: reply && reply.timing };
+      document.dispatchEvent(new Event('gw:timing'));
+      resolve(reply);
+    }).withFailureHandler(reject)[name](...args);
   });
 }
 
