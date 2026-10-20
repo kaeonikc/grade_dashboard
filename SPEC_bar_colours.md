@@ -1,33 +1,31 @@
-# Grade bar colours from the palette (web app)
+# Grade bar colours (web app)
 
-Interview 2026-10-20. The grade distribution bars in grade_web take their fill colours from the user's palette
-image. Only the bars change: the letters, the Grade column, the detail card and the attendance chips keep the
+Interview 2026-10-20. The grade distribution bars in grade_web get softer fill colours in grade-tui's hues. The
+first round used the user's palette image; see B1. Only the bars change: the letters, the Grade column, the detail card and the attendance chips keep the
 readable text shades from SPEC_grade_order.md D6.
 
 ## Decisions
 
 | # | Decision |
 |---|---|
-| B1 | **Hue order stays blue → red**, the same order as today and as grade-tui. Fills are the palette swatches, sampled from the image, then toned down (follow-up the same day: "a bit darker, not too vivid"). Each swatch is converted to OKLCH, with lightness × 0.88 and chroma × 0.78, and the hue is kept. The image has no darker yellow, peach or sky, so a single rule is used for A, B+, B and F. Follow-up: "C and D+ more orange, and the nearby colours to match". C+ to D are set by hand on a warm ramp toward F's brick red. In OKLCH (L, C, H) they are C+ (0.80, 0.125, 92) mustard, C (0.735, 0.145, 70) amber orange, D+ (0.665, 0.155, 55) orange, and D (0.605, 0.15, 39) red orange. That makes each neighbour about 0.07–0.09 apart in OKLab. |
+| B1 | **Hues follow grade-tui** (follow-up the same day: "make it correspond to grade-tui"). The hues are from `rust_tui/src/style.rs` `MONOKAI_PRO`; `~/.config/grade_dashboard/theme.json` has no override. Lightness and chroma are softened in the spirit of the palette image (earlier rounds asked for "a bit darker, not too vivid", and for C and D+ to be more orange). Values are OKLCH (L, C, H), and neighbouring fills are at least 0.10 apart in OKLab. |
 
-Swatch → fill:
-
-| Grade | Swatch | Fill |
-|---|---|---|
-| A | `#327df6` blue | `#336ac5` |
-| B+ | `#5ed0fa` sky | `#5caece` |
-| B | `#5fce3d` green | `#5aab43` |
-| C+ | `#fae14c` yellow | `#dbbb56` (ramp) |
-| C | `#f2a983` peach | `#e2972c` (ramp) |
-| D+ | `#ee7e31` orange | `#da751d` (ramp) |
-| D | `#ec6b71` coral | `#ca5c36` (ramp) |
-| F | `#ea332b` red | `#bd382f` |
+| Grade | grade-tui | Fill | OKLCH |
+|---|---|---|---|
+| A | `#0087ff` blue | `#2772c6` | 0.55, 0.15, 254 |
+| B+ | `#00afaf` blue-green | `#2ca2a2` | 0.65, 0.10, 195 |
+| B | `#5fd700` green | `#5aac47` | 0.67, 0.16, 140 |
+| C+ | `#afd700` green-yellow | `#a4c34b` | 0.77, 0.15, 122 |
+| C | `#ffff00` yellow | `#e4d457` | 0.86, 0.145, 102 |
+| D+ | `#ffaf00` yellow-orange | `#e8a634` | 0.77, 0.145, 76 |
+| D | `#ff8700` orange | `#de7b21` | 0.68, 0.155, 56 |
+| F | `#d70000` red | `#bd3a2e` | 0.54, 0.17, 29 |
 
 | # | Decision |
 |---|---|
 | B2 | **Bars only.** The fills are new tokens `--bar-a … --bar-f`. The `--grade-*` text tokens, the `.g-*` letter colours and the attendance chips (`.att-*`) are unchanged, and still reach 4.5:1 as text. |
-| B3 | **Light mode: a 1px edge in the letter colour.** Each bar has an inset 1px edge in its `--grade-*` shade (so a yellow C+ bar gets a dark olive edge), which keeps the pale fills (the yellow C+ fill is about 1.7:1 on the grey track) visible. The edge is drawn with an inset `box-shadow`, so a bar with 0 students (width 0%) shows nothing. |
-| B4 | **Dark mode: no edge.** The same fills are used in both modes. On the dark track (`--bg2` `#1c1d21`) every fill reaches at least 3:1 (F, the lowest, is 3.0:1), so the edge is turned off (`--bar-edge: 0`). |
+| B3 | **Light mode: a 1px edge in the letter colour.** Each bar has an inset 1px edge in its `--grade-*` shade (so the yellow C bar gets a dark gold edge), which keeps the pale fills (the yellow C fill is about 1.4:1 on the grey track) visible. The edge is drawn with an inset `box-shadow`, so a bar with 0 students (width 0%) shows nothing. |
+| B4 | **Dark mode: no edge.** The same fills are used in both modes. On the dark track (`--bg2` `#1c1d21`) every fill reaches at least 3:1 (F, the lowest, is 3.05:1), so the edge is turned off (`--bar-edge: 0`). |
 | B5 | **Where:** every `.dist` bar coloured by a grade: the Grading tab's "Grade distribution" (including its `(preview)` state while boundaries are being edited) and Analytics › Overview's "Grade distribution". Unknown letters fall into F through `Grades.gradeClass`, as today, and get the F fill. |
 
 ## Files
