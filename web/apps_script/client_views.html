@@ -75,23 +75,61 @@ function listHeader() {
     el('p', { class: 'muted' }, 'Courses on Drive'), timingLine);
 }
 
+// The list this device saw last shows at once (D6) and Drive's list replaces it; then the course opened last is
+// prefetched (D8). A reply that comes after a course was tapped changes nothing on screen.
 function showCourses() {
-  show(listHeader(), el('div', { class: 'card placeholder', 'aria-hidden': 'true' }),
-    el('div', { class: 'card placeholder', 'aria-hidden': 'true' }), el('p', { class: 'muted' }, 'Loading courses…'));
+  const cached = courseListCache();
+  const status = el('p', { class: 'muted' });
+  let head = listHeader();
+  if (cached) {
+    // until Drive answers, the device clock stands in for the server's (state.now)
+    if (!state.now) {
+      state.now = cached.saved_at;
+      state.nowAt = Date.parse(cached.saved_at);
+      state.now = serverNow();
+      state.nowAt = Date.now();
+    }
+    status.textContent = 'Checking Drive…';
+    show(head, status, courseList(cached.courses));
+  } else {
+    show(head, el('div', { class: 'card placeholder', 'aria-hidden': 'true' }),
+      el('div', { class: 'card placeholder', 'aria-hidden': 'true' }), el('p', { class: 'muted' }, 'Loading courses…'));
+  }
   if (state.pageMs == null) {
     state.pageMs = performance.now();
     refreshTiming();
   }
+  const here = () => head.isConnected;
+  const replace = (...nodes) => {
+    const y = window.scrollY;
+    head = listHeader();
+    show(head, ...nodes);
+    if (cached) window.scrollTo(0, y);
+  };
   loadCourses().then((reply) => {
-    if (reply.ok && reply.courses.length) return show(listHeader(), courseList(reply.courses));
+    if (!here()) return;
+    if (reply.ok && reply.courses.length) {
+      replace(courseList(reply.courses));
+      const last = lastCourse();
+      if (reply.courses.some((c) => c.available && c.folder === last)) prefetch(last);
+      return;
+    }
     if (reply.ok || reply.code === 'NOT_FOUND') {
-      return show(listHeader(), notice('No pushed courses yet.', 'On the Mac, run grader web-push <course>, wait ' +
+      return replace(notice('No pushed courses yet.', 'On the Mac, run grader web-push <course>, wait ' +
         'for Drive to finish uploading, then reload this page.', button('Reload', showCourses)));
     }
-    show(listHeader(),
-      notice('Drive is busy with a save from another device.', null, button('Try again', showCourses)));
+    if (cached) {
+      return status.replaceChildren('Drive is busy with a save from another device. ',
+        button('Try again', showCourses, 'btn outline'));
+    }
+    replace(notice('Drive is busy with a save from another device.', null, button('Try again', showCourses)));
   }, () => {
-    show(listHeader(), notice("Couldn't load the course list.", 'Check your connection, then try again.',
+    if (!here()) return;
+    if (cached) {
+      return status.replaceChildren("Couldn't refresh (list from " + F.fmtTime(cached.saved_at, state.now) + '). ',
+        button('Try again', showCourses, 'btn outline'));
+    }
+    replace(notice("Couldn't load the course list.", 'Check your connection, then try again.',
       button('Try again', showCourses)));
   });
 }
@@ -122,26 +160,32 @@ function courseCard(c, showFolder) {
 }
 
 // ---- 3. Opening a course ----
+// A course this tab has in memory opens with no wait (D7); an older copy is then rechecked.
 function showCourse(folder, courseName) {
   const back = button('Back to courses', showCourses);
   const slow = el('p', { class: 'muted' });
-  show(el('section', { class: 'opening' }, data('h1', {}, courseName),
-    el('div', { class: 'spinner', 'aria-hidden': 'true' }),
-    el('p', {}, 'Opening ', data('span', {}, courseName), '…'),
-    el('p', { class: 'muted' }, 'Reading the course from Drive'), slow));
-  const timer = setTimeout(() => {
-    slow.textContent = 'Still working. Large courses take a little longer.';
-  }, SLOW_MS);
+  let timer = null;
+  if (!state.loaded.has(folder) || state.fetching.has(folder)) {
+    show(el('section', { class: 'opening' }, data('h1', {}, courseName),
+      el('div', { class: 'spinner', 'aria-hidden': 'true' }),
+      el('p', {}, 'Opening ', data('span', {}, courseName), '…'),
+      el('p', { class: 'muted' }, 'Reading the course from Drive'), slow));
+    timer = setTimeout(() => {
+      slow.textContent = 'Still working. Large courses take a little longer.';
+    }, SLOW_MS);
+  }
   const failed = (cause) => show(listHeader(),
     notice(el('span', {}, "Couldn't open ", data('span', {}, courseName), '.'), cause,
       button('Try again', () => showCourse(folder, courseName)), back));
-  openCourse(folder).then(({ reply, draft }) => {
+  openCourse(folder).then(({ reply, draft, stale }) => {
     clearTimeout(timer);
     if (reply.ok) {
       // The tab and category used last on this device (openCourse); the ☰ menu starts shown on wide screens only.
       state.menu = WIDE.matches && menuPref();
       show(...courseView(draft));
-      return renderView();
+      renderView();
+      if (stale) recheck();
+      return;
     }
     if (reply.code === 'BUSY') return failed('Drive is busy with a save from another device. Try again in a moment.');
     show(listHeader(), notice(el('span', {}, "Can't open ", data('span', {}, courseName), '.'), reply.message, back));
@@ -149,6 +193,36 @@ function showCourse(folder, courseName) {
     clearTimeout(timer);
     failed(navigator.onLine === false ? "You're offline. Connect, then try again." :
       "Google didn't answer. Try again in a moment.");
+  });
+}
+
+// A course opened from memory and older than FRESH_MS: locked, with `Checking Drive…`, until Drive's copy replaces
+// it (D7). The open detail, the scroll position and a draft banner still shown are kept.
+function recheck() {
+  const folder = state.open.folder;
+  cm.alert.replaceChildren();
+  refreshChrome();
+  const again = () => button('Try again', recheck, 'btn outline');
+  recheckCourse().then(({ reply, draft }) => {
+    if (!state.open || state.open.folder !== folder) return;
+    if (reply.ok) {
+      const y = window.scrollY;
+      const student = det && det.row.student_id;
+      show(...courseView(cm.banner && cm.banner.isConnected ? draft : null));
+      renderView();
+      if (student && state.byId.has(student)) openDetail(state.byId.get(student));
+      window.scrollTo(0, y);
+      return;
+    }
+    if (reply.code === 'BUSY') return alertBox("Couldn't check Drive: it's busy with a save from another device.", again());
+    const name = state.open.course.course_name;
+    closeCourse();
+    state.loaded.delete(folder);
+    show(listHeader(), notice(el('span', {}, "Can't open ", data('span', {}, name), '.'), reply.message,
+      button('Back to courses', showCourses)));
+  }, (err) => {
+    if (!state.open || state.open.folder !== folder) return;
+    alertBox(failureKind(err) === 'offline' ? "Couldn't check Drive: you're offline." : "Couldn't check Drive.", again());
   });
 }
 
@@ -579,7 +653,7 @@ function keypad(open) {
 // ขส moves on to the next student (S3.4); Clear stays.
 function barSet(value, thenNext) {
   const it = cm.current;
-  if (!it || state.saving) return;
+  if (!it || locked()) return;
   it.value.value = value;
   if (thenNext) move(1);
   else commit(it);
@@ -680,17 +754,18 @@ function refreshChrome() {
       el('span', { class: 'sr-only' }, n === 1 ? ' edit' : ' edits'));
   }
   cm.saveBtn.hidden = n === 0;
-  cm.saveBtn.disabled = state.saving;
+  cm.saveBtn.disabled = locked();
   cm.discardBtn.hidden = n === 0;
-  cm.discardBtn.disabled = state.saving;
+  cm.discardBtn.disabled = locked();
   cm.saveBtn.textContent = state.saving && cm.working ? cm.working : 'Save ' + n;
-  cm.headLine.textContent = state.saving && cm.working ? cm.working : 'Pushed ' + F.fmtTime(pushed, state.now) +
+  cm.headLine.textContent = state.saving && cm.working ? cm.working : state.checking ? 'Checking Drive…' :
+    'Pushed ' + F.fmtTime(pushed, state.now) +
     ' (' + F.fmtAgo(pushed, state.now) + ')' + (j.unpulled ? ' · ' + F.plural(j.unpulled, 'edit') + ' not pulled' : '');
   cm.strip.hidden = !state.storageOff;
   const col = currentColumn();
-  cm.fill.disabled = state.saving || !col;
+  cm.fill.disabled = locked() || !col;
   cm.fill.replaceChildren(...(WIDE.matches && col ? ['Fill… ', data('span', {}, col.header)] : ['Fill…']));
-  for (const it of cm.items.concat(det ? det.items : [])) if (it.value.tagName === 'INPUT') it.value.readOnly = state.saving;
+  for (const it of cm.items.concat(det ? det.items : [])) if (it.value.tagName === 'INPUT') it.value.readOnly = locked();
 }
 
 function announceCommit(it) {
@@ -837,7 +912,7 @@ function codeButtons(it) {
 // A code tap; tapping the code the cell already holds does nothing. On the Attendance tab a code (not Clear) moves
 // focus to the next student (S6.2). Clear stays on the student (its button is now disabled).
 function setCode(it, code) {
-  if (state.saving || Grades.sameCell(code, cellValue(it.row, it.col.name))) return;
+  if (locked() || Grades.sameCell(code, cellValue(it.row, it.col.name))) return;
   setCell(it.row, it.col.name, code);
   changed(it.row);
   announceCommit(it);
@@ -1232,7 +1307,7 @@ function tableKey(e) {
     }
     return;
   }
-  if (state.saving) return;
+  if (locked()) return;
   const code = e.key.toUpperCase();
   let act = null;
   if (e.key === 'Enter') act = () => (s.kind === 'score' ? startEdit(r, c, null) : openPicker(r, c));
@@ -1343,7 +1418,7 @@ function place(node, td) {
 
 // The attendance picker `P L A X Clear` under a session cell.
 function openPicker(r, c) {
-  if (state.saving) return;
+  if (locked()) return;
   closePicker();
   const rec = tb.recs[r];
   const col = tb.specs[c].col;
@@ -1406,7 +1481,7 @@ function autofocused(node) {
 // ---- 8. Fill Column sheet (S7): the cells go in as unsaved edits, nothing is written to Drive ----
 function openFill() {
   const col = currentColumn();
-  if (!col || state.saving) return;
+  if (!col || locked()) return;
   const att = col.category === 'attendance';
   let mode = 'empty';
   let value = att ? 'P' : null;  // null: no valid value typed yet
@@ -1508,7 +1583,7 @@ function longDate(iso) {
 
 // ---- 9. Save (S8) ----
 function openSaveSheet() {
-  if (!state.edits.size || state.saving) return;
+  if (!state.edits.size || locked()) return;
   const edits = Array.from(state.edits.values());
   const gone = edits.filter(isGone);
   const n = edits.length;
@@ -1546,7 +1621,7 @@ function cellLine(e) {
 
 // Saves every unsaved edit; `after` runs when none is left (Save and leave). A Retry resends the same edits.
 function doSave(retrying, after) {
-  if (state.saving || !state.edits.size) return;
+  if (locked() || !state.edits.size) return;
   const n = state.edits.size;
   cm.working = 'Saving ' + F.plural(n, 'cell') + '…';
   cm.alert.replaceChildren();
@@ -1645,7 +1720,7 @@ function backToCourses() {
 // picker (column mode), the student's name (detail) or the course name.
 function openDiscard(refocus) {
   const n = state.edits.size;
-  if (!n || state.saving) return;
+  if (!n || locked()) return;
   const d = dialog('Discard ' + F.plural(n, 'unsaved edit') + '?',
     el('p', {}, "They were never saved to Drive and can't be brought back."),
     el('div', { class: 'sheet-actions' }, autofocused(button('Keep edits', () => d.close(), 'btn outline')),
@@ -1662,7 +1737,7 @@ function openDiscard(refocus) {
 // ---- 11. Undo last save (S9) ----
 function openUndo() {
   const t = state.open.journal.undo;
-  if (!t || state.edits.size || state.saving) return;
+  if (!t || state.edits.size || locked()) return;
   const lines = t.edits.map((e) => {
     const row = state.byId.get(e.student_id);
     return el('li', {}, el('span', { class: 'id' }, e.student_id), ' ', row ? data('span', {}, row.name) : null,
@@ -1709,7 +1784,8 @@ function leave(then) {
   const forms = CONFIG_PARTS.filter(formChanged)
     .map((part) => (part === 'weights' ? 'Weights not saved.' : 'Boundaries not saved.')).join(' ');
   const go = () => { closeCourse(); then(); };
-  if (!n && !forms) return go();
+  // while checking nothing can be typed: the edits are all in the draft already
+  if ((!n && !forms) || state.checking) return go();
   if (state.saving) return;
   if (!n) {
     const f = dialog(forms, el('div', { class: 'sheet-actions' },
@@ -1818,7 +1894,7 @@ function refreshConfig(part) {
     f.msg.textContent = p ? configMessage(p, form) : '';
     f.input.classList.toggle('refused', !!p);
     f.input.setAttribute('aria-invalid', String(!!p));
-    f.input.readOnly = state.saving;
+    f.input.readOnly = locked();
   }
   const values = problems.size ? null : configValues(part);
   if (c.lowest) {
@@ -1836,8 +1912,8 @@ function refreshConfig(part) {
   }
   const changed = formChanged(part);
   c.preview.replaceChildren(...(values && changed ? previewLines(part, values) : []));
-  c.reset.disabled = state.saving || !changed;
-  c.save.disabled = state.saving || !changed || problems.size > 0;
+  c.reset.disabled = locked() || !changed;
+  c.save.disabled = locked() || !changed || problems.size > 0;
   c.save.textContent = state.saving && c.working ? c.working : part === 'weights' ? 'Save weights' : 'Save boundaries';
   refreshDistribution();
 }
@@ -1921,10 +1997,10 @@ function openMore() {
       el('span', { class: 'muted' }, 'last saved ' + F.fmtTime(j.last_saved, state.now)))
     : 'Drive: no edits waiting to be pulled';
   const d = dialog(title,
-    item('Undo last save', undoSub, () => { d.close(); openUndo(); }, !!n || !j.undo || state.saving),
+    item('Undo last save', undoSub, () => { d.close(); openUndo(); }, !!n || !j.undo || locked()),
     item(n ? 'Discard all unsaved edits (' + n + ')' : 'Discard all unsaved edits', n ? null : 'No unsaved edits',
-      () => { d.close(); openDiscard(); }, !n || state.saving),
-    item('Reload from Drive', null, () => { d.close(); reload(); }, state.saving),
+      () => { d.close(); openDiscard(); }, !n || locked()),
+    item('Reload from Drive', null, () => { d.close(); reload(); }, locked()),
     item('Switch course', null, () => { d.close(); leave(showCourses); }, state.saving),
     el('div', { class: 'sheet-actions' }, autofocused(button('Close', () => d.close(), 'btn outline'))));
 }

@@ -366,12 +366,12 @@ and file layout are the architect's choice):
 
 | Field | Class (PII / grade / public) | Leaves the machine? |
 |---|---|---|
-| Student ID | PII | Yes: Drive (CMRU Workspace), browser memory, journal, archives, localStorage drafts |
-| Student name | PII | Yes: Drive and browser display. Not in localStorage drafts, not in the journal |
+| Student ID | PII | Yes: Drive (CMRU Workspace), the script's CacheService (Google side, ≤ 6 h), browser memory, journal, archives, localStorage drafts |
+| Student name | PII | Yes: Drive, the script's CacheService and browser display/memory. Not in localStorage (drafts or the course list), not in the journal |
 | Class Group | public (section code) | Yes: Drive |
-| Score cells, `ขส`, attendance codes | grade | Yes: Drive, browser, journal, drafts |
+| Score cells, `ขส`, attendance codes | grade | Yes: Drive, the script's CacheService, browser, journal, drafts |
 | Computed category %, Coursework Total, Final Score, letter grade | grade | Computed in the browser; stored only as the `total` columns already in the files |
-| Weights, grade boundaries, course id/name/term, schedule | public | Yes: Drive |
+| Weights, grade boundaries, course id/name/term, schedule | public | Yes: Drive; course id/name/term also in the device's course list (`gw:courses`) |
 | Teacher name in config | public (the user) | Yes: Drive |
 | Journal lines and archives | PII + grade | Yes: Drive (and on the Mac after pull) |
 | Apps Script execution logs | must hold no student names, IDs or scores | — |

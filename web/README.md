@@ -75,6 +75,12 @@ The first run asks for permission: the first time you open the URL, or the first
 editor. Choose the CMRU account and allow "See, edit, create and delete all of your Google Drive files" and "See your
 primary Google Account email address". Those are the only two scopes, and the web app needs nothing else.
 
+The manifest also turns on the Advanced Drive service (v3), which lists folders faster. It uses the same Drive scope.
+If the Workspace admin blocks advanced services, the page shows a Google error on opening: stop and note the message.
+
+**Timing:** add `?timing=1` to the web app URL to show a grey line under the header with each step's time (page,
+list, load, save) and its Drive work (queries, downloads, cache hits). It shows times and counts only.
+
 ## Deploy by paste-in (when clasp or the Apps Script API is blocked)
 
 This gives the same web app as clasp. Use it only if `clasp push` is refused by the Workspace admin.

@@ -35,16 +35,16 @@ Paths are relative to the grade_dashboard repo root.
 | `tests/test_web_push.py`, `tests/test_web_pull.py`, `tests/test_web_golden.py` (new) | pytest for S1, S11 and golden drift |
 | `tests/test_web_fixtures.py`, `tests/test_web_hygiene.py` (new) | Fixture integrity (IDs `99…`, UTF-8, totals current, no `history/`/`.xlsx`). Repo hygiene (S13.3: no secrets, Drive IDs or account names; existing tests and `rust_tui/` unchanged since `7a233a4`) |
 | **Web app (`web/apps_script/`, pushed by clasp as-is)** | |
-| `appsscript.json` | Manifest: V8, `Asia/Bangkok`, webapp `executeAs: USER_DEPLOYING`, `access: MYSELF`, explicit scopes `drive` + `userinfo.email` |
-| `Code.js` | `doGet` (owner check, template), the five server functions, `withLock_`, roll-forward, trim, `core_()` lazy module instances, `clientCore_()` source injection |
-| `drive.js` | DriveApp I/O only: find `grade_web`, course folder, file by path, read text (BOM kept as `﻿`), write text, create file, list names, the pending marker in ScriptProperties |
+| `appsscript.json` | Manifest: V8, `Asia/Bangkok`, webapp `executeAs: USER_DEPLOYING`, `access: MYSELF`, explicit scopes `drive` + `userinfo.email`; the Advanced Drive service v3 enabled (same `drive` scope, SPEC_discard_and_speed.md D3) |
+| `Code.js` | `doGet` (owner check, template, `?timing=1`), the five server functions, `withLock_` (with each reply's `timing`), `openCourses_` (many courses per Drive listing), roll-forward, trim, `core_()` lazy module instances, `clientCore_()` source injection |
+| `drive.js` | Drive I/O only: listings through the Advanced Drive service (`childrenOf_`: many folders a query, trashed left out), read and write text through DriveApp (BOM kept as `﻿`), the md5-keyed content cache in CacheService (display calls only), Drive counters for `timing`, the pending marker in ScriptProperties |
 | `csv.js` (pure) | Parse CSV text like Python's `csv.reader` while recording each field's byte span. BOM and EOL detection. **Cell splice** writer. Python-compatible minimal quoting |
 | `grades.js` (pure) | `classify`, `sameCell`, `validateTyped`, `canonicalValue`, attendance code values, `mergeCourse` (roster + files → rows in Raw Details order), `fillDefaultMax`, `computeGrades` (output shape under Grade math), `letterGrade`, `round2` (numpy semantics), `sessionDate`, `fillTargets` |
 | `journal.js` (pure) | Batch ids, line keys, `parseJournal` (bad line numbers), `archivedKeys`, `unpulled`, `trim`, `summary` (count, last save), `undoTarget`, `cellLines`/`configLine`, `conflictCopies`. Also the **message formatters** for journal and save results (see "User-facing messages" below). It is injected into the browser too |
 | `save.js` (pure) | `planSave` (locate cells, conflict check, splice), `planUndo` (inverse edits of a batch), `planConfig` (validate, strict boundary order, stale check, new course.json) |
 | `Index.html` | Page shell: viewport meta, includes `style`, the injected pure modules, `client_state`, `client_views` |
 | `style.html` | CSS (phone first, table layout at wide widths) |
-| `client_state.html` | Browser state: course data, unsaved edits map, live grades via `grades.js`, localStorage draft and UI memory (`gw:draft:`/`gw:ui:` keys), `google.script.run` wrappers (promise, Retry), leave-page warning |
+| `client_state.html` | Browser state: course data, unsaved edits map, live grades via `grades.js`, localStorage draft, UI memory, course list and last course (`gw:draft:`/`gw:ui:`/`gw:courses`/`gw:last` keys), courses kept in memory and the prefetch, `google.script.run` wrappers (promise, Retry, round-trip timing), leave-page warning |
 | `client_views.html` | Screens and events: course list, column mode, attendance, student detail, wide table, Fill, Save/Discard/Undo dialogs, weights/boundaries editor (layout owned by app-ux, see Interface) |
 | **Tests and tools (`web/`)** | |
 | `tests/*.test.js` | `node --test 'web/tests/*.test.js'` (quoted glob: a bare directory argument fails on Node 24): `grades`, `csv`, `validate`, `journal`, `save`, `fill`, `config`, and `server.test.js`. No npm packages |
@@ -211,6 +211,14 @@ Discard. Always offered on reopen, whatever its age (S8.4).
 column names and the tab only. It is written when the column or tab changes and read on open (the "column used last on
 this device"). An unknown column or tab is ignored. If a write fails, the storage-refused strip shows (S8.8). Nothing
 else is lost.
+
+**Course list** (SPEC_discard_and_speed.md D6): key `gw:courses`. Value `{"v":1,"saved_at":"<reply now>","courses":
+[…]}` with the `listCourses` fields of each course (folder, course id/name/term, push time, journal counts, or the
+unavailable reason). No student data. Written after every successful `listCourses`, drawn at once on the next visit.
+
+**Last course** (D8): key `gw:last`, a course folder name, written when a course opens. The list prefetches it.
+
+Opened courses are kept in the tab's memory only (at most 3, never in storage); see SPEC_discard_and_speed.md D7.
 
 ## CSV handling (both halves)
 - **Read** (`csv.js`, `csvio.read_csv_text`): BOM detected and remembered. EOL = `\r\n` if the text contains it,
@@ -556,6 +564,8 @@ web app shows the course as unavailable):
 | loadCourse payload, 300 x 80 course | ≤ 500 KB |
 | open course on phone 4G, 300 x 80 | ≤ 8 s (S2.5) |
 | save 60 cells on phone 4G | ≤ 5 s (S8.9) |
+| Drive queries: `listCourses` (4 courses), `loadCourse`, `saveBatch` | ≤ 4 each, whatever the course count (`speed.test.js`) |
+| downloads, warm cache: `listCourses`, `loadCourse` | 0 (`speed.test.js`) |
 
 - `deps 0`: no new runtime dependency on either side. The Python code inherits grade_dashboard's existing
   `requirements.txt` unchanged. Apps Script uses only built-in services. Node tests, the server harness and

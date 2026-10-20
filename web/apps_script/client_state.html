@@ -6,6 +6,10 @@
 const DRAFT_PREFIX = 'gw:draft:';
 const UI_PREFIX = 'gw:ui:';
 const MENU_KEY = 'gw:nav:menu';  // the ☰ menu on wide screens, per device ('0' closed); never a course folder name
+const COURSES_KEY = 'gw:courses';  // the last course list, drawn before Drive answers (SPEC_discard_and_speed.md D6)
+const LAST_KEY = 'gw:last';        // the course folder opened last on this device, prefetched with the list (D8)
+const FRESH_MS = 60000;            // a course in memory this young opens without a recheck (D7)
+const KEEP_COURSES = 3;            // courses kept in this tab's memory
 
 const state = {
   now: null,         // server time of the last reply: every {ago} counts from it, never from the device clock
@@ -33,6 +37,10 @@ const state = {
   session: null,     // the picked attendance session on the Attendance tab (today's when the course opens)
   search: '',        // the search box text
   saving: false,     // a Save or Undo is on its way: edits are locked
+  checking: false,   // the course shows from memory while Drive is rechecked: edits are locked too (D7)
+  loaded: new Map(), // folder -> snapshotOf(reply) + at (ms, when Drive sent it): courses kept in this tab (D7)
+  fetching: new Map(),  // folder -> the loadCourse call on its way (a prefetch, a recheck or a tap)
+  loadedAt: 0,       // `at` of the open course
   storageOff: false, // localStorage refused a write: the draft can't be kept (S8.8)
   forms: {},         // Grading tab: {weights|grade_boundaries: {key: text as typed}}, kept across tabs until saved
   timing: {},        // ?timing=1: the last round trip per server function, {total ms, server: reply.timing}
@@ -79,32 +87,135 @@ function loadCourses() {
   return server('listCourses').then((reply) => {
     setNow(reply);
     state.courses = reply.ok ? reply.courses : null;
+    if (reply.ok) rememberCourseList(reply);
     return reply;
   });
 }
 
-// Opens a course with this device's draft applied: {reply, draft} where draft is restoreDraft's result.
+// ---- The course list this device saw last (gw:courses): course names and counts, no student data (D6) ----
+function courseListCache() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(COURSES_KEY) || 'null');
+    return saved && saved.v === 1 && Array.isArray(saved.courses) ? saved : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function rememberCourseList(reply) {
+  const courses = reply.courses.map((c) => (c.available
+    ? { folder: c.folder, available: true, course_id: c.course_id, course_name: c.course_name, term: c.term,
+      pushed_at: c.pushed_at, unpulled: c.unpulled, last_saved: c.last_saved, older_push: c.older_push }
+    : { folder: c.folder, available: false, reason: c.reason }));
+  try {
+    localStorage.setItem(COURSES_KEY, JSON.stringify({ v: 1, saved_at: reply.now, courses }));
+  } catch (e) {
+    // no cache: the list waits for Drive next time, as before
+  }
+}
+
+// The folder opened last on this device (gw:last), prefetched while the list shows (D8).
+function lastCourse() {
+  try {
+    return localStorage.getItem(LAST_KEY);
+  } catch (e) {
+    return null;
+  }
+}
+
+// ---- Courses kept in this tab's memory only (D7, D8): never in storage ----
+
+// Everything a course shows from, built from a loadCourse reply.
+function snapshotOf(reply) {
+  const rows = Grades.mergeCourse(reply.course, reply.roster, reply.files);
+  return { open: reply, rows, byId: new Map(rows.map((r) => [r.student_id, r])),
+    max: Grades.fillDefaultMax(reply.course), groups: classGroups(reply.roster) };
+}
+
+// Keeps a course (at = when Drive last sent it), the newest last, at most KEEP_COURSES.
+function keepCourse(folder, snap) {
+  state.loaded.delete(folder);
+  state.loaded.set(folder, snap);
+  while (state.loaded.size > KEEP_COURSES) state.loaded.delete(state.loaded.keys().next().value);
+}
+
+// loadCourse, once per folder at a time: a tap while the prefetch is on its way waits for that same call.
+function fetchCourse(folder) {
+  if (!state.fetching.has(folder)) {
+    const call = server('loadCourse', folder).then((reply) => {
+      state.fetching.delete(folder);
+      setNow(reply);
+      if (reply.ok) keepCourse(folder, Object.assign(snapshotOf(reply), { at: Date.now() }));
+      else state.loaded.delete(folder);
+      return reply;
+    }, (err) => {
+      state.fetching.delete(folder);
+      throw err;
+    });
+    state.fetching.set(folder, call);
+  }
+  return state.fetching.get(folder);
+}
+
+// Loads a course into memory quietly; a failure is dropped (the tap then loads it as usual).
+function prefetch(folder) {
+  const mem = state.loaded.get(folder);
+  if (state.fetching.has(folder) || (mem && Date.now() - mem.at <= FRESH_MS)) return;
+  fetchCourse(folder).catch(() => {});
+}
+
+// Opens a course with this device's draft applied: {reply, draft, stale} where draft is restoreDraft's result.
+// A course in memory opens at once: younger than FRESH_MS as it is, older `stale` (locked until recheckCourse
+// brings Drive's copy). A call on its way (the prefetch) is waited for.
 function openCourse(folder) {
-  return server('loadCourse', folder).then((reply) => {
-    setNow(reply);
-    if (!reply.ok) return { reply };
-    useCourse(reply);
+  const mem = state.loaded.get(folder);
+  if (!state.fetching.has(folder) && mem) return Promise.resolve(enterCourse(mem, Date.now() - mem.at > FRESH_MS));
+  return fetchCourse(folder).then((reply) => (reply.ok ? enterCourse(state.loaded.get(folder), false) : { reply }));
+}
+
+function enterCourse(snap, stale) {
+  useSnapshot(snap);
+  const course = state.open.course;
+  state.edits = new Map();
+  state.notFound = new Set();
+  state.forms = {};
+  state.editsPush = state.open.push.push_id;
+  state.search = '';
+  state.storageOff = !storageWorks();
+  const ui = uiMemory(state.open.folder);
+  const known = course.columns.some((c) => c.name === ui.column);
+  state.column = known ? ui.column : null;
+  const nav = Grades.navFromMemory(ui, course);
+  state.tab = nav.tab;
+  state.category = nav.category;
+  state.attSession = false;
+  state.attRisk = false;
+  state.attSort = false;
+  state.session = todaySession();
+  state.checking = stale;
+  try {
+    localStorage.setItem(LAST_KEY, state.open.folder);
+  } catch (e) {
+    // no prefetch next time
+  }
+  const draft = restoreDraft();
+  recompute();
+  return { reply: state.open, draft, stale };
+}
+
+// Drive's copy of a course opened `stale`: it replaces what shows (the tab, category, column and search stay), the
+// draft is put back on top of it, and the lock lifts. Resolves {reply, draft}: the draft is restoreDraft's result,
+// absent when the reply is not ok or the course was left meanwhile. A failed call rejects and the course stays locked.
+function recheckCourse() {
+  const folder = state.open.folder;
+  return fetchCourse(folder).then((reply) => {
+    if (!reply.ok || !state.open || state.open.folder !== folder) return { reply };
+    useSnapshot(state.loaded.get(folder));
+    if (!state.open.course.columns.some((c) => c.name === state.column)) state.column = null;
     state.edits = new Map();
     state.notFound = new Set();
-    state.forms = {};
     state.editsPush = reply.push.push_id;
-    state.search = '';
-    state.storageOff = !storageWorks();
-    const ui = uiMemory(folder);
-    const known = reply.course.columns.some((c) => c.name === ui.column);
-    state.column = known ? ui.column : null;
-    const nav = Grades.navFromMemory(ui, reply.course);
-    state.tab = nav.tab;
-    state.category = nav.category;
-    state.attSession = false;
-    state.attRisk = false;
-    state.attSort = false;
-    state.session = todaySession();
+    state.checking = false;
     const draft = restoreDraft();
     recompute();
     return { reply, draft };
@@ -113,22 +224,22 @@ function openCourse(folder) {
 
 // Reload from Drive: the unsaved edits stay on top, still checked against their start values on Save.
 function reloadCourse() {
-  return server('loadCourse', state.open.folder).then((reply) => {
-    setNow(reply);
+  return fetchCourse(state.open.folder).then((reply) => {
     if (reply.ok) {
-      useCourse(reply);
+      useSnapshot(state.loaded.get(state.open.folder));
       recompute();
     }
     return reply;
   });
 }
 
-function useCourse(reply) {
-  state.open = reply;
-  state.rows = Grades.mergeCourse(reply.course, reply.roster, reply.files);
-  state.byId = new Map(state.rows.map((r) => [r.student_id, r]));
-  state.max = Grades.fillDefaultMax(reply.course);
-  state.groups = classGroups(reply.roster);
+function useSnapshot(snap) {
+  state.open = snap.open;
+  state.rows = snap.rows;
+  state.byId = snap.byId;
+  state.max = snap.max;
+  state.groups = snap.groups;
+  state.loadedAt = snap.at;
 }
 
 // Class Group per student, when the roster has that column.
@@ -142,11 +253,22 @@ function classGroups(rosterText) {
   return groups;
 }
 
-// Back to the course list: the unsaved edits stay only in the draft.
+// Back to the course list: the unsaved edits stay only in the draft; the course stays in memory as it now shows
+// (saved values, journal, weights), still dated by its last load.
 function closeCourse() {
+  if (state.open) {
+    keepCourse(state.open.folder, { open: state.open, rows: state.rows, byId: state.byId, max: state.max,
+      groups: state.groups, at: state.loadedAt });
+  }
   state.open = null;
   state.edits = new Map();
   state.forms = {};
+  state.checking = false;
+}
+
+// Edits, Fill, Save, Discard, Undo, Reload and the Grading forms wait while a save runs or Drive is rechecked.
+function locked() {
+  return state.saving || state.checking;
 }
 
 function recompute() {
