@@ -17,6 +17,8 @@
     }
   }
   * { box-sizing: border-box; }
+  /* iOS Safari enlarges text in landscape unless told not to (SPEC_landscape.md L6) */
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   body {
     margin: 0; background: var(--bg); color: var(--text); font-size: 1.0625rem; line-height: 1.5;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Sukhumvit Set", Thonburi, "Noto Sans Thai",
@@ -405,7 +407,7 @@
   .views, .table-wrap { display: none; }
   @media (min-width: 960px) { .views { display: flex; gap: 0.5rem; padding: 0.5rem 0 0; } }
   .view-btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
-  .view-table main { max-width: none; height: 100vh; display: flex; flex-direction: column; padding-bottom: 0; }
+  .view-table main { max-width: none; height: 100vh; height: 100dvh; display: flex; flex-direction: column; padding-bottom: 0; }
   .view-table main > * { flex-shrink: 0; }
   .view-table .rows, .view-table .empty, .view-table .col-picker > :not(.search-row) { display: none; }
   .view-table .col-picker { border-bottom: 0; }
@@ -456,5 +458,16 @@
   .tb-picker {
     position: absolute; z-index: 4; display: flex; gap: 0.5rem; padding: 0.5rem; background: var(--bg);
     border: 1px solid var(--line); border-radius: 0.5rem; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  }
+
+  /* 15. Short screens (phone landscape, SPEC_landscape.md): the header scrolls away; the grid page scrolls so the
+     grid can take almost the whole screen instead of what's left between a pinned header and dock. */
+  @media (max-height: 500px) {
+    .course-head { position: static; }
+    .tab { min-height: 2.75rem; }
+    .det-card { position: static; }
+    .view-table main { height: auto; }
+    .view-table .table-wrap { flex: none; height: calc(100vh - 2.75rem); height: calc(100dvh - 2.75rem); }
+    .view-table .dock { position: static; }
   }
 </style>

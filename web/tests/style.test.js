@@ -38,3 +38,14 @@ for (const [mode, from] of [['light', 0], ['dark', css.indexOf('prefers-color-sc
     }
   });
 }
+
+// Phone landscape (SPEC_landscape.md): the short-screen rules that keep the attendance grid in view.
+test('short screens: header scrolls away, grid page scrolls, no text inflation', () => {
+  const i = css.indexOf('@media (max-height: 500px)');
+  assert.ok(i >= 0, 'has the short-screen block');
+  const block = css.slice(i, css.indexOf('\n  }\n', i));
+  assert.match(block, /\.course-head \{ position: static; \}/);
+  assert.match(block, /\.view-table main \{ height: auto; \}/);
+  assert.match(block, /\.view-table \.table-wrap \{[^}]*height: calc\(100dvh/);
+  assert.match(css, /html \{[^}]*-webkit-text-size-adjust: 100%/);
+});

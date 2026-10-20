@@ -640,6 +640,7 @@ Wording follows grade-tui (SPEC_batch_editing.md) and `grader` wherever the same
 > device (first visit: Summary). See `../SPEC_web_tabs.md`. Editing, Fill, Save, Undo and the detail are unchanged.
 > Raw Details › attendance is a grade-tui-style grid (chips, Total over held sessions, 80% flag); a session header
 > opens the one-session view described below. See `../SPEC_attendance_grid.md`.
+> Phone landscape (short screens, height ≤ 500 px) gets its own rules: see `../SPEC_landscape.md`.
 
 - **Breakpoint**: CSS width ≥ 960 px shows the view switch with **Table** as the default view. Below 960 px the Table
   view isn't offered. If the window is narrowed while in Table, the app switches to **Scores** with the column of the
