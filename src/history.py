@@ -13,6 +13,8 @@ and appends one JSON line to <course>/history/log.jsonl:
 exam_projects (`exam submit scores`) writes entries in the same format with tool "exam".
 """
 
+from __future__ import annotations
+
 import json
 import shutil
 from datetime import datetime
@@ -105,15 +107,19 @@ def list_entries(course_dir) -> list[dict]:
 AUTOMATIC = {("grade-tui", "totals")}
 
 
-def latest_undoable(course_dir) -> dict | None:
-    """The newest real change: not an undo, not an automatic totals sync, not undone yet."""
+def undoable(course_dir) -> list[dict]:
+    """Real changes, newest first: not an undo, not an automatic totals sync, not undone yet."""
     entries = list_entries(course_dir)
     undone = {e.get("undoes") for e in entries if e.get("action") == "undo"}
-    for e in reversed(entries):
-        if e.get("action") == "undo" or (e.get("tool"), e.get("action")) in AUTOMATIC or e["id"] in undone:
-            continue
-        return e
-    return None
+    return [e for e in reversed(entries)
+            if e.get("action") != "undo" and (e.get("tool"), e.get("action")) not in AUTOMATIC
+            and e["id"] not in undone]
+
+
+def latest_undoable(course_dir) -> dict | None:
+    """The newest real change (what `grader undo` with no ID restores)."""
+    entries = undoable(course_dir)
+    return entries[0] if entries else None
 
 
 def later_changes(course_dir, entry_id: str) -> list[dict]:

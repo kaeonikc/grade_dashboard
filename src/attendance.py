@@ -1,5 +1,5 @@
 """
-Keep data/<prefix>_attendance.xlsx and its .csv copy in step (SPEC.md).
+Keep data/<prefix>_attendance.xlsx and its .csv copy in step (SPEC_attendance_sync.md).
 
 You may edit either file: in Excel/Numbers (usually the xlsx), by hand (sometimes the csv), or in grade-tui (both).
 Each sync saves what it wrote as a baseline (history/attendance_sync.json) and compares each file with it:

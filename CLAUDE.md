@@ -13,7 +13,16 @@ python grader.py dashboard
 
 # Scaffold a new course directory and config.yaml
 python grader.py init --course "GR2" --term "2026_S2"
+
+# zsh Tab completion (writes ~/.oh-my-zsh/cache/completions/_grader; grader keeps it current afterwards)
+python grader.py completion install
 ```
+
+**Tab completion** (`src/complete.py`, SPEC.md Part A) is generated from `build_parser()` in grader.py, so a new
+`add_argument` shows up on its own. Give a new value-taking argument a kind in `VALUES` (course, undo-id, file filter,
+text) or it completes files; mode groups that exclude each other go in `EXCLUSIVE`. complete.py is standard library
+only (Tab runs it with python3 and must not load pandas). It is tested by pressing Tab in a clean `zsh -f` on a pty
+(`tests/zshtab.py`, `tests/test_completion.py`). Tests point `GRADER_ZSH_COMPLETIONS` at a temp folder.
 
 The dashboard resolves course paths relative to CWD, so it must be launched from the project root where the `courses/` directory lives.
 
@@ -25,6 +34,7 @@ src/
   data_loader.py    # Config + CSV/XLSX ingestion, max score extraction, merging
   calculators.py    # Weighted grade calculation, rules, letter grade assignment
   dashboard.py      # Streamlit UI (actual dashboard target; grader.py delegates here)
+  complete.py       # zsh Tab completion: generates _grader from grader's parser; dynamic lists (stdlib only)
 courses/
   <term>_<name>/
     config.yaml     # Per-course weights, data_mapping, grade_boundaries, rules

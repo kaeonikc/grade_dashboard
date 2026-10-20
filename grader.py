@@ -1849,7 +1849,8 @@ def run_dashboard():
     from src.dashboard import run
     run()
 
-if __name__ == "__main__":
+def build_parser() -> argparse.ArgumentParser:
+    """All of grader's subcommands and options (also the source of the zsh completion, src/complete.py)."""
     parser = argparse.ArgumentParser(description="🎓 Grading System Dashboard & Manager")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -1945,7 +1946,24 @@ if __name__ == "__main__":
     parser_web_pull.add_argument("course", nargs="?", metavar="COURSE",
                                  help="Course folder (default: the folder you're in, if it has course_info/)")
 
+    parser_completion = subparsers.add_parser(
+        "completion", help="Print or install the zsh Tab completion for grader",
+        description="zsh prints the completion script (_grader); install writes it where zsh finds it\n"
+                    "(~/.oh-my-zsh/cache/completions/, or $GRADER_ZSH_COMPLETIONS). Once installed, grader keeps\n"
+                    "it up to date by itself whenever grader.py changes.",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser_completion.add_argument("what", nargs="?", choices=["zsh", "install"],
+                                   help="zsh: print the script; install: write it for zsh to load")
+    return parser
+
+
+if __name__ == "__main__":
+    from src import complete
+    parser = build_parser()
+    subs = complete._subcommands(parser)
     args = parser.parse_args()
+    if args.command != "completion":
+        complete.refresh_installed(parser)
 
     if args.command == "init":
         # Programmatic validation for init arguments
@@ -1971,9 +1989,16 @@ if __name__ == "__main__":
     elif args.command == "dashboard":
         run_dashboard()
     elif args.command == "web-push":
-        web_push(parser_web_push, args)
+        web_push(subs["web-push"], args)
     elif args.command == "web-pull":
-        web_pull(parser_web_pull, args)
+        web_pull(subs["web-pull"], args)
+    elif args.command == "completion":
+        if args.what == "zsh":
+            print(complete.zsh_script(parser), end="")
+        elif args.what == "install":
+            sys.exit(complete.install(parser))
+        else:
+            subs["completion"].print_help()
     else:
         # Default behavior: show help
         parser.print_help()

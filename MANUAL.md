@@ -44,6 +44,21 @@ pip install -r requirements.txt xlrd       # xlrd reads the university's .xls cl
 
 `grader` and `grade-tui` are linked into `~/.mytools/bin`, so they work from any folder.
 
+**Tab completion (zsh).** Run `grader completion install` once, then open a new terminal (or `exec zsh`). It writes
+`~/.oh-my-zsh/cache/completions/_grader`, which zsh already loads. Without oh-my-zsh it goes to `~/.zsh/completions/`,
+and grader prints the `fpath` line to add to `~/.zshrc`. Then Tab shows what each command takes:
+
+| You type | Tab lists |
+|---|---|
+| `grader ` | the commands, each with a one-line description |
+| `grader undo ` | the 20 newest changes you can undo (newest first, as `grader undo` would pick them), and the options |
+| `grader sync --course ` (also `history`, `undo`, `web-push`, `web-pull`) | the course folders here and in `./courses/` |
+| `grader init -i ` / `grader update -i ` | folders and `.xls`/`.xlsx`/`.csv` files |
+| `grader <command> -` | that command's options. Ones already typed, and the other mode's (`init -i` vs `--course_name`…), are left out |
+
+The full help is still `grader <command> -h`. You only install once: when `grader.py` changes, the next `grader`
+command rewrites `_grader` by itself, and new terminals see the new options.
+
 **Optional colour theme:** copy `theme.json.example` to `~/.config/grade_dashboard/theme.json` (or next to the
 `grade-tui` binary) and change the colours.
 
@@ -533,6 +548,7 @@ the same way: whichever side you edited wins. If you changed a header's points b
 | `grader history [--course DIR] [-n N]` | list saved versions |
 | `grader undo [ID] [--course DIR] [--yes]` | restore a saved version |
 | `grader mock` | create the practice course |
+| `grader completion install` | set up zsh Tab completion (`grader completion zsh` prints the script) |
 | `grade-tui` | open the dashboard |
 
 The file formats and the rules shared with exam_projects are in `INTEGRATION.md`.

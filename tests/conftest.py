@@ -116,3 +116,12 @@ def web_course_att(web_course) -> Path:
     """F1 plus the attendance xlsx built from the csv codes and a baseline from `grader sync --yes`."""
     build_attendance_xlsx(web_course)
     return web_course
+
+
+# ---- zsh completion (SPEC.md Part A) ---------------------------------------------------------------------------
+# Every grader run refreshes an installed zsh completion (src/complete.py): point it away from the real
+# ~/.oh-my-zsh for this test process and every grader subprocess it starts.
+import os
+import tempfile
+
+os.environ["GRADER_ZSH_COMPLETIONS"] = tempfile.mkdtemp(prefix="grader-zsh-")
