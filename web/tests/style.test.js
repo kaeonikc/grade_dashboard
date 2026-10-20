@@ -39,9 +39,9 @@ for (const [mode, from] of [['light', 0], ['dark', css.indexOf('prefers-color-sc
   });
 }
 
-// Bar fills from the palette (SPEC_bar_colours.md B1-B4): bars only, an edge in the letter colour in light mode.
-const BARS = { a: '#327df6', bp: '#5ed0fa', b: '#5fce3d', cp: '#fae14c', c: '#f2a983', dp: '#ee7e31', d: '#ec6b71',
-  f: '#ea332b' };
+// Bar fills: the palette, toned down (SPEC_bar_colours.md B1-B4): bars only, an edge in the letter colour in light mode.
+const BARS = { a: '#336ac5', bp: '#5caece', b: '#5aab43', cp: '#d0be54', c: '#c79074', dp: '#c26e38', d: '#c05f62',
+  f: '#bd382f' };
 const DARK = css.indexOf('prefers-color-scheme: dark');
 const edge = (from) => {
   const i = css.indexOf(':root {', from);

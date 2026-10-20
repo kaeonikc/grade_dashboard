@@ -8,17 +8,32 @@ readable text shades from SPEC_grade_order.md D6.
 
 | # | Decision |
 |---|---|
-| B1 | **Hue order stays blue → red**, the same order as today and as grade-tui. Fills are the palette swatches, sampled from the image: A `#327df6` blue, B+ `#5ed0fa` sky, B `#5fce3d` green, C+ `#fae14c` yellow, C `#f2a983` peach, D+ `#ee7e31` orange, D `#ec6b71` coral, F `#ea332b` red. |
+| B1 | **Hue order stays blue → red**, the same order as today and as grade-tui. Fills are the palette swatches, sampled from the image, then toned down (follow-up the same day: "a bit darker, not too vivid"). Each swatch is converted to OKLCH, with lightness × 0.88 and chroma × 0.78, and the hue is kept. The image has no darker yellow, peach or sky, so a single rule is used for all eight. |
+
+Swatch → fill:
+
+| Grade | Swatch | Fill |
+|---|---|---|
+| A | `#327df6` blue | `#336ac5` |
+| B+ | `#5ed0fa` sky | `#5caece` |
+| B | `#5fce3d` green | `#5aab43` |
+| C+ | `#fae14c` yellow | `#d0be54` |
+| C | `#f2a983` peach | `#c79074` |
+| D+ | `#ee7e31` orange | `#c26e38` |
+| D | `#ec6b71` coral | `#c05f62` |
+| F | `#ea332b` red | `#bd382f` |
+
+| # | Decision |
+|---|---|
 | B2 | **Bars only.** The fills are new tokens `--bar-a … --bar-f`. The `--grade-*` text tokens, the `.g-*` letter colours and the attendance chips (`.att-*`) are unchanged, and still reach 4.5:1 as text. |
-| B3 | **Light mode: a 1px edge in the letter colour.** Each bar has an inset 1px edge in its `--grade-*` shade (so a yellow C+ bar gets a dark olive edge), which keeps the pale fills (yellow, sky, peach: about 1.2:1 on the grey track) visible. The edge is drawn with an inset `box-shadow`, so a bar with 0 students (width 0%) shows nothing. |
-| B4 | **Dark mode: no edge.** The same fills are used in both modes. On the dark track (`--bg2` `#1c1d21`) every fill already reaches at least 4.3:1, so the edge is turned off (`--bar-edge: 0`). |
+| B3 | **Light mode: a 1px edge in the letter colour.** Each bar has an inset 1px edge in its `--grade-*` shade (so a yellow C+ bar gets a dark olive edge), which keeps the pale fills (the yellow C+ fill is about 1.7:1 on the grey track) visible. The edge is drawn with an inset `box-shadow`, so a bar with 0 students (width 0%) shows nothing. |
+| B4 | **Dark mode: no edge.** The same fills are used in both modes. On the dark track (`--bg2` `#1c1d21`) every fill reaches at least 3:1 (F, the lowest, is 3.0:1), so the edge is turned off (`--bar-edge: 0`). |
 | B5 | **Where:** every `.dist` bar coloured by a grade: the Grading tab's "Grade distribution" (including its `(preview)` state while boundaries are being edited) and Analytics › Overview's "Grade distribution". Unknown letters fall into F through `Grades.gradeClass`, as today, and get the F fill. |
 
 ## Files
 
 - `web/apps_script/style.html`
-  - `:root` (defined once and shared by both modes): `--bar-a: #327df6; --bar-bp: #5ed0fa; --bar-b: #5fce3d;
-    --bar-cp: #fae14c; --bar-c: #f2a983; --bar-dp: #ee7e31; --bar-d: #ec6b71; --bar-f: #ea332b; --bar-edge: 1px;`
+  - `:root` (defined once and shared by both modes): `--bar-a … --bar-f` from the B1 table, then `--bar-edge: 1px;`
   - Dark `:root` inside `@media (prefers-color-scheme: dark)`: `--bar-edge: 0;`
   - `.dist .bar span` takes `background: var(--bar-fill, currentColor); box-shadow: inset 0 0 0 var(--bar-edge)
     currentColor;`. `currentColor` is the span's `.g-*` letter colour, so the edge matches the letter.
