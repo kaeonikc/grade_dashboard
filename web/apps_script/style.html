@@ -207,8 +207,9 @@
   .alert:empty { display: none; }
   .alert { padding: 0.5rem 0; color: var(--text); }
   .alert .actions { align-items: center; margin-top: 0.25rem; }
-  .action-bar { display: flex; justify-content: flex-end; }
+  .action-bar { display: flex; justify-content: flex-end; gap: 0.5rem; }
   .save-btn { min-width: 8rem; min-height: 3rem; }
+  .btn.outline.discard-btn { min-height: 3rem; color: var(--danger); border-color: var(--danger); }
   .btn:disabled { opacity: 0.6; cursor: default; }
   .btn.danger { background: var(--danger); border-color: var(--danger); color: var(--bg); }
   /* Phone tab bar under the action bar (56 px); the detail covers it */

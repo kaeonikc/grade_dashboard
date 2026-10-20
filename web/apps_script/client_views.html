@@ -233,7 +233,10 @@ function courseView(draft) {
   cm.status = el('p', { class: 'status', role: 'status' });
   cm.alert = el('div', { class: 'alert', role: 'alert' });
   cm.saveBtn = button('', openSaveSheet, 'btn save-btn');
-  cm.dock = el('div', { class: 'dock' }, cm.alert, cm.status, el('div', { class: 'action-bar' }, cm.saveBtn), cm.tabs);
+  // Discard sits left of Save wherever Save shows (SPEC_discard_and_speed.md D1)
+  cm.discardBtn = button('Discard', () => openDiscard(true), 'btn outline discard-btn');
+  cm.dock = el('div', { class: 'dock' }, cm.alert, cm.status,
+    el('div', { class: 'action-bar' }, cm.discardBtn, cm.saveBtn), cm.tabs);
   cm.announce = el('p', { class: 'sr-only', 'aria-live': 'polite' });
   cm.banner = draftBanner(draft);
   return [head, cm.banner, cm.views, picker, cm.attBar, cm.list, cm.empty, cm.summary, cm.overview, cm.wrap, cm.grading,
@@ -368,7 +371,7 @@ function draftBanner(draft) {
       'save.') : null, draft.gone ? el('p', {}, (draft.gone === 1 ? '1 is for a student or column'
       : draft.gone + ' are for students or columns') + ' no longer in this course.') : null),
     el('div', { class: 'actions' }, button('Review', openSaveSheet, 'btn outline'),
-      button('Discard…', openDiscard, 'btn outline')), dismiss);
+      button('Discard…', () => openDiscard(), 'btn outline')), dismiss);
   return box;
 }
 
@@ -678,6 +681,8 @@ function refreshChrome() {
   }
   cm.saveBtn.hidden = n === 0;
   cm.saveBtn.disabled = state.saving;
+  cm.discardBtn.hidden = n === 0;
+  cm.discardBtn.disabled = state.saving;
   cm.saveBtn.textContent = state.saving && cm.working ? cm.working : 'Save ' + n;
   cm.headLine.textContent = state.saving && cm.working ? cm.working : 'Pushed ' + F.fmtTime(pushed, state.now) +
     ' (' + F.fmtAgo(pushed, state.now) + ')' + (j.unpulled ? ' · ' + F.plural(j.unpulled, 'edit') + ' not pulled' : '');
@@ -1636,7 +1641,9 @@ function backToCourses() {
 }
 
 // ---- 10. Discard (S8.10) ----
-function openDiscard() {
+// `refocus`: opened from the action bar's Discard, which hides with the edits, so focus moves on to the column
+// picker (column mode), the student's name (detail) or the course name.
+function openDiscard(refocus) {
   const n = state.edits.size;
   if (!n || state.saving) return;
   const d = dialog('Discard ' + F.plural(n, 'unsaved edit') + '?',
@@ -1648,6 +1655,7 @@ function openDiscard() {
         if (cm.banner) cm.banner.remove();
         renderView();
         say('Discarded ' + F.plural(n, 'edit'));
+        if (refocus) (det ? det.name : cm.select.offsetParent ? cm.select : app.querySelector('h1')).focus();
       }, 'btn danger')));
 }
 
