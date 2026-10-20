@@ -75,40 +75,41 @@ function clientCore_() {
 
 // ---- server functions (google.script.run) ----
 
-// {ok, now, courses}: every folder under grade_web, each available or not (S2.1, S2.3).
+// {ok, now, courses}: every folder under grade_web, each available or not (S2.1, S2.3). The courses share each
+// Drive listing and cache lookup, so the cost hardly grows with their number.
 function listCourses() {
   return withLock_('listCourses', function () {
     const root = gradeWebFolder_();
     if (!root) return fail_('NOT_FOUND', 'No pushed courses: run `grader web-push` on the Mac');
-    const courses = subfolders_(root).map(function (folder) {
-      const name = folder.getName();
-      try {
-        const c = openCourse_(folder);
-        return {
-          folder: name, available: true, course_id: c.course.course_id, course_name: c.course.course_name,
-          term: c.course.term, pushed_at: c.push.pushed_at, unpulled: c.summary.unpulled,
-          last_saved: c.summary.last_saved,
-          older_push: c.lines.some(function (l) { return l.push !== c.push.push_id; }),
-        };
-      } catch (e) {
-        if (!(e instanceof Unavailable_)) throw e;
-        return { folder: name, available: false, reason: e.reason };
-      }
+    const folders = subfolders_(root);
+    const opened = openCourses_(folders, true);
+    const courses = folders.map(function (folder, i) {
+      const c = opened[i].c;
+      if (!c) return { folder: folder.name, available: false, reason: opened[i].reason };
+      return {
+        folder: folder.name, available: true, course_id: c.course.course_id, course_name: c.course.course_name,
+        term: c.course.term, pushed_at: c.push.pushed_at, unpulled: c.summary.unpulled,
+        last_saved: c.summary.last_saved,
+        older_push: c.lines.some(function (l) { return l.push !== c.push.push_id; }),
+      };
     });
     return { ok: true, courses: courses };
   });
 }
 
 // {ok, folder, course, push, roster, files, journal}: everything the browser needs to show and compute a course.
+// Display only, so unchanged files may come from the cache (SPEC_discard_and_speed.md D5).
 function loadCourse(folderName) {
   return withCourse_('loadCourse', folderName, function (c) {
+    const rels = [c.course.roster].concat(c.course.files);
+    readAll_(rels.map(function (rel) { return listedFile_(c, rel); }), c.cache);
     const files = {};
     c.course.files.forEach(function (rel) { files[rel] = readListed_(c, rel); });
     return {
       ok: true, folder: folderName, course: c.course, push: c.push, roster: readListed_(c, c.course.roster),
       files: files, journal: journalReply_(c),
     };
-  });
+  }, true);
 }
 
 // Writes the unsaved edits [{student_id, column, value, original}] that still match Drive (SPEC "Saving").
@@ -191,19 +192,15 @@ function timed_(name, t0, t1, reply) {
 }
 
 // Runs fn(c) under the lock on an available course (roll-forward and trim done); else NOT_FOUND / UNAVAILABLE.
-function withCourse_(name, folderName, fn) {
+// `cache` only for display calls: a call that writes or conflict-checks reads every file fresh (D5).
+function withCourse_(name, folderName, fn, cache) {
   return withLock_(name, function () {
     const root = gradeWebFolder_();
-    const folder = root && subfolder_(root, folderName);
+    const folder = root && subfolders_(root).filter(function (f) { return f.name === folderName; })[0];
     if (!folder) return fail_('NOT_FOUND', 'No pushed course named ' + folderName);
-    let c;
-    try {
-      c = openCourse_(folder);
-    } catch (e) {
-      if (!(e instanceof Unavailable_)) throw e;
-      return fail_('UNAVAILABLE', e.reason);
-    }
-    return fn(c);
+    const opened = openCourses_([folder], !!cache)[0];
+    if (!opened.c) return fail_('UNAVAILABLE', opened.reason);
+    return fn(opened.c);
   });
 }
 
@@ -221,56 +218,124 @@ function nowIso_() {
   return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), ISO_FORMAT);
 }
 
-// ---- one course: trim, then the availability check ----
+// ---- courses: trim, then the availability check ----
 
 function Unavailable_(reason) {
   this.reason = reason;
 }
 
-// Trims the journal, checks the course can be used (SPEC "Course availability"), then rolls a pending save
-// forward. Throws Unavailable_. Returns {folder, course, push, dirs: {<rel dir>: [File]}, journalFile,
-// journalText, lines, summary}. The data files are only found here; readListed_ reads them.
-function openCourse_(folder) {
-  trim_(folder);
-  const top = filesIn_(folder);
-  const course = readJson_(top, 'course.json', WHY.noCourseJson);
-  const push = readJson_(top, 'push.json', WHY.noPushJson);
-  const listed = [course.roster].concat(course.files);
-  const dirs = { '': top };
-  listed.forEach(function (rel) {
-    const dir = dirOf_(rel);
-    if (!(dir in dirs)) {
-      const sub = folderAt_(folder, dir);
-      dirs[dir] = sub ? filesIn_(sub) : [];
-    }
+// Opens course folders (grade_web listing records) for one call, in steps that each serve every folder at once:
+// the folders' listing, course.json and push.json, the listed subfolders, then per course the trim and the
+// availability check (SPEC "Course availability", the same order and reasons as one course at a time), the journals,
+// and a pending save rolled forward. Returns per folder {c} or {reason}; c = {folder, course, push, dirs: {<rel dir>:
+// [record]}, archive: [record], journalFile, journalText, lines, summary, cache}. With `cache` (display calls), files
+// unchanged since they were cached are not downloaded; a course with a save pending reads fresh anyway.
+function openCourses_(folders, cache) {
+  const props = PropertiesService.getScriptProperties().getProperties();
+  const tops = childrenOf_(folders.map(function (f) { return f.id; }));
+  const its = folders.map(function (folder) {
+    const tree = { '': tops[folder.id] };
+    return { folder: folder, tree: tree, top: filesOf_(tree['']), reason: null,
+      cache: cache && !props[pendingKey_(folder)] };
+  });
+  readFor_(its, function (it) { return [fileIn_(it.top, 'course.json'), fileIn_(it.top, 'push.json')]; });
+  its.forEach(function (it) {
+    const course = jsonOrError_(it.top, 'course.json', WHY.noCourseJson);
+    it.listed = course.value ? [course.value.roster].concat(course.value.files) : [];
+    it.wanted = ['archive'].concat(it.listed.map(dirOf_)).filter(function (d) { return d; });
+  });
+  listDirs_(its);
+
+  its.forEach(function (it) {
+    attempt_(it, function () {
+      it.archive = filesOf_(it.tree.archive || []);
+      trim_(it, props);
+      const course = readJson_(it.top, 'course.json', WHY.noCourseJson);
+      const push = readJson_(it.top, 'push.json', WHY.noPushJson);
+      const listed = [course.roster].concat(course.files);
+      const dirs = { '': it.top };
+      listed.forEach(function (rel) {
+        const dir = dirOf_(rel);
+        if (!(dir in dirs)) dirs[dir] = filesOf_(it.tree[dir] || []);
+      });
+      const J = core_().Journal;
+      let copies = [];
+      Object.keys(dirs).forEach(function (dir) {
+        const expected = listed.filter(function (rel) { return dirOf_(rel) === dir; }).map(baseOf_)
+          .concat(dir === '' ? TOP_FILES : []);
+        const found = J.conflictCopies(dirs[dir].map(function (f) { return f.name; }), expected);
+        copies = copies.concat(found.map(function (n) { return dir ? dir + '/' + n : n; }));
+      });
+      if (copies.length) throw unavailableResetTrim_(it.folder, WHY.copies(copies));
+      listed.forEach(function (rel) {
+        if (!fileIn_(dirs[dirOf_(rel)], baseOf_(rel))) throw new Unavailable_(WHY.missingFile(rel));
+      });
+      const journalFile = fileIn_(it.top, JOURNAL);
+      if (!journalFile) throw new Unavailable_(WHY.noJournal);
+      it.c = { folder: it.folder, course: course, push: push, dirs: dirs, archive: it.archive, journalFile: journalFile,
+        cache: it.cache };
+    });
   });
 
-  const J = core_().Journal;
-  let copies = [];
-  Object.keys(dirs).forEach(function (dir) {
-    const expected = listed.filter(function (rel) { return dirOf_(rel) === dir; }).map(baseOf_)
-      .concat(dir === '' ? TOP_FILES : []);
-    const found = J.conflictCopies(dirs[dir].map(function (f) { return f.getName(); }), expected);
-    copies = copies.concat(found.map(function (n) { return dir ? dir + '/' + n : n; }));
+  readFor_(its, function (it) { return [it.c && it.c.journalFile]; });
+  return its.map(function (it) {
+    attempt_(it, function () {
+      const c = it.c;
+      c.journalText = textOf_(c.journalFile, JOURNAL);
+      const parsed = core_().Journal.parseJournal(c.journalText);
+      if (parsed.bad.length) throw unavailableResetTrim_(it.folder, WHY.badJournal(parsed.bad));
+      // Trimmed: every line left is unpulled (ADR 002).
+      c.lines = parsed.lines;
+      c.summary = core_().Journal.summary(parsed.lines);
+      if (props[pendingKey_(it.folder)]) rollForward_(c, JSON.parse(props[pendingKey_(it.folder)]));
+    });
+    return it.reason == null ? { c: it.c } : { reason: it.reason };
   });
-  if (copies.length) throw unavailableResetTrim_(folder, WHY.copies(copies));
+}
 
-  listed.forEach(function (rel) {
-    if (!fileIn_(dirs[dirOf_(rel)], baseOf_(rel))) throw new Unavailable_(WHY.missingFile(rel));
+// Runs one course's step; an Unavailable_ marks the course (`reason`) and its later steps are skipped.
+function attempt_(it, fn) {
+  if (it.reason != null) return;
+  try {
+    fn();
+  } catch (e) {
+    if (!(e instanceof Unavailable_)) throw e;
+    it.reason = e.reason;
+    it.c = null;
+  }
+}
+
+// Reads, for the courses still open, the files pick(it) names, in two batches: cache allowed, then fresh.
+function readFor_(its, pick) {
+  [true, false].forEach(function (cache) {
+    let records = [];
+    its.forEach(function (it) {
+      if (it.reason == null && it.cache === cache) records = records.concat(pick(it).filter(Boolean));
+    });
+    if (records.length) readAll_(records, cache);
   });
+}
 
-  const journalFile = fileIn_(top, JOURNAL);
-  if (!journalFile) throw new Unavailable_(WHY.noJournal);
-  const journalText = readOrUnavailable_(journalFile, JOURNAL);
-  const parsed = J.parseJournal(journalText);
-  if (parsed.bad.length) throw unavailableResetTrim_(folder, WHY.badJournal(parsed.bad));
-  // Trimmed: every line left is unpulled (ADR 002).
-  const c = {
-    folder: folder, course: course, push: push, dirs: dirs, journalFile: journalFile, journalText: journalText,
-    lines: parsed.lines, summary: J.summary(parsed.lines),
-  };
-  rollForward_(c);
-  return c;
+// it.tree[<dir>] = the listing of each folder in it.wanted (`data`, `a/b`, `archive`), reached one level per query
+// for all courses together. A folder that isn't there is left out.
+function listDirs_(its) {
+  for (let depth = 1; ; depth++) {
+    const next = [];
+    its.forEach(function (it) {
+      it.wanted.forEach(function (w) {
+        const segs = w.split('/');
+        if (segs.length < depth) return;
+        const rel = segs.slice(0, depth).join('/');
+        const parent = it.tree[segs.slice(0, depth - 1).join('/')];
+        if (rel in it.tree || !parent || next.some(function (n) { return n.it === it && n.rel === rel; })) return;
+        const sub = parent.filter(function (r) { return r.folder && r.name === segs[depth - 1]; })[0];
+        if (sub) next.push({ it: it, rel: rel, id: sub.id });
+      });
+    });
+    if (!next.length) return;
+    const kids = childrenOf_(next.map(function (n) { return n.id; }));
+    next.forEach(function (n) { n.it.tree[n.rel] = kids[n.id]; });
+  }
 }
 
 // Duplicate files and damaged journals are repaired by hand, and a repaired journal may hold lines that were
@@ -284,31 +349,42 @@ function listedFile_(c, rel) {
   return fileIn_(c.dirs[dirOf_(rel)], baseOf_(rel));
 }
 
+// The text of a listed file, downloaded unless this call has it already (fresh, or from the cache when c.cache).
 function readListed_(c, rel) {
-  return readOrUnavailable_(listedFile_(c, rel), rel);
+  const file = listedFile_(c, rel);
+  readAll_([file], c.cache);
+  return textOf_(file, rel);
+}
+
+function textOf_(file, rel) {
+  if (file.error || file.text == null) throw new Unavailable_(WHY.readError(rel));
+  return file.text;
 }
 
 function readJson_(files, name, missing) {
-  const file = fileIn_(files, name);
-  if (!file) throw new Unavailable_(missing);
-  try {
-    return JSON.parse(readOrUnavailable_(file, name));
-  } catch (e) {
-    if (e instanceof Unavailable_) throw e;
-    throw new Unavailable_(WHY.badJson(name));
-  }
+  const r = jsonOrError_(files, name, missing);
+  if (r.error) throw r.error;
+  return r.value;
 }
 
-function readOrUnavailable_(file, rel) {
+// {value} or {error: Unavailable_} for a JSON file already read.
+function jsonOrError_(files, name, missing) {
+  const file = fileIn_(files, name);
+  if (!file) return { error: new Unavailable_(missing) };
+  if (file.error || file.text == null) return { error: new Unavailable_(WHY.readError(name)) };
   try {
-    return readText_(file);
+    return { value: JSON.parse(file.text) };
   } catch (e) {
-    throw new Unavailable_(WHY.readError(rel));
+    return { error: new Unavailable_(WHY.badJson(name)) };
   }
 }
 
 function fileIn_(files, name) {
-  return files.filter(function (f) { return f.getName() === name; })[0] || null;
+  return files.filter(function (f) { return f.name === name; })[0] || null;
+}
+
+function filesOf_(records) {
+  return records.filter(function (r) { return !r.folder; });
 }
 
 function dirOf_(rel) {
@@ -330,25 +406,28 @@ function journalReply_(c) {
 
 // True when the newest pull archive was written for the current push (pulls after a push carry its push_id).
 function pulledThisPush_(c) {
-  const archive = subfolder_(c.folder, 'archive');
-  const pulls = (archive ? filesIn_(archive) : []).filter(function (f) {
-    return /^web_edits_.*\.jsonl$/.test(f.getName()) && !/_discarded(-\d+)?\.jsonl$/.test(f.getName());
-  }).sort(function (a, b) { return a.getName() < b.getName() ? -1 : 1; });
+  const pulls = c.archive.filter(function (f) {
+    return /^web_edits_.*\.jsonl$/.test(f.name) && !/_discarded(-\d+)?\.jsonl$/.test(f.name);
+  }).sort(function (a, b) { return a.name < b.name ? -1 : 1; });
   if (!pulls.length) return false;
   const newest = pulls[pulls.length - 1];
-  const header = core_().Journal.parseJournal(readOrUnavailable_(newest, 'archive/' + newest.getName())).lines[0];
+  readAll_([newest], c.cache);
+  const header = core_().Journal.parseJournal(textOf_(newest, 'archive/' + newest.name)).lines[0];
   return !!header && header.kind === 'pull' && header.push === c.push.push_id;
 }
 
 // ---- saving (ADR 002: the journal first, then the CSVs) ----
 
-// save.planSave over the files of the edited columns.
+// save.planSave over the files of the edited columns, read fresh from Drive (D5).
 function planFor_(c, edits, restoring) {
   const names = edits.map(function (e) { return e.column; });
-  const files = {};
+  const rels = [];
   c.course.columns.forEach(function (col) {
-    if (names.indexOf(col.name) >= 0 && !(col.file in files)) files[col.file] = readListed_(c, col.file);
+    if (names.indexOf(col.name) >= 0 && rels.indexOf(col.file) < 0) rels.push(col.file);
   });
+  readAll_(rels.map(function (rel) { return listedFile_(c, rel); }), false);
+  const files = {};
+  rels.forEach(function (rel) { files[rel] = textOf_(listedFile_(c, rel), rel); });
   return core_().Save.planSave(files, c.course, edits, restoring);
 }
 
@@ -393,10 +472,8 @@ function writeCourse_(c) {
 
 // Completes a save that stopped after its journal append: each cell of the pending batch that still holds its
 // `original` gets its `value`, and a config part that still equals its `original` gets its `value`. A batch that
-// never reached the journal is just forgotten (edges 35, 36).
-function rollForward_(c) {
-  const pending = getPending_(c.folder);
-  if (!pending) return;
+// never reached the journal is just forgotten (edges 35, 36). The course was read fresh (openCourses_).
+function rollForward_(c, pending) {
   const batch = c.lines.filter(function (l) { return l.batch === pending.batch; })
     .sort(function (a, b) { return a.seq - b.seq; });
   const edits = batch.filter(function (l) { return l.kind === 'cell'; })
@@ -418,30 +495,28 @@ function rollForward_(c) {
 // ---- trim (ADR 002) ----
 
 function trimKey_(folder) {
-  return 'trimmed:' + folder.getId();
+  return 'trimmed:' + folder.id;
 }
 
 // Removes from the journal the lines whose key is in an archive file not trimmed against yet, then records those
 // archive names (a cache: trimming again changes nothing). Skipped while the journal is missing or duplicated.
-// A read failure throws Unavailable_.
-function trim_(folder) {
-  const archive = subfolder_(folder, 'archive');
-  if (!archive) return;
-  const props = PropertiesService.getScriptProperties();
-  const done = JSON.parse(props.getProperty(trimKey_(folder)) || '[]');
-  const fresh = filesIn_(archive).filter(function (f) {
-    return /\.jsonl$/.test(f.getName()) && done.indexOf(f.getName()) < 0;
-  });
+// Reads fresh; a read failure throws Unavailable_. `props`: the ScriptProperties read at the start of the call.
+function trim_(it, props) {
+  const done = JSON.parse(props[trimKey_(it.folder)] || '[]');
+  const fresh = it.archive.filter(function (f) { return /\.jsonl$/.test(f.name) && done.indexOf(f.name) < 0; });
   if (!fresh.length) return;
-  const journals = filesIn_(folder).filter(function (f) { return f.getName() === JOURNAL; });
+  const journals = it.top.filter(function (f) { return f.name === JOURNAL; });
   if (journals.length !== 1) return;
   const J = core_().Journal;
-  const texts = fresh.map(function (f) { return readOrUnavailable_(f, 'archive/' + f.getName()); });
+  readAll_(fresh.concat(journals), false);
+  const texts = fresh.map(function (f) { return textOf_(f, 'archive/' + f.name); });
   const keys = new Set(J.archivedKeys(texts));
-  const text = readOrUnavailable_(journals[0], JOURNAL);
+  const text = textOf_(journals[0], JOURNAL);
   const trimmed = J.trim(text, keys);
   if (trimmed !== text) writeText_(journals[0], trimmed);
-  props.setProperty(trimKey_(folder), JSON.stringify(done.concat(fresh.map(function (f) { return f.getName(); }))));
+  const names = done.concat(fresh.map(function (f) { return f.name; }));
+  PropertiesService.getScriptProperties().setProperty(trimKey_(it.folder), JSON.stringify(names));
+  props[trimKey_(it.folder)] = JSON.stringify(names);
 }
 
 // T1 spike, run once from the editor (Run menu). Writes a fake Thai + BOM + CRLF CSV under
@@ -458,7 +533,8 @@ function spikeRoundTrip() {
   ].join('\r\n');
   const spliced = created.replace(',8.5,', ',9,');
 
-  const root = gradeWebFolder_() || DriveApp.getRootFolder().createFolder(GRADE_WEB);
+  const found = gradeWebFolder_();
+  const root = found ? DriveApp.getFolderById(found.id) : DriveApp.getRootFolder().createFolder(GRADE_WEB);
   const folder = root.createFolder('_spike');
   let file = null;
   let pass = false;

@@ -2,9 +2,10 @@
 // Apps Script fakes for the server harness (web/SPEC.md "Layer 1b"). Test tooling only, never deployed.
 //
 // createGas({drive, propsFile, now, active, effective, seed}) loads every web/apps_script/*.js file into one
-// node:vm context (the Apps Script global scope) with fakes for DriveApp (over the `drive` directory, which stands
-// for "My Drive"), PropertiesService (optionally persisted to `propsFile`), LockService, Session, Utilities,
-// HtmlService, MimeType, a fixed clock, captured console/Logger and failure injection.
+// node:vm context (the Apps Script global scope) with fakes for DriveApp and the Advanced Drive service's
+// Drive.Files.list (over the `drive` directory, which stands for "My Drive"), PropertiesService and CacheService
+// (both optionally persisted next to `propsFile`), LockService, Session, Utilities, HtmlService, MimeType, a fixed
+// clock, captured console/Logger and failure injection.
 //
 // If drive.js needs a DriveApp method this fake lacks, add it here (tooling, not assertions).
 const fs = require('node:fs');
@@ -221,6 +222,68 @@ function createGas(opts = {}) {
     return out;
   }
 
+  // The Advanced Drive service (v3), as drive.js uses it: Files.list over `'<id>' in parents` (or-joined),
+  // `name = '…'`, `mimeType = '…'` and `trashed = false` (trashed items are deleted here, so always true).
+  // `gas.pageSize` forces small pages to exercise page tokens.
+  const FOLDER_MIME = 'application/vnd.google-apps.folder';
+  const Drive = {
+    Files: {
+      list(params) {
+        maybeFail('Files.list');
+        const q = String(params.q || '');
+        const parents = Array.from(q.matchAll(/'([^']+)' in parents/g), (m) => m[1]);
+        const nameM = /\bname = '((?:[^'\\]|\\.)*)'/.exec(q);
+        const mimeM = /\bmimeType = '([^']+)'/.exec(q);
+        const items = [];
+        for (const pid of parents) {
+          const dir = pid === 'root' ? driveDir : paths.get(pid);
+          if (!dir || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
+          log('list', dir);
+          for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+            const p = path.join(dir, e.name);
+            const folder = e.isDirectory();
+            const item = { id: idOf(p), name: e.name, mimeType: folder ? FOLDER_MIME : File(p).getMimeType(),
+              parents: [idOf(dir)] };
+            if (!folder) item.md5Checksum = crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex');
+            if (nameM && e.name !== nameM[1].replace(/\\(.)/g, '$1')) continue;
+            if (mimeM && item.mimeType !== mimeM[1]) continue;
+            items.push(item);
+          }
+        }
+        const size = gas.pageSize || params.pageSize || 100;
+        const start = +(params.pageToken || 0);
+        const reply = { files: items.slice(start, start + size) };
+        if (start + size < items.length) reply.nextPageToken = String(start + size);
+        return reply;
+      },
+    },
+  };
+
+  // CacheService's script cache: values over 100 KB are refused like the real one; expiry is not modelled.
+  const cacheFile = propsFile ? propsFile + '.cache' : null;
+  const cacheStore = new Map(cacheFile && fs.existsSync(cacheFile) ? Object.entries(JSON.parse(fs.readFileSync(cacheFile, 'utf8') || '{}')) : []);
+  const saveCache = () => { if (cacheFile) fs.writeFileSync(cacheFile, JSON.stringify(Object.fromEntries(cacheStore))); };
+  const putOne = (k, v) => {
+    if (String(k).length > 250) throw new Error('Argument too large: key');
+    if (Buffer.byteLength(String(v), 'utf8') > 100 * 1024) throw new Error('Argument too large: value');
+    cacheStore.set(String(k), String(v));
+  };
+  const scriptCache = {
+    get(k) { maybeFail('Cache.get'); return cacheStore.has(k) ? cacheStore.get(k) : null; },
+    getAll(keys) {
+      maybeFail('Cache.getAll');
+      const o = {};
+      for (const k of keys) if (cacheStore.has(k)) o[k] = cacheStore.get(k);
+      return o;
+    },
+    put(k, v) { maybeFail('Cache.put'); putOne(k, v); saveCache(); },
+    putAll(values) { maybeFail('Cache.putAll'); for (const [k, v] of Object.entries(values)) putOne(k, v); saveCache(); },
+    remove(k) { cacheStore.delete(k); saveCache(); },
+    removeAll(keys) { for (const k of keys) cacheStore.delete(k); saveCache(); },
+  };
+  gas.cache = cacheStore;
+  gas.evictCache = () => { cacheStore.clear(); saveCache(); };
+
   const DriveApp = {
     getRootFolder: () => Folder(driveDir),
     getFolderById(id) { const p = paths.get(id); if (!p || !fs.existsSync(p)) throw new Error('No item with the given ID could be found.'); return Folder(p); },
@@ -323,6 +386,8 @@ function createGas(opts = {}) {
   const capture = (level) => (...a) => gas.logs.push({ level, text: a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ') });
   const sandbox = {
     DriveApp,
+    Drive,
+    CacheService: { getScriptCache: () => scriptCache, getUserCache: () => scriptCache, getDocumentCache: () => null },
     PropertiesService: {
       getScriptProperties: () => propertyStore(scriptStore, persist),
       getUserProperties: () => propertyStore(userStore, () => {}),
