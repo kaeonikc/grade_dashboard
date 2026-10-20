@@ -1,11 +1,14 @@
 // drive.js: Drive I/O only (web/SPEC.md "Modules"). Folders and files are found by name in each call's own listing,
 // never by a stored ID. Listings go through the Advanced Drive service (v3): one query covers many folders and leaves
-// trashed items out. Reads and writes stay on DriveApp (byte-exact, T1 spike). File text is cached in CacheService
-// under the file's id and md5, so a changed file never hits an old entry (SPEC_discard_and_speed.md D3-D5).
+// trashed items out. A shortcut to a folder counts as that folder (a course added to grade_web by shortcut). Reads
+// and writes stay on DriveApp (byte-exact, T1 spike). File text is cached in CacheService under the file's id and
+// md5, so a changed file never hits an old entry (SPEC_discard_and_speed.md D3-D5).
 
 const GRADE_WEB = 'grade_web';
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
-const LIST_FIELDS = 'nextPageToken, files(id, name, mimeType, md5Checksum, parents)';
+const SHORTCUT_MIME = 'application/vnd.google-apps.shortcut';
+const LIST_FIELDS = 'nextPageToken, files(id, name, mimeType, md5Checksum, parents, ' +
+  'shortcutDetails(targetId, targetMimeType))';
 const PARENTS_PER_LIST = 40;
 const CACHE_PREFIX = 'gw1:';
 const CACHE_TTL_S = 21600;  // 6 h, CacheService's longest
@@ -20,18 +23,24 @@ function resetIo_() {
 }
 
 // A listed Drive item: {id, name, folder, md5}. readAll_ and writeText_ add `text` (and `fresh` when that text came
-// from Drive in this call rather than from the cache), or `error` when the download failed.
+// from Drive in this call rather than from the cache), or `error` when the download failed. A shortcut to a folder is
+// recorded as the folder it points to, under the shortcut's own name; a shortcut to a file is not followed.
 function record_(f) {
+  const s = f.shortcutDetails;
+  if (f.mimeType === SHORTCUT_MIME && s && s.targetMimeType === FOLDER_MIME) {
+    return { id: s.targetId, name: f.name, folder: true, md5: null };
+  }
   return { id: f.id, name: f.name, folder: f.mimeType === FOLDER_MIME, md5: f.md5Checksum || null };
 }
 
-// [{rec, parents}] of one query, every page.
+// [{rec, parents}] of one query, every page, including items in shared drives (a shortcut's target may be there).
 function listQuery_(q) {
   const out = [];
   let token = null;
   do {
     io.list++;
-    const params = { q: q, fields: LIST_FIELDS, pageSize: 1000 };
+    const params = { q: q, fields: LIST_FIELDS, pageSize: 1000, supportsAllDrives: true,
+      includeItemsFromAllDrives: true };
     if (token) params.pageToken = token;
     const reply = Drive.Files.list(params);
     (reply.files || []).forEach(function (f) { out.push({ rec: record_(f), parents: f.parents || [] }); });

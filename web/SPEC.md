@@ -37,7 +37,7 @@ Paths are relative to the grade_dashboard repo root.
 | **Web app (`web/apps_script/`, pushed by clasp as-is)** | |
 | `appsscript.json` | Manifest: V8, `Asia/Bangkok`, webapp `executeAs: USER_DEPLOYING`, `access: MYSELF`, explicit scopes `drive` + `userinfo.email`; the Advanced Drive service v3 enabled (same `drive` scope, SPEC_discard_and_speed.md D3) |
 | `Code.js` | `doGet` (owner check, template, `?timing=1`), the five server functions, `withLock_` (with each reply's `timing`), `openCourses_` (many courses per Drive listing), roll-forward, trim, `core_()` lazy module instances, `clientCore_()` source injection |
-| `drive.js` | Drive I/O only: listings through the Advanced Drive service (`childrenOf_`: many folders a query, trashed left out), read and write text through DriveApp (BOM kept as `﻿`), the md5-keyed content cache in CacheService (display calls only), Drive counters for `timing`, the pending marker in ScriptProperties |
+| `drive.js` | Drive I/O only: listings through the Advanced Drive service (`childrenOf_`: many folders a query, trashed left out, a shortcut to a folder followed to that folder), read and write text through DriveApp (BOM kept as `﻿`), the md5-keyed content cache in CacheService (display calls only), Drive counters for `timing`, the pending marker in ScriptProperties |
 | `csv.js` (pure) | Parse CSV text like Python's `csv.reader` while recording each field's byte span. BOM and EOL detection. **Cell splice** writer. Python-compatible minimal quoting |
 | `grades.js` (pure) | `classify`, `sameCell`, `validateTyped`, `canonicalValue`, attendance code values, `mergeCourse` (roster + files → rows in Raw Details order), `fillDefaultMax`, `computeGrades` (output shape under Grade math), `letterGrade`, `round2` (numpy semantics), `sessionDate`, `fillTargets` |
 | `journal.js` (pure) | Batch ids, line keys, `parseJournal` (bad line numbers), `archivedKeys`, `unpulled`, `trim`, `summary` (count, last save), `undoTarget`, `cellLines`/`configLine`, `conflictCopies`. Also the **message formatters** for journal and save results (see "User-facing messages" below). It is injected into the browser too |
@@ -317,6 +317,9 @@ unreadable file, conflict copies: message names the files), `BUSY`, `INVALID` (+
 `listCourses` never fails for one bad course. That course is `available:false` with its `reason` (S2.3).
 
 ### Course availability (checked by `listCourses` and `loadCourse`)
+A course is a folder in `grade_web/`, or a Drive shortcut there to a folder (named by the shortcut; its files,
+pending and trim markers are the target folder's). A shortcut to a file is not a course. A shortcut whose target is
+gone or not shared is unavailable ("course.json is missing").
 Unavailable when `course.json` or `push.json` is missing or not valid JSON, when a file listed in `course.json` is
 missing, when `web_edits.jsonl` is missing or has lines that aren't valid JSON (reason names the line numbers and
 points to the README's "Damaged journal"; freezing the course keeps the hand repair single-writer), or when `journal.conflictCopies` finds two files with the same name in a folder, or a name like

@@ -224,12 +224,16 @@ function createGas(opts = {}) {
 
   // The Advanced Drive service (v3), as drive.js uses it: Files.list over `'<id>' in parents` (or-joined),
   // `name = '…'`, `mimeType = '…'` and `trashed = false` (trashed items are deleted here, so always true).
-  // `gas.pageSize` forces small pages to exercise page tokens.
+  // A symlink is a shortcut to what it points at (its target's id even when the target is gone). `gas.pageSize`
+  // forces small pages to exercise page tokens; `gas.listParams` holds each call's params.
   const FOLDER_MIME = 'application/vnd.google-apps.folder';
+  const SHORTCUT_MIME = 'application/vnd.google-apps.shortcut';
+  gas.listParams = [];
   const Drive = {
     Files: {
       list(params) {
         maybeFail('Files.list');
+        gas.listParams.push(params);
         const q = String(params.q || '');
         const parents = Array.from(q.matchAll(/'([^']+)' in parents/g), (m) => m[1]);
         const nameM = /\bname = '((?:[^'\\]|\\.)*)'/.exec(q);
@@ -242,9 +246,14 @@ function createGas(opts = {}) {
           for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
             const p = path.join(dir, e.name);
             const folder = e.isDirectory();
-            const item = { id: idOf(p), name: e.name, mimeType: folder ? FOLDER_MIME : File(p).getMimeType(),
+            let item = { id: idOf(p), name: e.name, mimeType: folder ? FOLDER_MIME : File(p).getMimeType(),
               parents: [idOf(dir)] };
-            if (!folder) item.md5Checksum = crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex');
+            if (e.isSymbolicLink()) {
+              const target = path.resolve(dir, fs.readlinkSync(p));
+              const dirTarget = fs.existsSync(target) ? fs.statSync(target).isDirectory() : true;
+              item = { id: idOf(p), name: e.name, mimeType: SHORTCUT_MIME, parents: [idOf(dir)],
+                shortcutDetails: { targetId: idOf(target), targetMimeType: dirTarget ? FOLDER_MIME : 'text/csv' } };
+            } else if (!folder) item.md5Checksum = crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex');
             if (nameM && e.name !== nameM[1].replace(/\\(.)/g, '$1')) continue;
             if (mimeM && item.mimeType !== mimeM[1]) continue;
             items.push(item);

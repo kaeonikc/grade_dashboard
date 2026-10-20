@@ -4,6 +4,11 @@ View and edit grade_dashboard courses from an iPhone or any browser. A Google Ap
 account reads course copies in `My Drive/grade_web/<course>/`. `grader web-push` puts a course there, and
 `grader web-pull` brings the web edits back to the Mac copy (the master). The design is in `SPEC.md`.
 
+A course folder kept somewhere else on Drive (another folder, a shared drive, or shared with this account) can be
+added with a Drive shortcut in `grade_web/`: the app lists it under the shortcut's name. The folder it points to
+must hold a pushed course (course.json, push.json, web_edits.jsonl, from `grader web-push`); otherwise it shows as
+unavailable with "course.json is missing".
+
 Status: the web app follows grade-tui's tabs: [1] Summary Scores, [2] Raw Details (one category at a time, picked
 from the ☰ Categories menu; the table on wide screens, column mode on phones, with Fill, Save and undo), [3] Analytics
 › Overview (statistics, grade distribution, histogram, box plot) and [4] Grading (weights and boundaries, each
