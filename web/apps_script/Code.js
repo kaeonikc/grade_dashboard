@@ -10,7 +10,7 @@ const NOTE_PULLED = 'Already pulled to the Mac; use `grader undo` there';
 const UNDO_CHANGED = 'Another device saved since this page loaded. Reload to see the newest save, then try again.';
 const CONFIG_STALE = 'Changed on another device after this page loaded. Nothing was saved.';
 const ISO_FORMAT = "yyyy-MM-dd'T'HH:mm:ssXXX";
-const DOGET_SLOT = '/*DOGET_MS*/null';  // in Index.html, replaced by doGet's time in ms
+const DOGET_SLOT = 'DOGET_MS_SLOT';  // in Index.html, replaced by doGet's time in ms (a string: HtmlService may drop comments)
 
 const NOT_AVAILABLE_HTML =
   '<h1>Not available</h1><p>This page opens only for the Google account that owns it.</p>';

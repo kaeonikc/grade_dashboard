@@ -541,7 +541,7 @@ test('doGet takes ?timing=1 and fills in its own time', (t) => {
   const { gas } = setup(t, { [H.F1]: {} });
   const off = gas.doGet({ parameter: {} }).content;
   assert.match(off, /const TIMING = false;/);
-  assert.match(off, /const DOGET_MS = \d+;/);
+  assert.match(off, /const DOGET_MS = Number\('\d+'\) \|\| null;/);
   assert.match(gas.doGet({ parameter: { timing: '1' } }).content, /const TIMING = true;/);
   assert.match(gas.logText(), /^doGet ms=\d+$/m);
 });

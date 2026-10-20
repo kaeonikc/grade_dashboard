@@ -161,6 +161,17 @@ failure message prints the expected value.
 
 The Apps Script file count stays at 11 (budget ≤ 11). There are no new dependencies, libraries or npm packages.
 
+## Baseline (version 10, 2026-10-20, Mac browser, one pushed course `ฟิสิกส์จำลอง`)
+
+| Step | Round trip | Server | Lock wait | Drive |
+|---|---|---|---|---|
+| page | 0.18 s | doGet not shown (the comment placeholder didn't survive HtmlService; now a string) | — | — |
+| list | 4.38 s | 3.07 s | 0.07 s | 8 listings / 3 downloads |
+| load | 14.10 s | 12.54 s | 5.08 s | 8 listings / 8 downloads |
+
+About 0.3–0.5 s per Drive call, all serial, and about 1.3–1.6 s of `google.script.run` overhead per call. The 5 s lock
+wait is unexplained (no other call should have been running); watch it in the version 11 numbers.
+
 ## Targets
 Fake Drive, enforced by tests:
 - **`listCourses` over the 4 fixtures:** ≤ 4 `Drive.Files.list` calls, whatever the course count. With a warm cache
