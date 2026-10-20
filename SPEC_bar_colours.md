@@ -8,7 +8,7 @@ readable text shades from SPEC_grade_order.md D6.
 
 | # | Decision |
 |---|---|
-| B1 | **Hue order stays blue → red**, the same order as today and as grade-tui. Fills are the palette swatches, sampled from the image, then toned down (follow-up the same day: "a bit darker, not too vivid"). Each swatch is converted to OKLCH, with lightness × 0.88 and chroma × 0.78, and the hue is kept. The image has no darker yellow, peach or sky, so a single rule is used for all eight. |
+| B1 | **Hue order stays blue → red**, the same order as today and as grade-tui. Fills are the palette swatches, sampled from the image, then toned down (follow-up the same day: "a bit darker, not too vivid"). Each swatch is converted to OKLCH, with lightness × 0.88 and chroma × 0.78, and the hue is kept. The image has no darker yellow, peach or sky, so a single rule is used for A, B+, B and F. Follow-up: "C and D+ more orange, and the nearby colours to match". C+ to D are set by hand on a warm ramp toward F's brick red. In OKLCH (L, C, H) they are C+ (0.80, 0.125, 92) mustard, C (0.735, 0.145, 70) amber orange, D+ (0.665, 0.155, 55) orange, and D (0.605, 0.15, 39) red orange. That makes each neighbour about 0.07–0.09 apart in OKLab. |
 
 Swatch → fill:
 
@@ -17,10 +17,10 @@ Swatch → fill:
 | A | `#327df6` blue | `#336ac5` |
 | B+ | `#5ed0fa` sky | `#5caece` |
 | B | `#5fce3d` green | `#5aab43` |
-| C+ | `#fae14c` yellow | `#d0be54` |
-| C | `#f2a983` peach | `#c79074` |
-| D+ | `#ee7e31` orange | `#c26e38` |
-| D | `#ec6b71` coral | `#c05f62` |
+| C+ | `#fae14c` yellow | `#dbbb56` (ramp) |
+| C | `#f2a983` peach | `#e2972c` (ramp) |
+| D+ | `#ee7e31` orange | `#da751d` (ramp) |
+| D | `#ec6b71` coral | `#ca5c36` (ramp) |
 | F | `#ea332b` red | `#bd382f` |
 
 | # | Decision |

@@ -40,7 +40,7 @@ for (const [mode, from] of [['light', 0], ['dark', css.indexOf('prefers-color-sc
 }
 
 // Bar fills: the palette, toned down (SPEC_bar_colours.md B1-B4): bars only, an edge in the letter colour in light mode.
-const BARS = { a: '#336ac5', bp: '#5caece', b: '#5aab43', cp: '#d0be54', c: '#c79074', dp: '#c26e38', d: '#c05f62',
+const BARS = { a: '#336ac5', bp: '#5caece', b: '#5aab43', cp: '#dbbb56', c: '#e2972c', dp: '#da751d', d: '#ca5c36',
   f: '#bd382f' };
 const DARK = css.indexOf('prefers-color-scheme: dark');
 const edge = (from) => {
