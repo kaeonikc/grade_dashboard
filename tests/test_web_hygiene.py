@@ -59,8 +59,9 @@ def test_ac13_3_no_secrets_or_real_data():
 
 @needs_git
 def test_existing_tests_unchanged():
-    r = git("diff", "--quiet", BASE, "--", "tests/", ":(exclude)tests/conftest.py", ":(exclude)tests/webtools.py",
-            ":(exclude)tests/test_web_*.py")
+    # Modified or deleted only (--diff-filter=MD): test files added later (e.g. test_completion.py) are not edits.
+    r = git("diff", "--quiet", "--diff-filter=MD", BASE, "--", "tests/", ":(exclude)tests/conftest.py",
+            ":(exclude)tests/webtools.py", ":(exclude)tests/test_web_*.py")
     assert r.returncode == 0, git("diff", "--stat", BASE, "--", "tests/").stdout
 
 
