@@ -360,6 +360,28 @@ def test_web_push_counts_students_per_section(here, drive_root, capsys):
     assert "5 students (sec 51: 2 · sec 52: 3)" in capsys.readouterr().out
 
 
+def test_web_pull_accepts_a_push_made_before_the_id_fix(here, drive_root, capsys):
+    """Pushed as course_id "SC", then `update -i` repairs it to "SC 2202": the Drive copy is still this course."""
+    from src import webpull, webpush
+    c = one_section_course(here)
+    cfg_path = next((c / "course_info").glob("*_config.yaml"))
+    cfg = config(c)
+    cfg["course_id"], cfg["course_name"] = "SC", "2202  ดาราศาสตร์และอวกาศ"  # the old parse
+    cfg_path.write_text(yaml.dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    grader.update_course(config_file=str(cfg_path), yes=True)
+    webpush.push(c, drive_root)
+    grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52")), yes=True)
+    assert str(config(c)["course_id"]) == "SC 2202"
+    capsys.readouterr()
+    assert webpull.pull(c, drive_root) == 0
+    assert "Nothing to pull" in capsys.readouterr().out
+    cfg = config(c)
+    cfg["course_id"] = "PHYS1120"
+    cfg_path.write_text(yaml.dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    with pytest.raises(webpull.Refused, match="another course"):
+        webpull.pull(c, drive_root)
+
+
 def test_web_pull_preview_tags_students_and_orders_by_section():
     from src.webpull import Change, preview
     def cell(sid, col, mac, val):

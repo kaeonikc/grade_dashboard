@@ -22,6 +22,7 @@ from pathlib import Path
 
 from src import attendance, history, tui_api, webdrive
 from src.csvio import fmt_value, read_csv_text
+from src.sections import same_course_id
 from src.sync import config_file, is_total, raw_config
 from src.webdrive import Refused, fmt_time, pad, width
 
@@ -315,7 +316,10 @@ def pull(course: Path, root: Path, yes: bool = False, semester: str | None = Non
     config = raw_config(course)
     drive_is = f"{pushed.get('course_id', '')} {pushed.get('term', '')}"
     mac_is = f"{config.get('course_id', '')} {config.get('term', '')}"
-    if drive_is != mac_is:
+    # A push made before `grader update -i` repaired the course ID ("SC" → "SC 2202") is still this course.
+    same = str(pushed.get('term', '')) == str(config.get('term', '')) and same_course_id(
+        pushed.get('course_id'), pushed.get('course_name'), config.get('course_id'), config.get('course_name'))
+    if not same:
         raise Refused(f"❌ The Drive copy is another course: Drive has {drive_is}, this folder is {mac_is}. Nothing "
                       "was pulled. Check the folder names.")
 

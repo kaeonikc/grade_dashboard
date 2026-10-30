@@ -27,6 +27,18 @@ def norm_id(course_id) -> str:
     return re.sub(r"\s+", "", str(course_id or "")).casefold()
 
 
+def same_course_id(id_a, name_a, id_b, name_b) -> bool:
+    """
+    The same course: the same course ID with spaces ignored ("SC 2202" == "SC2202"). A course made before the ID
+    parse fix (course_id "SC", course_name "2202 ดาราศาสตร์…") matches its repaired self too: ID + name, spaces
+    removed, are equal (SPEC_sections.md). Either side may be the old form.
+    """
+    if norm_id(id_a) == norm_id(id_b):
+        return True
+    return bool(norm_id(id_a) and norm_id(id_b)) and \
+        norm_id(f"{id_a or ''}{name_a or ''}") == norm_id(f"{id_b or ''}{name_b or ''}")
+
+
 def roster_file(course) -> Path | None:
     files = sorted(p for p in (Path(course) / "course_info").glob("*_student_info.csv")
                    if not p.name.startswith("."))

@@ -82,13 +82,10 @@ def _same_course(cfg: dict, term_name, course_id, course_name) -> bool:
     "SC2202"). A course made before the ID parse fix (course_id "SC", course_name "2202 ดาราศาสตร์…") matches too:
     its ID + name, spaces removed, equals the class list's (SPEC_sections.md).
     """
-    from src.sections import norm_id
+    from src.sections import same_course_id
     if str(cfg.get('term', '')) != str(term_name):
         return False
-    if norm_id(cfg.get('course_id')) == norm_id(course_id):
-        return True
-    return bool(norm_id(course_id)) and norm_id(f"{cfg.get('course_id', '')}{cfg.get('course_name', '')}") == \
-        norm_id(f"{course_id}{course_name or ''}")
+    return same_course_id(cfg.get('course_id'), cfg.get('course_name'), course_id, course_name)
 
 def _config_sections(cfg: dict) -> set[str]:
     secs = {str(k) for k in (cfg.get('sections') or {})}
