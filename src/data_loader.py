@@ -119,7 +119,7 @@ def load_config(course_path: str) -> dict:
                             df_att_headers = pd.read_excel(att_file, nrows=0)
                         for col in df_att_headers.columns:
                             col_str = str(col).strip()
-                            if col_str not in ['Student ID', 'Name'] and not col_str.lower().startswith('total') and not col_str.startswith('=') and 'unnamed' not in col_str.lower():
+                            if col_str not in ['Student ID', 'Name', 'Sec'] and not col_str.lower().startswith('total') and not col_str.startswith('=') and 'unnamed' not in col_str.lower():
                                 attendance_cols.append(col_str)
                     except Exception as e:
                         print(f"⚠️ Warning: Could not auto-detect attendance headers: {e}", file=sys.stderr)

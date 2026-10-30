@@ -34,6 +34,7 @@ CODE_VALUE = {"P": 1.0, "L": 0.8, "X": 1.0, "EA": 1.0, "A": 0.0}
 CODES = ("P", "A", "L", "X")
 BASELINE = "attendance_sync.json"
 NAME = "Name"
+SEC = "Sec"  # the xlsx's read-only section column (SPEC_sections.md); never a session, never in the csv
 
 
 class Skip:
@@ -70,7 +71,7 @@ def is_total(h: str) -> bool:
 
 def is_session(h: str) -> bool:
     h = h.strip()
-    return bool(h) and h not in ("Student ID", NAME) and not is_total(h) and not h.startswith("=") \
+    return bool(h) and h not in ("Student ID", NAME, SEC) and not is_total(h) and not h.startswith("=") \
         and "unnamed" not in h.lower()
 
 
@@ -492,7 +493,7 @@ def render_csv(path: Path, t: Target, drop_rows: set = frozenset(), keep_columns
 
 
 def _xlsx_cols(ws) -> dict:
-    out = {"sid": None, "name": None, "total": None, "sessions": {}}
+    out = {"sid": None, "name": None, "sec": None, "total": None, "sessions": {}}
     for c in range(1, ws.max_column + 1):
         v = ws.cell(row=1, column=c).value
         if v is None:
@@ -502,6 +503,8 @@ def _xlsx_cols(ws) -> dict:
             out["sid"] = c
         elif h == NAME:
             out["name"] = c
+        elif h == SEC:
+            out["sec"] = c
         elif is_total(h):
             out["total"] = c
         elif is_session(h):
@@ -545,8 +548,10 @@ def _copy_style(src, dst):
         dst._style = copy(src._style)
 
 
-def edit_xlsx(wb, ws, t: Target, drop_rows: set = frozenset(), keep_columns: bool = False) -> int:
-    """Applies target `t` to the worksheet in place; returns the number of changes (0 = leave the file alone)."""
+def edit_xlsx(wb, ws, t: Target, drop_rows: set = frozenset(), keep_columns: bool = False,
+              sections: dict | None = None) -> int:
+    """Applies target `t` to the worksheet in place; returns the number of changes (0 = leave the file alone).
+    `sections` ({sid: section} from the roster) fills the Sec column when the course has ≥2 sections."""
     from openpyxl.utils import get_column_letter
     changes = 0
     cols = _xlsx_cols(ws)
@@ -625,6 +630,8 @@ def edit_xlsx(wb, ws, t: Target, drop_rows: set = frozenset(), keep_columns: boo
             ws.cell(row=last, column=cols["sessions"][f]).value = nv or None
         changes += 1
 
+    changes += put_sections(ws, sections or {})
+
     # total column, formulas, widths, dropdown, colours
     cols = _xlsx_cols(ws)
     if cols["total"] is None:
@@ -658,6 +665,52 @@ def edit_xlsx(wb, ws, t: Target, drop_rows: set = frozenset(), keep_columns: boo
             del ws.column_dimensions[letter]  # widths left behind by deleted columns
         _fix_ranges(ws, rng, rows[-1] if rows else 1)
     return changes
+
+
+def put_sections(ws, sections: dict) -> int:
+    """
+    The `Sec` column right after Name, filled from the roster, when the course has ≥2 sections (SPEC_sections.md).
+    It is inserted when missing (the session columns, totals and ranges shift; edit_xlsx then rewrites the
+    formulas). A course with one section leaves the sheet alone, and an existing Sec column is never removed.
+    """
+    from src.sections import sections_of
+    if len(sections_of(sections)) < 2:
+        return 0
+    changes = 0
+    cols = _xlsx_cols(ws)
+    if cols["sec"] is None:
+        at = (cols["name"] or cols["sid"] or 1) + 1
+        ws.insert_cols(at)
+        for r in range(1, ws.max_row + 1):
+            _copy_style(ws.cell(row=r, column=at - 1), ws.cell(row=r, column=at))
+        ws.cell(row=1, column=at).value = SEC
+        from openpyxl.utils import get_column_letter
+        ws.column_dimensions[get_column_letter(at)].width = 6
+        changes += 1
+        cols = _xlsx_cols(ws)
+    for r in _data_rows(ws, cols):
+        sid = norm(ws.cell(row=r, column=cols["sid"]).value)
+        want = sections.get(sid, "")
+        cell = ws.cell(row=r, column=cols["sec"])
+        if norm(cell.value) != want:
+            cell.value = want or None
+            changes += 1
+    return changes
+
+
+def ensure_sections(course, xlsx: Path | None = None) -> int:
+    """After a new sheet is made (grader init / mock): add and fill its Sec column when the roster has ≥2 sections."""
+    from src.sections import roster_sections, sections_of
+    secs = roster_sections(course)
+    xlsx = xlsx or files_of(course)[0]
+    if xlsx is None or len(sections_of(secs)) < 2:
+        return 0
+    wb, ws = _open_xlsx(xlsx)
+    X = read_xlsx_sheet(xlsx)
+    n = edit_xlsx(wb, ws, Target(X.sessions, {}, {}, {}), keep_columns=True, sections=secs)
+    if n:
+        save_xlsx(wb, xlsx)
+    return n
 
 
 def _fix_ranges(ws, rng, last_row: int) -> None:
@@ -705,7 +758,8 @@ def apply(p: AttPlan, d: Decisions, entry) -> dict:
     out = {}
     data = render_csv(p.csv, t)
     wb, ws = _open_xlsx(p.xlsx)
-    n_x = edit_xlsx(wb, ws, t)
+    from src.sections import roster_sections
+    n_x = edit_xlsx(wb, ws, t, sections=roster_sections(p.course))
     csv_changed = not p.csv.exists() or p.csv.read_bytes() != data
     if n_x:
         entry.capture(p.xlsx)
@@ -825,6 +879,8 @@ def align_rows(course, entry=None, tool: str = "grader", action: str = "update-a
     wb, ws = _open_xlsx(xlsx)
     X = read_xlsx_sheet(xlsx)
     C = read_csv_sheet(csv) if csv.exists() else X
+    from src.sections import roster_sections
+    secs = roster_sections(course)
     rename = {}
     if class_dates and all(re.fullmatch(r"a\d+", s) for s in X.sessions) and X.sessions \
             and not all(re.fullmatch(r"a\d+", s) for s in class_dates):
@@ -849,7 +905,7 @@ def align_rows(course, entry=None, tool: str = "grader", action: str = "update-a
                 cols = _xlsx_cols(ws)
                 for old, newname in rename.items():
                     ws.cell(row=1, column=cols["sessions"][old]).value = newname
-            n = edit_xlsx(wb, ws, t, drop_rows=drop, keep_columns=True) + len(rename)
+            n = edit_xlsx(wb, ws, t, drop_rows=drop, keep_columns=True, sections=secs) + len(rename)
             if n:
                 e.capture(xlsx)
                 e.capture(baseline_path(course))

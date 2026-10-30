@@ -82,8 +82,9 @@ def extract_metadata(df: pd.DataFrame) -> dict:
                 if not metadata.get('course_details_raw'):
                     metadata['course_details_raw'] = val_str
                     
-                    # Match Course ID
-                    match_id = re.search(r'รหัสวิชา\s*([A-Za-z0-9_.-]+)', val_str)
+                    # Match Course ID, kept as the university prints it: "PHYS1120", or "SC 2202" (letters, one
+                    # space, digits; exam_projects looks for it in the exam's course line)
+                    match_id = re.search(r'รหัสวิชา\s*([A-Za-z]+ ?\d[A-Za-z0-9_.-]*|[A-Za-z0-9_.-]+)', val_str)
                     if match_id:
                         metadata['course_id'] = match_id.group(1).strip()
                     
@@ -258,11 +259,12 @@ def convert_excel_to_csv_and_yaml(input_path: Path, csv_path: Path = None, yaml_
         student_rows.append({
             'Student ID': std_id,
             'Name': name,
-            'Class Group': group
+            'Class Group': group,
+            'Section': '' if str(sec_num).startswith('Unknown_') else str(sec_num),
         })
 
     # Create cleaned DataFrame
-    clean_df = pd.DataFrame(student_rows)
+    clean_df = pd.DataFrame(student_rows, columns=['Student ID', 'Name', 'Class Group', 'Section'])
     clean_df = clean_df.sort_values(by='Student ID').reset_index(drop=True)
 
     # Save to CSV
