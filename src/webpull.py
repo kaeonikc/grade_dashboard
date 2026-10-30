@@ -164,23 +164,35 @@ def _summary_word(result: str) -> str:
     return "to apply" if result == "apply" else result
 
 
-def apply_line(c: Change) -> str:
+def _no_tag(sid: str) -> str:
+    return ""
+
+
+def apply_line(c: Change, tag=_no_tag) -> str:
     if c.is_config:
         mac = {str(k): v for k, v in (c.mac or {}).items()}
         diff = [f"{k} {fmt_value(mac.get(str(k)))} → {fmt_value(v)}" for k, v in c.final.items()
                 if not _same_num(mac.get(str(k)), v)]
         return f"  {c.label}: {', '.join(diff)}"
-    return f"  {c.sid} {c.column}: {_v(c.mac)} → {_v(c.final)}"
+    return f"  {tag(c.sid)}{c.sid} {c.column}: {_v(c.mac)} → {_v(c.final)}"
 
 
-def conflict_line(c: Change) -> str:
+def conflict_line(c: Change, tag=_no_tag) -> str:
     if c.is_config:
         return f"  conflict: {c.label} — Mac {_kv(c.mac)}, web {_kv(c.final)}; apply by hand if wanted"
-    return f"  conflict: {c.sid} {c.column} — Mac {_v(c.mac)}, web {_v(c.final)} (not applied)"
+    return f"  conflict: {tag(c.sid)}{c.sid} {c.column} — Mac {_v(c.mac)}, web {_v(c.final)} (not applied)"
 
 
-def preview(changes: list[Change]) -> list[str]:
-    """The preview text, without its last line (which depends on --yes)."""
+def preview(changes: list[Change], secmap: dict | None = None) -> list[str]:
+    """The preview text, without its last line (which depends on --yes). With a roster of several sections
+    (`secmap`, SPEC_sections.md) each student's line starts with [51] and the lists go by section, then ID."""
+    from src.sections import order_key, sections_of, tagger
+    secmap = secmap or {}
+    tag = tagger(secmap)
+    if len(sections_of(secmap)) >= 2:
+        key = order_key(secmap)
+        changes = [c for c in changes if c.is_config] + sorted((c for c in changes if not c.is_config),
+                                                               key=lambda c: (key(c.sid), c.column))
     out = ["By column:"]
     labels = list(dict.fromkeys(c.label for c in changes))
     w = max(width(lab) for lab in labels) + 3
@@ -191,12 +203,12 @@ def preview(changes: list[Change]) -> list[str]:
 
     applies = [c for c in changes if c.result == "apply"]
     if applies:
-        out += ["", "To apply (Mac value → web value):"] + [apply_line(c) for c in applies]
+        out += ["", "To apply (Mac value → web value):"] + [apply_line(c, tag) for c in applies]
     kept = [c for c in changes if c.result in ("conflict", "skipped")]
     if kept:
         out += ["", "Not applied (Mac values kept):"]
-        out += [conflict_line(c) if c.result == "conflict" else f"  skipped: {c.sid} {c.column} — {c.reason}"
-                for c in kept]
+        out += [conflict_line(c, tag) if c.result == "conflict"
+                else f"  skipped: {tag(c.sid)}{c.sid} {c.column} — {c.reason}" for c in kept]
 
     done = [c for c in changes if c.result == "already applied"]
     back = [c for c in changes if c.result == "no change"]
@@ -204,10 +216,10 @@ def preview(changes: list[Change]) -> list[str]:
     out += ["", f"Already applied: {len(done)} · No change: {len(back)} · Replaced by a later edit: {superseded}"]
     for c in done:
         out.append(f"  already applied: {c.label} = {_kv(c.final)}" if c.is_config
-                   else f"  already applied: {c.sid} {c.column} = {_v(c.final)}")
+                   else f"  already applied: {tag(c.sid)}{c.sid} {c.column} = {_v(c.final)}")
     for c in back:
         out.append(f"  no change: {c.label} (edited back to {_kv(c.base)})" if c.is_config
-                   else f"  no change: {c.sid} {c.column} (edited back to {_v(c.base)})")
+                   else f"  no change: {tag(c.sid)}{c.sid} {c.column} (edited back to {_v(c.base)})")
     return out
 
 
@@ -320,7 +332,9 @@ def pull(course: Path, root: Path, yes: bool = False, semester: str | None = Non
 
     changes = net_changes(lines)
     classify(course, changes)
-    for text in preview(changes):
+    from src.sections import roster_sections, tagger
+    secmap = roster_sections(course)
+    for text in preview(changes, secmap):
         print(text)
     applies = [c for c in changes if c.result == "apply"]
     only_done = all(c.result == "already applied" for c in changes)
@@ -346,7 +360,7 @@ def pull(course: Path, root: Path, yes: bool = False, semester: str | None = Non
         for k in r["conflicts"]:  # grade-tui saved one of these cells after the preview read it
             c = next(c for c in cells if c.sid == str(k["student_id"]).strip() and c.column == k["column"])
             c.result, c.mac = "conflict", k["disk_value"] or ""
-            print(conflict_line(c))
+            print(conflict_line(c, tagger(secmap)))
     if parts:
         cfg = config_file(course)
         e.capture(cfg)

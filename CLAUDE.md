@@ -56,6 +56,13 @@ The config's points are loaded first and a header's `(Npts)` overrides them. A c
 (`category_default`, `header_for`) lives in `src/points.py`, and `src/sync.py:mapping()` returns resolved points.
 exam_projects has a copy (INTEGRATION.md "Default points"). See SPEC_default_points.md.
 
+### Sections (src/sections.py, SPEC_sections.md)
+One folder can hold several sections of a course. The roster's `Section` column is the source of truth
+(`roster_sections`); a course "has sections" only when it names ≥2, and only then do grade-tui (`n`), grade_web (chips),
+exports (`_sec<N>` files) and CLI lines (`[51]`) change. config.yaml's `sections:` holds each section's schedule;
+the top-level `sec_num`/`class_schedule`/`exam_schedule` stay the first section's. The attendance xlsx has a read-only
+`Sec` column (`attendance.SEC`), which is never a session and never in the csv.
+
 ### Grade calculation (calculators.py)
 1. Each category's raw scores are summed and divided by the possible max (respecting `drop_lowest_homework` rule if set) to produce a percentage.
 2. The percentage is multiplied by the category weight × 100 to get weighted points.

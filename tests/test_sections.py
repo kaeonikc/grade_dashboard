@@ -322,3 +322,75 @@ def test_one_section_course_data_has_no_sections(here):
     grader.update_course(config_file=str(next((c / "course_info").glob("*_config.yaml"))), yes=True)
     d = tui_api.get_course_data(str(c))
     assert d["sections"] == [] and d["by_section"] == {} and "Section" not in d["student_grades"][0]
+
+
+# ---- exports ----------------------------------------------------------------------------------------------------
+def test_export_writes_the_course_and_each_section(here):
+    from src import tui_api
+    c = two_section_course(here)
+    assert tui_api.run_export(str(c))["status"] == "success"
+    p = "2026_S2_Astro_SEC_51-52"
+    rep = c / "reports"
+    both = list(csv.DictReader(io.StringIO((rep / f"{p}_final_grades.csv").read_text(encoding="utf-8"))))
+    assert list(both[0])[:3] == ["Student ID", "Name", "Section"] and len(both) == 5
+    for sec, n in (("51", 2), ("52", 3)):
+        rows = list(csv.DictReader(io.StringIO((rep / f"{p}_final_grades_sec{sec}.csv").read_text(encoding="utf-8"))))
+        assert len(rows) == n and {r["Section"] for r in rows} == {sec}
+        copy = (rep / f"{p}_copy_friendly_scores_sec{sec}.csv").read_text(encoding="utf-8").splitlines()
+        assert len(copy) == n + 1
+
+
+def test_export_of_a_one_section_course_is_as_before(here):
+    from src import tui_api
+    c = one_section_course(here)
+    grader.update_course(config_file=str(next((c / "course_info").glob("*_config.yaml"))), yes=True)
+    assert tui_api.run_export(str(c))["status"] == "success"
+    names = sorted(f.name for f in (c / "reports").iterdir())
+    assert names == ["2026_S2_Astro51_SEC_51_copy_friendly_scores.csv", "2026_S2_Astro51_SEC_51_final_grades.csv"]
+    head = (c / "reports" / names[1]).read_text(encoding="utf-8").splitlines()[0]
+    assert "Section" not in head
+
+
+# ---- CLI output names sections ----------------------------------------------------------------------------------
+def test_web_push_counts_students_per_section(here, drive_root, capsys):
+    from src import webpush
+    c = two_section_course(here)
+    capsys.readouterr()
+    webpush.push(c, drive_root)
+    assert "5 students (sec 51: 2 · sec 52: 3)" in capsys.readouterr().out
+
+
+def test_web_pull_preview_tags_students_and_orders_by_section():
+    from src.webpull import Change, preview
+    def cell(sid, col, mac, val):
+        c = Change([{"kind": "cell", "student_id": sid, "column": col, "original": mac, "value": val}])
+        c.result, c.mac = "apply", mac
+        return c
+    changes = [cell("3", "hw1", "1", "2"), cell("1", "hw1", "", "5"), cell("2", "hw1", "4", "6")]
+    out = preview(changes, {"1": "52", "2": "51", "3": "51"})
+    lines = [l for l in out if " hw1: " in l]
+    assert lines == ["  [51] 2 hw1: 4 → 6", "  [51] 3 hw1: 1 → 2", "  [52] 1 hw1: (blank) → 5"]
+    one = [l for l in preview(changes, {"1": "51", "2": "51", "3": "51"}) if " hw1: " in l]
+    assert one[0] == "  3 hw1: 1 → 2", "one section: no tags, journal order"
+
+
+def test_sync_preview_tags_attendance_lines(here):
+    c = two_section_course(here)
+    csv_path = next((c / "data").glob("*_attendance.csv"))
+    text = csv_path.read_text(encoding="utf-8").splitlines()
+    head = text[0].split(",")
+    row = text[1].split(",")
+    row[head.index("a1")] = "P"
+    text[1] = ",".join(row)
+    csv_path.write_text("\n".join(text) + "\n", encoding="utf-8")
+    lines = attendance.describe(attendance.plan(c))
+    assert any(l.strip().startswith(f"[51] {row[0]} a1") for l in lines), lines
+
+
+def test_mock_course_has_two_sections(here):
+    grader.mock_course()
+    c = here / "courses" / "0_GenPhysMock"
+    assert course_sections(c) == ["51", "52"]
+    assert counts(roster_sections(c)) == "sec 51: 16 · sec 52: 14"
+    assert list(config(c)["sections"]) == ["51", "52"]
+    assert xlsx_rows(c)[0][:3] == ["Student ID", "Name", "Sec"]

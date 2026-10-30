@@ -128,6 +128,32 @@ working as they are: every tool takes the prefix from `course_info/<prefix>_conf
 `course_info/<prefix>_student_info.csv`. Change it only with `grader update -i` (see
 [section 12](#12-changes-during-the-semester)). Don't edit it by hand.
 
+### A course with several sections
+
+When you teach one course to two (or more) sections, keep them in **one folder**: one roster, one set of score files,
+one grading scheme. The university gives one class list per section, and grader reads each one's `Sec`.
+
+```bash
+grader init -i repclasslist_Astro51.xls -i repclasslist_Astro52.xls     # a new course: 2026_S2_Astro_SEC_51-52/
+grader update -i repclasslist_Astro52.xls                               # or add sec 52 to an existing course
+```
+
+- The abbreviation comes from the file names with the section digits dropped (`Astro51` + `Astro52` → `Astro`), or
+  from `--abbr`.
+- `grader update -i` with a section the course doesn't have yet asks `Add section 52 (27 students) to this course?
+  [y/N]` (`-y` answers yes). It renames nothing: a course started as `2026_S2_Astro51_SEC_51/` keeps that name, and
+  you can rename the folder by hand. Then run `grader update` (no `-i`) to give the new students rows in the score
+  files. One `grader undo` reverses the whole update.
+- The roster gets a `Section` column, and `config.yaml` a `sections:` list with each section's class time. The
+  top-level `sec_num`, `class_schedule` and `exam_schedule` are the first section's, and the attendance dates come
+  from them, so every section shares the same session columns.
+- The attendance xlsx gets a `Sec` column after `Name` for sorting and filtering in Excel. grader fills it from the
+  roster, so don't edit it. The attendance csv has no `Sec` column.
+- A student found in another section's class list moves to that section (grader says so).
+- grade-tui and grade_web show **All | 51 | 52** above the data. `n` in grade-tui (the chips in grade_web) shows one
+  section: its rows, statistics, grade distribution and Fill Column only. In All, each section has its own colour.
+  Exports write the whole course and one file per section ([section 10](#10-submitting-grades)).
+
 Without a class list you can run `grader init --course_name "General Relativity" --term 2026_S2 --course_id PHYS4101`.
 This gives an empty roster that you fill in yourself. The folder is `2026_S2_<ABBR>/` (add `--abbr GR`, or
 answer the question).
@@ -420,6 +446,7 @@ settled by `grader sync`).
 | `s` | dashboard | hide / show the left panels on every tab, giving the table the full width |
 | `w` / `b` | dashboard | edit weights / grade boundaries (saved to config.yaml) |
 | `e` | dashboard | export the reports (see [section 10](#10-submitting-grades)) |
+| `n` | dashboard, course with sections | show All → sec 51 → sec 52 → All (tables, stats and Fill Column follow) |
 | `Esc` | dashboard | back to the course list |
 | `q` / `Ctrl-C` | not while editing | quit (asks Save / Discard first when changes are unsaved) |
 
@@ -458,6 +485,9 @@ when a total actually changed, and only the total cells. Every write it makes, e
      the exams where the student has `ขส`.
    - `<prefix>_copy_friendly_scores.csv`: `Student ID | Cumulative | Midterm | Final` blocks separated by blank
      columns, ready to copy and paste into the university system.
+   - A course with several sections also gets `<prefix>_final_grades_sec51.csv`, `<prefix>_copy_friendly_scores_sec51.csv`
+     and so on, one pair per section (the university takes grades per section), and a `Section` column in
+     `final_grades.csv`.
 3. Paste the blocks into the university system. Use the `absent` column to decide on special cases, such as an
    incomplete grade for a student who missed the final.
 
@@ -554,9 +584,10 @@ the same way: whichever side you edited wins. If you changed a header's points b
 | Command | Does |
 |---|---|
 | `grader init -i <class list.xls> [--abbr ABBR]` | create a course folder from the class list, named `<term>_<ABBR>_SEC_<n>` |
+| `grader init -i <sec 51.xls> -i <sec 52.xls>` | one course folder for several sections, `<term>_<ABBR>_SEC_51-52` |
 | `grader init --course_name N --term 2026_S1 --course_id C` | create one without a class list |
 | `grader mkdb [config.yaml]` | create the missing score files from `data_mapping` |
-| `grader update -i <class list.xls>` | merge a newer class list into the roster |
+| `grader update -i <class list.xls> [-y]` | merge a newer class list into the roster; another section's list adds that section (asks; `-y` says yes) |
 | `grader update [config.yaml] [--purge-empty-orphans] [--yes]` | align the score files with the config |
 | `grader sync [--course DIR] [--yes]` | after editing CSVs or the attendance sheet by hand: refresh totals, add your new columns to the config, sync the attendance xlsx ↔ csv (asks) |
 | `grader history [--course DIR] [-n N]` | list saved versions |

@@ -13,7 +13,7 @@ a section, so it can't stand in for one.
 A side bug: `รหัสวิชา  SC 2202  ดาราศาสตร์และอวกาศ` is parsed as `course_id: SC`, `course_name: 2202 ดาราศาสตร์…`.
 
 Goal: one course folder holds every section. The roster records each student's section. grade-tui, grade_web and the
-Streamlit dashboard get an **All | 51 | 52** selector that filters everything. Exports are written per section, and
+`grader dashboard` get an **All | 51 | 52** selector that filters everything. Exports are written per section, and
 CLI output names sections.
 
 ## Decisions (from the interview)
@@ -27,7 +27,7 @@ CLI output names sections.
 | D5 | **Attendance: one sheet, shared session columns** (meeting N is the same date for every section; Astro meets on Fridays). Header dates come from the first section's schedule, as today. |
 | D6 | **Section lives in the roster**, plus a read-only `Sec` column after `Name` in the **attendance xlsx** (for sorting and filtering in Excel). Score CSVs and the attendance csv are unchanged, and every app joins the section from the roster. |
 | D7 | **Exports:** the combined file (with a `Section` column) **plus** one file per section: `…_final_grades_sec51.csv`, `…_copy_friendly_scores_sec51.csv`, and so on. |
-| D8 | **In scope extras:** sections shown in CLI output; a Streamlit selector; `grader mock` with 2 sections; fixing the `SC 2202` parse. |
+| D8 | **In scope extras:** sections shown in CLI output; a section choice in `grader dashboard`; `grader mock` with 2 sections; fixing the `SC 2202` parse. |
 
 ## Data model
 
@@ -93,18 +93,23 @@ its position in that order.
 
 ### grade-tui (`rust_tui/`) and its bridge (`src/tui_api.py`)
 - `get_course_data(course_path, use_weighted)` adds `sections: ["51","52"]` and `record["Section"]` per student
-  (alongside `_class_groups`, read from the same roster), plus `analytics_by_section: {"all": …, "51": …, "52": …}`,
-  so switching costs no round trip.
-- **Selector bar** is one line between the tab row and the panel, on every tab: `Sec: ▸All  51  52`. Key **`e`**
-  cycles All → 51 → 52 → All (`e` is unused; `s` is taken). Hidden for <2 sections.
-- Filtered by the selection: Summary, Raw Details, Analytics (from `analytics_by_section`), Roundup, the attendance
+  (alongside `_class_groups`, read from the same roster), plus `by_section: {"51": {grade_distribution,
+  roundup_summary, analytics}, …}` (raw_index into the whole course), so switching costs no round trip.
+- grade-tui keeps the whole course in `App.full_data`; `course_data` is the shown view (`only_section`, raw_index
+  renumbered), so every tab, the cursor and Fill Column work on the shown rows unchanged. Edits are keyed by student
+  ID, so they survive switching.
+- **Selector bar** is one line between the tab row and the panel, on every tab: `Sec: ▸All  51 (28)  52 (27)  28 of
+  55 students · n next section`. Key **`n`** cycles All → 51 → 52 → All (`e` exports and `s` hides the panel; `n` was
+  free). Hidden for <2 sections; `[n] Next Section` joins the footer only then.
+- Filtered by the selection: Summary, Raw Details, Analytics (from `by_section`), Roundup, the attendance
   grid, and the counts in titles (`Students: 28 of 55`).
-- **Bulk edits respect the selector.** Fill/clear "all rows" or "empty rows" act on the visible section only, and the
-  confirm line says `sec 51: 28 rows`.
-- **All view colours**: a `Sec` column after Name, its cell a chip in the section colour (bg), a `▌` row marker in
-  that colour, and ID/Name text tinted with it. Theme key `sections: [81, 221, 141, 114]` (cycled) is added to
+- **Bulk edits respect the selector.** Fill/clear "all rows" or "empty rows" act on the visible section only; the
+  dialog reads `All 18 in sec 52` and the result `Filled hw3 = 4 for 18 students in sec 52`.
+- **All view colours** (no extra column, so the width maths stays as it is): a `▌` row marker in the section colour,
+  the ID cell as a chip (section colour background), and the name in that colour, on Summary, For Submission and
+  Raw Details. Theme key `sections: [81, 221, 141, 114]` (cycled) is added to
   `style.rs` defaults and `theme.json.example`.
-- Export (TUI `x`/existing key) writes the D7 files whatever the selection.
+- Export (`e`) writes the D7 files whatever the selection, and its message names the per-section files.
 - The choice is remembered per course for the session (kept in `App`, keyed by course path).
 
 ### grade_web (`web/apps_script/`)
@@ -118,14 +123,14 @@ its position in that order.
 - Remembered per course in `localStorage` (try/catch; falls back to All).
 - Edits made while a section is selected only touch visible rows (bulk fill, same as the TUI).
 
-### Streamlit dashboard (`src/dashboard.py`)
-A sidebar radio `Section: All / 51 / 52` (only for ≥2 sections) filters its tables and charts, and adds a `Section`
-column in All. Export writes the D7 files.
+### `grader dashboard` (`src/dashboard.py`)
+It's a rich console app (not Streamlit). For ≥2 sections it prints the counts and asks `Show section [all/51/52]`
+(default all); the metrics, roundup, table and distribution then cover that section. Export writes the D7 files.
 
 ### Exports (one shared helper)
-New `src/reports.py:write_reports(course_dir, final_df, copy_df, sections)` is used by `dashboard.py` (~L272–294)
-and `tui_api.run_export`. It writes the combined files (with `Section`) and `_sec<N>` files per section, in roster order.
-Single-section courses write exactly today's files.
+`src/dashboard.py:export_reports`, already shared by `grader dashboard` and `tui_api.run_export`, writes the combined
+files (with `Section` after Name) and `_sec<N>` files per section, in roster order. Single-section courses write
+exactly today's files.
 
 ### CLI output
 - `grader web-push`: `55 students (sec 51: 28 · sec 52: 27)` in its summary.
@@ -161,18 +166,21 @@ Python (`python -m pytest tests/`):
   course; update adding a section with y / N / `-y` / no-tty refusal; filling the old roster's Section from
   `sec_num`; a moved student; refusing a foreign file inside a course folder; matching the old broken course_id; a
   re-update of sec 51 leaving `sections['52']` intact; the `SC 2202` and `PHYS1120` parses.
-- `test_attendance.py`: the xlsx has `Sec`, the csv doesn't; the sync round trip; `align_rows` after adding a section
-  keeps marks; a TUI attendance edit lands in the right cell with `Sec` present.
-- `test_serve.py` / tui_api: `sections`, `Section` per record, `analytics_by_section` counts.
+- Attendance (in `test_sections.py`): the xlsx has `Sec`, the csv doesn't; the sync round trip; adding a section
+  keeps marks and leaves nothing to sync.
+- tui_api (in `test_sections.py`): `sections`, `Section` per record, `by_section` counts, raw_index stays a
+  whole-course row.
 - `test_web_push.py`/`test_web_pull.py`: the per-section count line and the `[51]` prefixes.
 - Exports: combined + `_sec51`/`_sec52` files, and single-section output byte-identical to before.
 - `test_completion.py`: repeated `-i`. INTEGRATION copy test still green.
 
-Rust (`cd rust_tui && cargo test`): the selector cycles and hides for <2 sections; the filter applies on every tab;
-bulk fill touches only the visible section; analytics switch to `analytics_by_section`.
+Rust (`cd rust_tui && cargo test`): the selector cycles and hides for <2 sections; the choice survives a reload;
+bulk fill touches only the visible section; a section's analytics have raw_index renumbered; the bar renders.
+`tests/test_web_hygiene.py`'s approved grade-tui file list gains style.rs, types.rs and ui.rs.
 
-Web (`web/tests`, node): `sections.test.js`: roster parsing, chip filtering of rows, attendance grid and stats,
-search AND selector, localStorage fallback; goldens updated for the new chip row.
+Web (`node --test 'web/tests/*.test.js'`): `sections.test.js` (roster parsing, the selector filtering rows, grades,
+stats and Fill, memory per course, blocked storage) and `style.test.js` (section colours 4.5:1 in light and dark).
+Goldens are unchanged (`python3 web/tools/make_golden.py --check`).
 
 ## Delivery
 New branch `sections` off `tab-completion`. Local commits per area: data model/CLI + parse fix, attendance,
@@ -195,6 +203,6 @@ In the scratchpad, never in `~/cmru/teachings`:
    writes `_sec51`/`_sec52` files.
 5. `grader web-push --drive-root <scratch>/drive` prints the per-section count. Editing one sec-52 cell in the pushed
    CSV, then `grader web-pull --drive-root <scratch>/drive`, shows that line with `[52]`.
-6. `grader mock`, then `grader dashboard`: the sidebar section radio filters tables and charts.
+6. `grader mock`, then `grader dashboard`: the section question filters the tables and distribution.
 7. grade_web, after you `clasp push`: open the Astro copy on a phone. The chips appear, filter, are remembered after
    reload, and the colours read well in light and dark.

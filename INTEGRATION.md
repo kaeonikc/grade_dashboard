@@ -21,14 +21,20 @@ category's default has a bare header (`4`, not `4 (10pts)`). See "Points" below.
 
 | Thing | Owner | exam may |
 |---|---|---|
-| Course folder `<term>_<abbr>_SEC_<n>/` (from 2026-10-20; `<abbr>` from `--abbr` or `repclasslist_<abbr>.xls`), older ones `<term>_<name>[_SEC_<n>]_grading/`. `<prefix>` is the stem of `course_info/<prefix>_config.yaml`, never derived from the folder name | grade_dashboard (`grader init`) | read it |
-| Roster `course_info/<prefix>_student_info.csv` (`Student ID,Name,Class Group`) | grade_dashboard (`grader init/update -i repclasslist.xls`) | read it; never write it |
+| Course folder `<term>_<abbr>_SEC_<n>/` (from 2026-10-20; `<abbr>` from `--abbr` or `repclasslist_<abbr>.xls`), `<term>_<abbr>_SEC_51-52/` for several sections, older ones `<term>_<name>[_SEC_<n>]_grading/`. `<prefix>` is the stem of `course_info/<prefix>_config.yaml`, never derived from the folder name | grade_dashboard (`grader init`) | read it |
+| Roster `course_info/<prefix>_student_info.csv` (`Student ID,Name,Class Group[,Section]`) | grade_dashboard (`grader init/update -i repclasslist.xls`) | read it by column name; never write it |
 | Config `course_info/<prefix>_config.yaml` (`data_mapping`, `weights`, …) | grade_dashboard (you, `grader sync`) | read it; **never write it** |
 | Score files `data/<prefix>_<category>.csv` | grade_dashboard (`grader mkdb/update`) | change the cells of its mapped columns; **add** its own missing part columns; fix their header points; recompute that file's `total` |
 | Attendance `data/<prefix>_attendance.xlsx/.csv` | grade_dashboard (`grader sync` keeps the two in step; the score-total rule doesn't apply) | never touch them |
 | Exam folder, `grading/results.csv` | exam_projects | — (grade_dashboard doesn't read them) |
 
 exam never adds or removes rows, never changes columns other than its own, and never writes `ขส` over a score.
+
+**Several sections in one folder** (from 2026-10-30, grade_dashboard `SPEC_sections.md`): a course taught to two or more
+sections can be one folder. Its roster then has a `Section` column (`51`, `52`), and its config lists them under
+`sections:`, with `sec_num` the first one. Score files are shared, one row per student whatever the section, so an
+exam for all sections links to that one folder. A `course_id` keeps the class list's spelling, which may have a space
+(`SC 2202`).
 A roster student without a row in the data CSV is reported ("run `grader update`") and skipped.
 
 ## Finding the course from an exam

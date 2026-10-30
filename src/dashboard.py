@@ -269,7 +269,18 @@ def export_reports(final_df: pd.DataFrame, course_path: Path, config: dict, max_
     if absent_by_sid and "Student ID" in display_df.columns:
         display_df["absent"] = display_df["Student ID"].astype(str).map(
             lambda sid: ", ".join(absent_by_sid.get(sid, [])))
+
+    # A course with several sections (SPEC_sections.md): a Section column, and one more file per section
+    from src.sections import roster_sections, sections_of
+    secmap = roster_sections(course_path)
+    sections = sections_of(secmap) if len(sections_of(secmap)) >= 2 else []
+    sec_of = final_df["Student ID"].astype(str).str.strip().map(lambda sid: secmap.get(sid, ""))
+    if sections:
+        at = list(display_df.columns).index("Name") + 1 if "Name" in display_df.columns else 1
+        display_df.insert(at, "Section", sec_of.values)
     display_df.to_csv(report_dir / f"{prefix}_final_grades.csv", index=False)
+    for sec in sections:
+        display_df[(sec_of == sec).values].to_csv(report_dir / f"{prefix}_final_grades_sec{sec}.csv", index=False)
 
     # Mirrors rust_tui's "For Submission" tab (tab [1]): Cumulative Scores / Midterm / Final
     # blocks in that fixed order, each with its own ID column, separated by a blank spacer.
@@ -292,6 +303,9 @@ def export_reports(final_df: pd.DataFrame, course_path: Path, config: dict, max_
             copy_parts.append(part)
         copy_df = pd.concat(copy_parts, axis=1)
         copy_df.to_csv(report_dir / f"{prefix}_copy_friendly_scores.csv", index=False)
+        for sec in sections:
+            copy_df[(sec_of == sec).values].to_csv(report_dir / f"{prefix}_copy_friendly_scores_sec{sec}.csv",
+                                                   index=False)
 
     return report_dir
 
@@ -337,17 +351,29 @@ def run() -> None:
             # Automatically calculate and write totals back to the raw CSV database files
             update_database_totals(course_path, final_df, config.get("data_mapping", {}), max_scores)
 
+            # Several sections (SPEC_sections.md): show all of them or one; the export always writes every file
+            from src.sections import counts, roster_sections, sections_of
+            secmap = roster_sections(course_path)
+            sections = sections_of(secmap) if len(sections_of(secmap)) >= 2 else []
+            shown_df, title = final_df, ""
+            if sections:
+                console.print(f"Sections: {counts(secmap)}")
+                pick = Prompt.ask("Show section", choices=["all"] + sections, default="all")
+                if pick != "all":
+                    mask = final_df["Student ID"].astype(str).str.strip().map(lambda sid: secmap.get(sid) == pick)
+                    shown_df, title = final_df[mask.values], f" — sec {pick}"
+
             console.print()
-            console.print(Rule(f"[bold]{config.get('course_name', course_name)} — {config.get('term', '')}[/bold]"))
+            console.print(Rule(f"[bold]{config.get('course_name', course_name)} — {config.get('term', '')}{title}[/bold]"))
             console.print()
 
-            show_metrics(final_df)
+            show_metrics(shown_df)
             console.print()
-            show_roundup_summary(final_df, config)
+            show_roundup_summary(shown_df, config)
             console.print()
-            show_student_table(final_df, max_scores, config, use_weighted)
+            show_student_table(shown_df, max_scores, config, use_weighted)
             console.print()
-            show_grade_distribution(final_df, config)
+            show_grade_distribution(shown_df, config)
 
             if Confirm.ask("Export final report to CSV?", default=False):
                 report_dir = export_reports(final_df, course_path, config, max_scores, use_weighted)

@@ -789,7 +789,9 @@ def in_sync_fast(course) -> bool:
 
 
 def describe(p: AttPlan) -> list[str]:
-    """Human-readable lines for the preview."""
+    """Human-readable lines for the preview; a student's line starts with [51] in a course with sections."""
+    from src.sections import roster_sections, tagger
+    tag = tagger(roster_sections(p.course))
     out = []
     if p.C is None:
         out.append(f"{p.csv.name} doesn't exist yet: made from {p.xlsx.name}")
@@ -805,13 +807,13 @@ def describe(p: AttPlan) -> list[str]:
         out.append(f"  + session '{s}': added in the {where} → add to the {'csv' if where == 'xlsx' else 'xlsx'}")
     for sid, f, x, c, to in p.copies:
         new, old = (x, c) if to == "csv" else (c, x)
-        out.append(f"  {sid} {f}: {old or '—'} → {new or '—'} in the {to}")
+        out.append(f"  {tag(sid)}{sid} {f}: {old or '—'} → {new or '—'} in the {to}")
     for sid, to in p.rows_added:
-        out.append(f"  + row {sid}: on the roster, missing from the {to if to != 'both' else 'xlsx and csv'}")
+        out.append(f"  + row {tag(sid)}{sid}: on the roster, missing from the {to if to != 'both' else 'xlsx and csv'}")
     for sid, name, where in p.orphans:
-        out.append(f"  ⚠️  {sid} {name}: {where} (left as it is; `grader update` handles the roster)")
+        out.append(f"  ⚠️  {tag(sid)}{sid} {name}: {where} (left as it is; `grader update` handles the roster)")
     for sid, f, x, c, b in p.conflicts:
-        out.append(f"  ≠ {sid} {f}: xlsx {x or '—'}, csv {c or '—'} (last sync {b or '—'})")
+        out.append(f"  ≠ {tag(sid)}{sid} {f}: xlsx {x or '—'}, csv {c or '—'} (last sync {b or '—'})")
     if p.stale_total:
         out.append(f"  total column out of date in: {', '.join(p.stale_total)}")
     return out

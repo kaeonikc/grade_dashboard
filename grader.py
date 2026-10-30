@@ -1740,13 +1740,15 @@ def _attendance_questions(att, yes: bool):
         if ans not in ("y", "yes"):
             d.keep.add(r.session)
             print(f"  ↩️  '{r.session}' kept: put back into the {r.deleted_in}")
+    from src.sections import roster_sections, tagger
+    tag = tagger(roster_sections(att.course))
     for sid, f, x, c, b in att.conflicts:
-        ans = "s" if yes else _ask(f"  {sid} {f}: xlsx {x or '—'} / csv {c or '—'}. Keep the xlsx's [x] / the csv's [c] "
+        ans = "s" if yes else _ask(f"  {tag(sid)}{sid} {f}: xlsx {x or '—'} / csv {c or '—'}. Keep the xlsx's [x] / the csv's [c] "
                                    f"/ skip [s]?", "s").lower()
         if ans.startswith(("x", "c")):
             d.choose[(sid, f)] = ans[0]
         else:
-            print(f"  ⏭  {sid} {f}: left different (asked again next time)")
+            print(f"  ⏭  {tag(sid)}{sid} {f}: left different (asked again next time)")
     if att.empty_past:
         print(f"  Sessions before today with no mark for anyone: {', '.join(att.empty_past)}")
         ans = "n" if yes else _ask("  Remove them from both files (the attendance maximum drops to the sessions "
@@ -1871,7 +1873,7 @@ def mock_course():
     config_path.write_text("""course_id: "MOCK"
 course_name: "ฟิสิกส์ทั่วไป (ข้อมูลจำลอง)"
 term: "0"
-sec_num: "00"
+sec_num: "51"
 teacher: "อาจารย์ตัวอย่าง"
 credits: "3(3-0-6)"
 university: "มหาวิทยาลัยตัวอย่าง"
@@ -1882,6 +1884,13 @@ class_schedule:
   time: "09:00-12:00"
   classroom: "MOCK-101"
 exam_schedule: "M 15 Mar 2027 09:00-11:00, F 17 May 2027 09:00-12:00"
+sections:
+  "51":
+    class_schedule: {day: "พ.", time: "09:00-12:00", classroom: "MOCK-101"}
+    exam_schedule: "M 15 Mar 2027 09:00-11:00, F 17 May 2027 09:00-12:00"
+  "52":
+    class_schedule: {day: "พ.", time: "13:00-16:00", classroom: "MOCK-101"}
+    exam_schedule: "M 15 Mar 2027 09:00-11:00, F 17 May 2027 09:00-12:00"
 term_start_date: "2027-01-11"
 
 weights:
@@ -1926,12 +1935,15 @@ grade_boundaries:
     num_sessions = 15
     student_names = name_pool[:num_students]
     student_ids = [f"69200{i + 1:03d}" for i in range(num_students)]
-    class_groups = ["MOCK.SEC.1" if i % 2 == 0 else "MOCK.SEC.2" for i in range(num_students)]
+    # Two sections (SPEC_sections.md): 16 students in 51, 14 in 52; the cohorts (หมู่เรียน) cut across them
+    class_groups = ["ว 69.ค.บ.4.1" if i % 2 == 0 else "ว 69.ค.บ.4.2" for i in range(num_students)]
+    sections = ["51" if i < 16 else "52" for i in range(num_students)]
 
     student_registry = pd.DataFrame({
         "Student ID": student_ids,
         "Name": student_names,
         "Class Group": class_groups,
+        "Section": sections,
     })
     student_registry.to_csv(course_info_dir / f"{mock_term}_{name_for_path}_student_info.csv", index=False)
 

@@ -250,8 +250,11 @@ def push(course: Path, root: Path, force: bool = False, semester: str | None = N
         arch = webdrive.write_archive(mirror, header, [{**l, "result": "discarded"} for l in waiting], "_discarded")
         print(f"⚠️  {len(waiting)} web edits not pulled are dropped from this push. They are kept in")
         print(f"    {webdrive.ARCHIVE}/{arch.name}")
-    print(f"   {course_json['course_name']} ({course_json['course_id']}, {course_json['term']}) · {len(ids)} students · "
-          f"{len(course_json['columns'])} counted columns")
+    from src.sections import counts, roster_sections, sections_of
+    secmap = roster_sections(course)
+    by_sec = f" ({counts(secmap)})" if len(sections_of(secmap)) >= 2 else ""
+    print(f"   {course_json['course_name']} ({course_json['course_id']}, {course_json['term']}) · {len(ids)} students"
+          f"{by_sec} · {len(course_json['columns'])} counted columns")
     if earlier and earlier.get("pushed_at"):
         print(f"   Replacing the copy pushed {fmt_time(earlier['pushed_at'])}.")
 

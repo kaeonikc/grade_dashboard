@@ -1150,7 +1150,10 @@ def run_export(course_path, use_weighted=True):
         raw_df, max_scores = load_course_data(path)
         final_df = calculate_final_grades(raw_df, config, max_scores, use_weighted)
         export_reports(final_df, path, config, max_scores, use_weighted)
-        return {"status": "success", "message": f"Reports successfully exported to {path}/reports/"}
+        from src.sections import course_sections
+        secs = course_sections(path)
+        each = f" (all students, and one file per section: {', '.join(secs)})" if len(secs) >= 2 else ""
+        return {"status": "success", "message": f"Reports successfully exported to {path}/reports/{each}"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
