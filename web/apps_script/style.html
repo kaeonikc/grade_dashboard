@@ -510,4 +510,12 @@
   .sec-row .name, .sec-row .c-name, .sec-row .c-name .link { color: var(--sec); }
   .tb tr.sec-row td.c-id { color: var(--sec); font-weight: 600;
     background: linear-gradient(to right, var(--sec) 4px, var(--sec-tint) 4px); }
+  /* R5: in All, a heading above each section's block (`Sec 51 · 28 students`); its text stays in view when the
+     table scrolls sideways. */
+  .sec-head { color: var(--sec, var(--muted)); font-weight: 700; }
+  .sec-head[hidden] { display: none; }
+  li.sec-head { list-style: none; padding: 0.75rem 0.5rem 0.25rem; border-bottom: 2px solid var(--sec, var(--line)); }
+  .tb tr.sec-head th { text-align: left; padding: 0.5rem 0.25rem 0.25rem; background: var(--bg);
+    border-bottom: 2px solid var(--sec, var(--line)); }
+  .tb tr.sec-head th span { position: sticky; left: 0.25rem; }
 </style>

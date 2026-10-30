@@ -179,7 +179,25 @@ def _print_wide(renderable) -> None:
         console.print(renderable)
 
 
-def show_student_table(final_df: pd.DataFrame, max_scores: dict, config: dict, use_weighted: bool) -> None:
+def _add_rows(tbl: Table, df: pd.DataFrame, cols: list, secmap: dict | None) -> None:
+    """The rows; with `secmap` (All, ≥2 sections) in section blocks, each under a 'Sec 51 · 28 students' line."""
+    if not secmap:
+        for _, row in df[cols].iterrows():
+            tbl.add_row(*[_fmt(v) for v in row])
+        return
+    from src.sections import block_title, blocks
+    df = _grouped(df, secmap)
+    by_id = {str(sid): i for i, sid in enumerate(df["Student ID"].astype(str))}
+    for n, (sec, ids) in enumerate(blocks(list(by_id), secmap)):
+        if n:
+            tbl.add_section()
+        tbl.add_row(f"[bold]── {block_title(sec, len(ids))} ──[/bold]", *[""] * (len(cols) - 1), end_section=True)
+        for sid in ids:
+            tbl.add_row(*[_fmt(v) for v in df[cols].iloc[by_id[sid]]])
+
+
+def show_student_table(final_df: pd.DataFrame, max_scores: dict, config: dict, use_weighted: bool,
+                       secmap: dict | None = None) -> None:
     rename = _col_headers(final_df, max_scores, config, use_weighted)
 
     data_mapping = config.get("data_mapping", {})
@@ -192,8 +210,7 @@ def show_student_table(final_df: pd.DataFrame, max_scores: dict, config: dict, u
     summary_tbl = Table(box=_DIVIDER_BOX, show_header=True, title="[bold]Student Grades — Summary[/bold]")
     for col in summary_cols:
         summary_tbl.add_column(rename.get(col, col))
-    for _, row in final_df[summary_cols].iterrows():
-        summary_tbl.add_row(*[_fmt(v) for v in row])
+    _add_rows(summary_tbl, final_df, summary_cols, secmap)
     console.print(summary_tbl)
 
     # Raw assignment scores — only offer if there are any mapped columns in the data
@@ -203,8 +220,7 @@ def show_student_table(final_df: pd.DataFrame, max_scores: dict, config: dict, u
         raw_tbl = Table(box=_DIVIDER_BOX, show_header=True, title="[bold]Raw Assignment Scores[/bold]")
         for col in raw_display_cols:
             raw_tbl.add_column(rename.get(col, col), no_wrap=True)
-        for _, row in final_df[raw_display_cols].iterrows():
-            raw_tbl.add_row(*[_fmt(v) for v in row])
+        _add_rows(raw_tbl, final_df, raw_display_cols, secmap)
         console.print("[dim]← → to scroll  ·  q to exit[/dim]")
         _print_wide(raw_tbl)
 
@@ -247,8 +263,25 @@ def category_totals(df: pd.DataFrame, config: dict, max_scores: dict) -> dict:
     return out
 
 
+def _grouped(final_df: pd.DataFrame, secmap: dict) -> pd.DataFrame:
+    """final_df in section blocks, then by ID (SPEC_sections.md R5); its attrs (absences) kept."""
+    from src.sections import group_order
+    key = group_order(secmap)
+    ids = final_df["Student ID"].astype(str).tolist()
+    out = final_df.iloc[sorted(range(len(ids)), key=lambda i: key(ids[i]))]
+    out.attrs = dict(final_df.attrs)
+    return out
+
+
 def export_reports(final_df: pd.DataFrame, course_path: Path, config: dict, max_scores: dict, use_weighted: bool) -> Path:
     weights = config.get("weights", {})
+    # A course with several sections (SPEC_sections.md): rows in section blocks, a Section column, and one more
+    # file per section
+    from src.sections import roster_sections, sections_of
+    secmap = roster_sections(course_path)
+    sections = sections_of(secmap) if len(sections_of(secmap)) >= 2 else []
+    if sections:
+        final_df = _grouped(final_df, secmap)
     rename = {k: v.replace("\n", " ") for k, v in _col_headers(final_df, max_scores, config, use_weighted).items()}
     display_df = final_df.rename(columns=rename)
 
@@ -270,10 +303,6 @@ def export_reports(final_df: pd.DataFrame, course_path: Path, config: dict, max_
         display_df["absent"] = display_df["Student ID"].astype(str).map(
             lambda sid: ", ".join(absent_by_sid.get(sid, [])))
 
-    # A course with several sections (SPEC_sections.md): a Section column, and one more file per section
-    from src.sections import roster_sections, sections_of
-    secmap = roster_sections(course_path)
-    sections = sections_of(secmap) if len(sections_of(secmap)) >= 2 else []
     sec_of = final_df["Student ID"].astype(str).str.strip().map(lambda sid: secmap.get(sid, ""))
     if sections:
         at = list(display_df.columns).index("Name") + 1 if "Name" in display_df.columns else 1
@@ -355,13 +384,15 @@ def run() -> None:
             from src.sections import counts, roster_sections, sections_of
             secmap = roster_sections(course_path)
             sections = sections_of(secmap) if len(sections_of(secmap)) >= 2 else []
-            shown_df, title = final_df, ""
+            shown_df, title, grouped = final_df, "", None
             if sections:
                 console.print(f"Sections: {counts(secmap)}")
                 pick = Prompt.ask("Show section", choices=["all"] + sections, default="all")
                 if pick != "all":
                     mask = final_df["Student ID"].astype(str).str.strip().map(lambda sid: secmap.get(sid) == pick)
                     shown_df, title = final_df[mask.values], f" — sec {pick}"
+                else:
+                    grouped = secmap
 
             console.print()
             console.print(Rule(f"[bold]{config.get('course_name', course_name)} — {config.get('term', '')}{title}[/bold]"))
@@ -371,7 +402,7 @@ def run() -> None:
             console.print()
             show_roundup_summary(shown_df, config)
             console.print()
-            show_student_table(shown_df, max_scores, config, use_weighted)
+            show_student_table(shown_df, max_scores, config, use_weighted, secmap=grouped)
             console.print()
             show_grade_distribution(shown_df, config)
 

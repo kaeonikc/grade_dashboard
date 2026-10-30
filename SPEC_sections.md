@@ -22,8 +22,8 @@ CLI output names sections.
 |---|---|
 | D1 | **One folder per course.** The roster gets a `Section` column. Score CSVs, weights and grade boundaries are shared. |
 | D2 | **`grader update -i <other section>.xls` adds a section after asking** `Add section 52 (27 students) to <course>? [y/N]`; `-y` skips the question. `grader init -i a.xls -i b.xls` (repeatable `-i`) makes a multi-section course in one go. |
-| D3 | **Names never change.** Adding a section renames nothing (`2026_S2_Astro51_SEC_51` keeps its name, so the Drive copy, history/ and exam `grading_dir:` links stay valid). After adding, grader prints a one-line note that you can rename the folder by hand. `init` with several files names the course `<term>_<abbr>_SEC_51-52`. |
-| D4 | **Selector All / each section**, shown only when a course has ≥2 sections. It filters rows, the attendance grid, stats, the grade distribution and bars. In **All**, each section has its own colour (Sec chip background, row marker line, ID/name text). The choice is remembered per course. |
+| D3 | *(Replaced by R2–R3 in Revision 2: `update -i` offers a rename.)* **Names never change.** Adding a section renames nothing (`2026_S2_Astro51_SEC_51` keeps its name, so the Drive copy, history/ and exam `grading_dir:` links stay valid). After adding, grader prints a one-line note that you can rename the folder by hand. `init` with several files names the course `<term>_<abbr>_SEC_51-52`. |
+| D4 | *(All view amended by R5 in Revision 2: grouped blocks with header rows.)* **Selector All / each section**, shown only when a course has ≥2 sections. It filters rows, the attendance grid, stats, the grade distribution and bars. In **All**, each section has its own colour (Sec chip background, row marker line, ID/name text). The choice is remembered per course. |
 | D5 | **Attendance: one sheet, shared session columns** (meeting N is the same date for every section; Astro meets on Fridays). Header dates come from the first section's schedule, as today. |
 | D6 | **Section lives in the roster**, plus a read-only `Sec` column after `Name` in the **attendance xlsx** (for sorting and filtering in Excel). Score CSVs and the attendance csv are unchanged, and every app joins the section from the roster. |
 | D7 | **Exports:** the combined file (with a `Section` column) **plus** one file per section: `…_final_grades_sec51.csv`, `…_copy_friendly_scores_sec51.csv`, and so on. |
@@ -206,3 +206,142 @@ In the scratchpad, never in `~/cmru/teachings`:
 6. `grader mock`, then `grader dashboard`: the section question filters the tables and distribution.
 7. grade_web, after you `clasp push`: open the Astro copy on a phone. The chips appear, filter, are remembered after
    reload, and the colours read well in light and dark.
+
+---
+
+## Revision 2 (2026-10-31): grouped, renamed, pushed
+
+Amends D3 and D4 above; everything else in revision 1 stands.
+
+### Context: why it "didn't work"
+
+The data side of revision 1 is correct. The real Astro course `~/cmru/teachings/2569-2/2026_S2_Astro51_SEC_51/` has
+55 students (sec 51: 28 · sec 52: 27), a `Section` column, `sections:` in config, `Sec` in the attendance xlsx, and all
+240 Python tests pass. What went wrong is in how it reaches you:
+
+1. **The name still says Astro51 / SEC_51.** D3 chose "never rename". That was the wrong call for a course with
+   no exam links yet.
+2. **The All view mixes the sections.** Rows are sorted by Student ID alone (`data_loader.py:324`, `grader.py:716`,
+   `:1036`), so 68161301 (51) is next to 68161302 (52). A colour marker isn't enough to separate them.
+3. **The phone had no chips and no sec 52.** grade_web hasn't been `clasp push`ed since the sections commits, and
+   the Drive copy you used at the 13:30 sec-52 class was pushed at 11:05, before sec 52 was added (15:18). It was
+   re-pushed at 15:35. Nothing reminded you to push after adding a section.
+4. **On the phone, attendance mixed both sections.** This follows from 3, and the app also has no idea which
+   section is meeting right now.
+
+### Decisions (revision-2 interview)
+
+| # | Decision |
+|---|---|
+| R1 | **Keep one folder per course** (D1 stands: shared exams, weights, boundaries, session columns). |
+| R2 | **Rename on `update -i`.** When the folder's `_SEC_` part doesn't match the roster's sections (adding sec 52, or the Astro course as it is now), `grader update -i <file>` asks `Rename 2026_S2_Astro51_SEC_51 → 2026_S2_Astro_SEC_51-52? [y/N]`. Replaces D3. |
+| R3 | **The rename covers history.** Snapshot files and `log.jsonl` paths are renamed too, and the rename is a logged change, so `grader undo` works across it and can undo it. |
+| R4 | **Ask to push.** After a section is added or the course renamed, if a Drive copy exists: `Web copy has 28 students, the course has 55. Push now? [y/N]` (the same as `grader web-push`). |
+| R5 | **The All view groups the sections.** In grade-tui, grade_web and `grader dashboard`, rows are sorted by section, then ID, and each block starts with a header line `── Sec 51 · 28 students ──`. Colours stay as a second cue. Replaces D4's "colour only". |
+| R6 | **Score CSVs stay as they are.** No sort change and no new column (homework/midterm/final/attendance csv, roster). |
+| R7 | **The phone opens on the section meeting now.** grade_web's chip defaults to the section whose `sections[N].class_schedule` covers the current time (30 min before start until the end). Outside class times it uses the last choice for that course, else All. |
+
+### Behaviour
+
+### Rename (`grader.py`, new `src/rename.py`)
+- **Target name:** `<term>_<abbr>_SEC_<secs joined by ->`. `abbr` is the current folder's abbreviation with a
+  trailing section number stripped (`Astro51` → `Astro`). It is offered only when the folder matches
+  `<term>_<abbr>_SEC_<…>` and the `_SEC_` part differs from `'-'.join(sections)`. Folders of the old style
+  (`…_grading`) and one-section courses that already match are never offered.
+- **Refuses** (and renames nothing) when the target exists, or when the Drive copy has web edits not pulled
+  (`webpull` already detects this: it says to run `grader web-pull` first).
+- **What moves:** the folder; every file whose name starts with the old prefix in `course_info/`, `data/` and
+  `reports/` (`.bak` files included); the same files inside each `history/<id>/` snapshot; the `files` paths in
+  `history/log.jsonl`; and any path inside `history/attendance_sync.json` and `config_sync.json`. The rename is
+  logged as `{"action": "rename", "from": old, "to": new}`.
+- **Drive copy:** `grade_courses/<semester>/<old>` is renamed to `<new>` in place, so Drive keeps its file IDs.
+  The push (R4) then rewrites its contents with the new prefix and removes old-prefix files. `course.json` gains
+  `renamed_from: [old]`, and grade_web's `migrateKeys` (`client_state.html:150`) moves drafts and remembered
+  choices from the old key to the new one.
+- **`grader undo`** of a rename renames everything back, Drive copy included, under the same refusal rules.
+- **After a rename** grader prints `📁 Renamed → 2026_S2_Astro_SEC_51-52 — cd ../2026_S2_Astro_SEC_51-52`
+  (your shell is still in the old path), plus `If an exam links this course (grading_dir:), run exam submit link
+  again`. No exam links Astro today.
+- **Prompt order** in `update -i`: `Add section 52 (27 students)…? [y/N]` → `Rename …? [y/N]` → `Push now? [y/N]`.
+  `-y` answers yes to all three. Without a terminal and without `-y`, grader refuses with the `-y` hint, as today.
+  `init -i a -i b` already names the folder `…_SEC_51-52` and is unchanged.
+
+### Grouping (R5)
+- **Shared order:** a `src/sections.py:group_order(secmap)` key (section in numeric order, blank last, then ID),
+  used by everything that lists students in the All view. Exports' combined file uses it too. Single-section
+  courses keep today's order and bytes.
+- **grade-tui** (`rust_tui/src/app.rs`, `ui.rs`): `section_view()` in All reorders the rows by section, then ID,
+  renumbering `raw_index` as `only_section` already does. The renderer inserts one header row before each block on
+  Summary, Raw Details, For Submission and the attendance grid. Header rows are not selectable: j/k and paging skip
+  them, scroll accounts for them, and Fill/edits never see them. One section selected (`n`) = no header rows.
+- **grade_web** (`client_views.html` `renderTable`, attendance grid): same blocks, with
+  `<tr class="sec-head">` rows. "Sort: Lowest %" sorts within each block. Search results keep their blocks.
+- **`grader dashboard`** (`src/dashboard.py`): in "all", the table prints a rule row per section.
+
+### Phone default section (R7)
+- `webpush.course_json` gains `sections: {"51": {"day": "ศ.", "time": "08:30-12:30"}, …}` from config.
+- grade_web's `pickSection(course, now, remembered)` parses Thai day abbreviations (`จ. อ. พ. พฤ. ศ. ส. อา.`) and the
+  `HH:MM-HH:MM` range in the browser's local time (Asia/Bangkok). A chip tapped by hand sticks until you leave the
+  course. An unparsable schedule is skipped, never an error.
+
+### Push prompt (R4)
+- Shown only when a Drive copy of this course exists (`webdrive.copy_paths`) and Drive for Desktop is present.
+  It compares the copy's student count with the roster. On y it runs the same code as `grader web-push`.
+
+### How you'll use it (the user guide that goes into MANUAL.md)
+1. **New multi-section course:** `grader init -i repclasslist_Astro51.xls -i repclasslist_Astro52.xls` →
+   `2026_S2_Astro_SEC_51-52/`.
+2. **Add a section later, or fix your Astro course now:** inside the course folder run
+   `grader update -i ../repclasslist_Astro52.xls`, answer y to rename and to push, then `cd` to the new name.
+3. **Scores:** CSVs as before, one file per category for all 55 students. The exam tools (`exam submit scores`) fill
+   them by Student ID, whatever the section.
+4. **Attendance:** one sheet, shared sessions a1…a15 (both sections meet Fridays). On the phone, the chip opens on the
+   section in class. In grade-tui, press `n` to show one section.
+5. **Grades:** grade-tui's All view shows both blocks. `n` → 51 for sec 51 alone, with its own stats and distribution.
+   `e` exports the combined file plus `_sec51` / `_sec52` files for submitting each section to the registrar.
+6. **Undo:** `grader history` / `grader undo` as before, the rename included.
+7. **Deploy the web part once:** `cd web && clasp push` (you do this).
+
+### Files
+`grader.py` (update flow and prompts), `src/rename.py` (new), `src/sections.py` (`group_order`, target name),
+`src/history.py` (rename entries, undo), `src/webdrive.py`/`src/webpush.py` (Drive rename, `sections`,
+`renamed_from`, removing stale files), `src/dashboard.py`, `src/tui_api.py` (grouped order for All),
+`rust_tui/src/{app,ui}.rs`, `web/apps_script/{client_state,client_views,style}.html`, `MANUAL.md`, `SPEC_sections.md`.
+
+### Out of scope
+- Any change to score CSVs or the roster file (R6).
+- Per-section weights, boundaries, columns or session dates. One attendance sheet per section.
+- Finding and rewriting exam_projects `grading_dir:` links (grader only prints the note).
+- `clasp push`, and running the rename on the real `~/cmru/teachings` course: you do both. I only work on scratch
+  copies.
+
+### Tests
+- `tests/test_rename.py` (new): target-name rules (Astro51 → Astro; matching names not offered; `_grading` not
+  offered); every prefixed file moved, `.bak` and history snapshots included; `log.jsonl` paths rewritten; undo of
+  an earlier score change after the rename restores the right new-named file; undo of the rename itself; refusal
+  when the target exists or the Drive copy has unpulled edits; prompt order with y / N / `-y` / no tty; Drive copy
+  renamed with no old-prefix files left after the push.
+- `tests/test_sections.py`: `group_order`; combined export grouped; single-section export byte-identical.
+- `tests/test_web_push.py`: `sections` and `renamed_from` in course.json; the push prompt's count line.
+- Rust (`cargo test`): header rows in the All view, the cursor skipping them, Fill touching students only, no
+  headers with a section selected or in a one-section course.
+- Web (`node --test 'web/tests/*.test.js'`): `pickSection` (in class / 30 min before / outside / bad schedule /
+  manual pick sticks); grouped table and grid; Lowest % within blocks; `migrateKeys` follows `renamed_from`.
+  Goldens unchanged for one-section courses.
+
+### End-to-end verification (scratchpad only)
+1. All three suites pass: `python -m pytest tests/`, `cd rust_tui && cargo test`, `web/scripts/e2e.sh`.
+2. Copy the real `2026_S2_Astro51_SEC_51/` and both class lists into a scratch term folder, with
+   `--drive-root <scratch>/drive` holding a pushed copy. Inside the course run
+   `grader update -i ../repclasslist_Astro52.xls`. You get no add question (52 is known), then the rename question:
+   y, then the push question: y. Check `2026_S2_Astro_SEC_51-52/` with every file renamed, history snapshots
+   renamed, the Drive copy renamed with only new-prefix files, and `course.json` holding `sections` and
+   `renamed_from`.
+3. `grader history` shows the rename. `grader undo` of the 15:29 score change restores the new-named homework
+   csv. `grader undo <rename id>` brings back `2026_S2_Astro51_SEC_51` everywhere, and redoing it works.
+4. `grade-tui` from the scratch folder: All shows `── Sec 51 · 28 students ──`, 28 rows, `── Sec 52 · 27 students ──`,
+   27 rows, and j/k never lands on a header. `n` → 51 shows 28 rows and no headers. A bulk fill in All touches all
+   55 rows. Export writes the combined (grouped) file plus `_sec51`/`_sec52`.
+5. `node` check of `pickSection` with Fri 09:00 → 51, Fri 13:15 → 52, Mon → last/All.
+6. After you `clasp push`: open the Astro copy on the phone during a class slot. It opens on that section, All shows
+   two blocks, and the colours read well in light and dark.

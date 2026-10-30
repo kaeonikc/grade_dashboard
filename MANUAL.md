@@ -140,10 +140,21 @@ grader update -i repclasslist_Astro52.xls                               # or add
 
 - The abbreviation comes from the file names with the section digits dropped (`Astro51` + `Astro52` → `Astro`), or
   from `--abbr`.
-- `grader update -i` with a section the course doesn't have yet asks `Add section 52 (27 students) to this course?
-  [y/N]` (`-y` answers yes). It renames nothing: a course started as `2026_S2_Astro51_SEC_51/` keeps that name, and
-  you can rename the folder by hand. Then run `grader update` (no `-i`) to give the new students rows in the score
-  files. One `grader undo` reverses the whole update.
+- `grader update -i` with a section the course doesn't have yet asks three things, in order (`-y` answers yes to
+  all of them; without a terminal and without `-y` it refuses to add a section):
+  1. `Add section 52 (27 students) to this course? [y/N]`
+  2. `Rename 2026_S2_Astro51_SEC_51 → 2026_S2_Astro_SEC_51-52? [y/N]`. Everything named after the course moves:
+     the folder, every `<prefix>_*` file (`.bak` files and `history/` snapshots too), the paths in `history/log.jsonl`
+     and the Drive copy. Your shell is still in the old path afterwards, so `cd ../2026_S2_Astro_SEC_51-52`. Any
+     `grader update -i` offers this rename while the name doesn't match the sections, so a course that already has
+     both sections gets it the next time you run `grader update -i ../repclasslist_Astro52.xls`. grader refuses
+     when a folder of the new name exists or the Drive copy has web edits not pulled yet (pull them first).
+  3. `The web copy has 28 students, the course has 55. Push now? [y/N]`, only when the course has a Drive copy.
+     It runs `grader web-push`, so the phone sees the new section. When the score files don't have the new
+     students yet, grader says to run `grader update` (no `-i`) first, and that asks the push question instead.
+- `grader undo` reverses the rename (the newest change after it), then the roster update. Undoing an older score
+  change after the rename restores the renamed file. If an exam links the course (`grading_dir:` in its metadata),
+  run `exam submit link` again after a rename.
 - The roster gets a `Section` column, and `config.yaml` a `sections:` list with each section's class time. The
   top-level `sec_num`, `class_schedule` and `exam_schedule` are the first section's, and the attendance dates come
   from them, so every section shares the same session columns.
@@ -151,8 +162,14 @@ grader update -i repclasslist_Astro52.xls                               # or add
   roster, so don't edit it. The attendance csv has no `Sec` column.
 - A student found in another section's class list moves to that section (grader says so).
 - grade-tui and grade_web show **All | 51 | 52** above the data. `n` in grade-tui (the chips in grade_web) shows one
-  section: its rows, statistics, grade distribution and Fill Column only. In All, each section has its own colour.
-  Exports write the whole course and one file per section ([section 10](#10-submitting-grades)).
+  section: its rows, statistics, grade distribution and Fill Column only. **All** lists the sections in blocks, each
+  under a heading line `── Sec 51 · 28 students ──` and in its own colour. `grader dashboard` asks which section to
+  show and prints the same blocks for All. The cursor and Fill Column work on students only, never on a heading.
+- On the phone, grade_web opens a course on **the section in class now** (from `sections:` in config, from 30
+  minutes before the class until it ends), so taking attendance shows only that section. Outside class times it
+  opens on your last choice. A chip you tap stays chosen until you leave the course.
+- Score files stay as they are: one file per category for all sections, sorted by Student ID, with no section column.
+  Exports write the whole course (in section blocks) and one file per section ([section 10](#10-submitting-grades)).
 
 Without a class list you can run `grader init --course_name "General Relativity" --term 2026_S2 --course_id PHYS4101`.
 This gives an empty roster that you fill in yourself. The folder is `2026_S2_<ABBR>/` (add `--abbr GR`, or
@@ -576,6 +593,7 @@ the same way: whichever side you edited wins. If you changed a header's points b
 | The attendance xlsx and csv differ, or grade-tui warns "attendance: … run `grader sync`" | Run `grader sync` in the course folder and answer its questions. |
 | "… is open in Excel" | Close the attendance xlsx in Excel, then run `grader sync` again. |
 | Something got overwritten | `grader history`, then `grader undo <ID>`. |
+| "Can't read the web copy … (Operation timed out)" | Google Drive for Desktop isn't running (macOS still shows the Drive folder, but its files can't be read), or the files aren't downloaded yet. Start Google Drive, wait until it shows "up to date", then run the command again. grader wrote nothing to Drive. `grader update -i` keeps its roster update and only skips the rename and the push. |
 
 ---
 
@@ -587,7 +605,7 @@ the same way: whichever side you edited wins. If you changed a header's points b
 | `grader init -i <sec 51.xls> -i <sec 52.xls>` | one course folder for several sections, `<term>_<ABBR>_SEC_51-52` |
 | `grader init --course_name N --term 2026_S1 --course_id C` | create one without a class list |
 | `grader mkdb [config.yaml]` | create the missing score files from `data_mapping` |
-| `grader update -i <class list.xls> [-y]` | merge a newer class list into the roster; another section's list adds that section (asks; `-y` says yes) |
+| `grader update -i <class list.xls> [-y]` | merge a newer class list into the roster; another section's list adds that section, then offers to rename the folder after its sections and to push (asks; `-y` says yes) |
 | `grader update [config.yaml] [--purge-empty-orphans] [--yes]` | align the score files with the config |
 | `grader sync [--course DIR] [--yes]` | after editing CSVs or the attendance sheet by hand: refresh totals, add your new columns to the config, sync the attendance xlsx ↔ csv (asks) |
 | `grader history [--course DIR] [-n N]` | list saved versions |

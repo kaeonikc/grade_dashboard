@@ -36,6 +36,10 @@ class Refused(Exception):
     """A refusal: the message (one or more lines) is printed as it is and the command exits 1."""
 
 
+class Unreadable(Refused):
+    """The Drive copy can't be read (Drive for Desktop not running, files not downloaded): SPEC_drive_unreadable.md."""
+
+
 # ---- where -------------------------------------------------------------------------------------------------------
 def drive_root(arg=None) -> Path:
     """--drive-root, else $GRADE_WEB_DRIVE_ROOT, else the one CMRU Google Drive folder under the home folder."""
@@ -119,6 +123,33 @@ def conflict_copies(mirror) -> list[str]:
             if p.is_file() and _COPY.search(p.name) and p.relative_to(mirror).parts[0] != ARCHIVE]
 
 
+def unreadable(mirror, path: Path, err: OSError, nothing: str = "Nothing on Drive was changed.") -> Unreadable:
+    """The refusal for a Drive copy whose file can't be read (SPEC_drive_unreadable.md)."""
+    rel = Path(path).relative_to(mirror).as_posix() if Path(path) != Path(mirror) else "the folder"
+    return Unreadable(f"❌ Can't read the web copy {label(mirror)}/ ({rel}: {err.strerror or err}).\n"
+                      "   Google Drive for Desktop isn't running, or these files aren't downloaded yet.\n"
+                      f"   Start Google Drive, wait until it shows \"up to date\", then run this again. {nothing}")
+
+
+def check_readable(mirror, nothing: str = "Nothing on Drive was changed.") -> None:
+    """
+    Reads every file of a Drive copy (they are small) before anything is written, so a copy Drive for Desktop can't
+    serve (not running: macOS still lists the folder, but every read fails) gives one clear refusal, never a
+    traceback halfway through. A copy that isn't there passes.
+    """
+    mirror = Path(mirror)
+    if not mirror.is_dir():
+        return
+    path = mirror
+    try:
+        for path in sorted(mirror.rglob("*")):
+            # the journal is left to journal(), which has its own message (web/SPEC.md edge 19)
+            if path.is_file() and path != mirror / JOURNAL:
+                path.read_bytes()
+    except OSError as e:
+        raise unreadable(mirror, path, e, nothing)
+
+
 # ---- the journal -------------------------------------------------------------------------------------------------
 def key(line: dict) -> str:
     return f"{line['batch']}#{line['seq']}"
@@ -132,8 +163,8 @@ def journal(mirror) -> list[dict]:
     try:
         raw = path.read_bytes()
     except OSError as e:
-        raise Refused(f"❌ Couldn't read {label(mirror)}/{JOURNAL} ({e.strerror or e}). If Drive for "
-                      "Desktop shows it as online-only, wait for it to download, then run again.")
+        raise Unreadable(f"❌ Couldn't read {label(mirror)}/{JOURNAL} ({e.strerror or e}). If Drive for "
+                         "Desktop shows it as online-only, wait for it to download, then run again.")
     lines, bad = [], []
     for n, text in enumerate(raw.split(b"\n"), 1):
         if not text.strip():
@@ -157,7 +188,11 @@ def archived_keys(mirror) -> set:
     keys = set()
     folder = Path(mirror) / ARCHIVE
     for path in sorted(folder.glob("*.jsonl")) if folder.is_dir() else []:
-        for text in path.read_text(encoding="utf-8").splitlines():
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError as e:
+            raise unreadable(mirror, path, e)
+        for text in lines:
             try:
                 obj = json.loads(text)
             except ValueError:

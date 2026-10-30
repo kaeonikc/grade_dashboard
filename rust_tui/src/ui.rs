@@ -305,6 +305,39 @@ fn section_selector_line(app: &App, sections: &[String]) -> Line<'static> {
     Line::from(spans)
 }
 
+/// `rows` (one per student) with the All view's section header lines put in before each block, and the table offset
+/// for `scroll` (a student index): a block's header shows when the scroll starts at its first row.
+fn with_section_heads<'a>(rows: Vec<Row<'a>>, heads: &[crate::app::SectionHead], n_cols: usize, scroll: usize)
+    -> (Vec<Row<'a>>, usize) {
+    if heads.is_empty() {
+        return (rows, scroll);
+    }
+    let mut out = Vec::with_capacity(rows.len() + heads.len());
+    let mut next = heads.iter().peekable();
+    for (i, row) in rows.into_iter().enumerate() {
+        while let Some(head) = next.next_if(|h| h.start == i) {
+            out.push(section_head_row(head, n_cols));
+        }
+        out.push(row);
+    }
+    let offset = scroll + heads.iter().filter(|h| h.start < scroll).count();
+    (out, offset)
+}
+
+/// `── Sec 51 · 28 students ─────…` across the table, in the section's colour (# · ID · Name · rule).
+fn section_head_row(head: &crate::app::SectionHead, n_cols: usize) -> Row<'static> {
+    let style = Style::default().fg(head.color).add_modifier(Modifier::BOLD);
+    let rule = "─".repeat(240);
+    let title = head.title();
+    let (label, rest) = title.split_once(" · ").unwrap_or((title.as_str(), ""));
+    let mut cells = vec![Cell::from("──"), Cell::from(label.to_string()), Cell::from(format!("· {} {}", rest, rule))];
+    cells.truncate(n_cols);
+    while cells.len() < n_cols {
+        cells.push(Cell::from(rule.clone()));
+    }
+    Row::new(cells).style(style).height(1)
+}
+
 fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme;
     let data = match &app.course_data {
@@ -313,7 +346,9 @@ fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
     };
 
     // area.height - 2 borders - 3 header (height=2 + bottom_margin=1)
-    app.table_visible_rows = (area.height as usize).saturating_sub(5).max(1);
+    // All sections shown: a header line above each section's rows, each taking a row (SPEC_sections.md R5)
+    let heads = app.section_heads(&data.student_grades);
+    app.table_visible_rows = (area.height as usize).saturating_sub(5 + heads.len()).max(1);
 
     let num_col_width = format!("{}", data.student_grades.len()).len().max(1) as u16 + 1;
 
@@ -478,12 +513,13 @@ fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
+    let (rows, offset) = with_section_heads(rows, &heads, widths.len(), app.scroll_row_offset);
     let table = Table::new(rows, widths)
         .header(header)
         .block(block)
         .column_spacing(1);
 
-    let mut table_state = TableState::default().with_offset(app.scroll_row_offset);
+    let mut table_state = TableState::default().with_offset(offset);
     f.render_stateful_widget(table, area, &mut table_state);
 }
 
@@ -683,7 +719,9 @@ fn draw_submission_table(f: &mut Frame, app: &mut App, area: Rect) {
         None => return,
     };
 
-    app.table_visible_rows = (area.height as usize).saturating_sub(5).max(1);
+    // All sections shown: a header line above each section's rows, each taking a row (SPEC_sections.md R5)
+    let heads = app.section_heads(&data.student_grades);
+    app.table_visible_rows = (area.height as usize).saturating_sub(5 + heads.len()).max(1);
 
     let show_cumulative = data.student_grades.first()
         .map(|r| r.contains_key("Coursework Total"))
@@ -793,12 +831,13 @@ fn draw_submission_table(f: &mut Frame, app: &mut App, area: Rect) {
         Row::new(cells).style(row_style).height(1)
     }).collect();
 
+    let (rows, offset) = with_section_heads(rows, &heads, widths.len(), app.scroll_row_offset);
     let table = Table::new(rows, widths)
         .header(header)
         .block(block)
         .column_spacing(1);
 
-    let mut table_state = TableState::default().with_offset(app.scroll_row_offset);
+    let mut table_state = TableState::default().with_offset(offset);
     f.render_stateful_widget(table, area, &mut table_state);
 }
 
@@ -1260,7 +1299,9 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
     };
 
     // area.height - 2 borders - 3 header (height=2 + bottom_margin=1)
-    app.table_visible_rows = (area.height as usize).saturating_sub(5).max(1);
+    // All sections shown: a header line above each section's rows, each taking a row (SPEC_sections.md R5)
+    let heads = app.section_heads(&data.raw_scores);
+    app.table_visible_rows = (area.height as usize).saturating_sub(5 + heads.len()).max(1);
 
     // +1 for the ▸ of a marked row
     let num_col_width = num_col_width(data);
@@ -1424,12 +1465,13 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
         widths.push(Constraint::Length(14));
     }
 
+    let (rows, offset) = with_section_heads(rows, &heads, widths.len(), app.scroll_row_offset);
     let table = Table::new(rows, widths)
         .header(header)
         .block(block)
         .column_spacing(1);
 
-    let mut table_state = TableState::default().with_offset(app.scroll_row_offset);
+    let mut table_state = TableState::default().with_offset(offset);
     f.render_stateful_widget(table, area, &mut table_state);
 }
 
@@ -3256,6 +3298,22 @@ fn grade_color_for(grade: &str, theme: &crate::style::Theme) -> ratatui::style::
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn section_heads_go_before_their_blocks_and_shift_the_offset() {
+        use crate::app::SectionHead;
+        let heads = vec![
+            SectionHead { start: 0, count: 3, section: "51".into(), color: Color::Red },
+            SectionHead { start: 3, count: 2, section: "52".into(), color: Color::Blue },
+        ];
+        let rows: Vec<Row> = (0..5).map(|i| Row::new(vec![Cell::from(i.to_string())])).collect();
+        let (out, offset) = with_section_heads(rows, &heads, 4, 0);
+        assert_eq!((out.len(), offset), (7, 0));
+        // scrolled to sec 52's first student: its header shows; one row further in: the student itself
+        assert_eq!(with_section_heads(Vec::new(), &heads, 4, 3).1, 4);
+        assert_eq!(with_section_heads(Vec::new(), &heads, 4, 4).1, 6);
+        assert_eq!(with_section_heads(Vec::new(), &[], 4, 4).1, 4);
+    }
+
     use super::*;
 
     fn legend() -> Vec<Span<'static>> {

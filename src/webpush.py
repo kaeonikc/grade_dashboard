@@ -155,7 +155,24 @@ def build_course_json(course) -> dict:
         "roster": f"course_info/{roster.name}" if roster else None,
         "files": files,
         "columns": columns,
+        **_sections_json(config),
     }
+
+
+def _sections_json(config: dict) -> dict:
+    """`sections: {"51": {"day": "ศ.", "time": "08:30-12:30"}, …}` for a course with ≥2 sections (the phone opens
+    on the one in class, SPEC_sections.md R7); {} otherwise, so a one-section course.json is as before."""
+    from src.sections import sort_sections
+    secs = config.get("sections") or {}
+    if not isinstance(secs, dict) or len(secs) < 2:
+        return {}
+    by_text = {str(k).strip(): v for k, v in secs.items()}  # `51:` unquoted in the yaml is an int key
+    out = {}
+    for s in sort_sections(by_text):
+        sch = by_text[s] if isinstance(by_text[s], dict) else {}
+        cs = sch.get("class_schedule") if isinstance(sch.get("class_schedule"), dict) else {}
+        out[s] = {"day": str(cs.get("day") or ""), "time": str(cs.get("time") or "")}
+    return {"sections": out}
 
 
 def _staged_course_json(course: Path, roster: Path, data: list[Path]) -> dict:
@@ -204,6 +221,8 @@ def push(course: Path, root: Path, force: bool = False, semester: str | None = N
     mirror, old = webdrive.place_of(root, course, semester)
     old = webdrive.old_copy(mirror, old)
     print(f"🔄 Web push: {course.name} → {webdrive.shown(root, mirror)}")
+    for copy in (mirror, old) if old else (mirror,):  # Drive for Desktop not running (SPEC_drive_unreadable.md)
+        webdrive.check_readable(copy)
     ids, warnings = check_course(course)
     for w in warnings:
         print(w)
@@ -241,6 +260,10 @@ def push(course: Path, root: Path, force: bool = False, semester: str | None = N
     roster = roster_of(course)
     data = data_csvs(course)
     course_json = _staged_course_json(course, roster, data)
+    from src.rename import renamed_from
+    before = renamed_from(course)
+    if before:  # the names it had, so grade_web carries drafts and choices over (SPEC_sections.md R2)
+        course_json["renamed_from"] = before
 
     now = datetime.now().astimezone()
     push_id = f"p-{now:%Y%m%d-%H%M%S}"

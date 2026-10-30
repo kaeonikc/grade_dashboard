@@ -427,6 +427,30 @@ function markSection(node, row) {
   return node;
 }
 
+// In All, a heading above each section's students (SPEC_sections.md R5): `Sec 51 · 28 students`. `nodes` are the
+// rows' elements, in `rows` order; returns them with the headings put in ('tr' headings span `colspan` columns).
+// Headings are not rows of their own for focus, keys or Fill: they only label the block under them.
+function withSectionHeads(rows, nodes, tag, colspan) {
+  const blocks = sectionBlocks(rows);
+  if (!blocks.length) return nodes;
+  const out = [];
+  for (const b of blocks) {
+    const cls = 'sec-head' + (b.slot ? ' s' + b.slot : '');
+    const head = tag === 'tr'
+      ? el('tr', { class: cls }, el('th', { colspan: String(colspan), scope: 'rowgroup' }, el('span', {}, sectionTitle(b))))
+      : el('li', { class: cls, role: 'presentation' }, sectionTitle(b));
+    head.block = nodes.slice(b.start, b.start + b.count);
+    out.push(head, ...head.block);
+  }
+  return out;
+}
+
+// A heading whose students are all hidden (search, under-80% filter) is hidden with them.
+function refreshSectionHeads(root) {
+  if (!root) return;
+  for (const head of root.querySelectorAll('.sec-head')) head.hidden = head.block.every((n) => n.hidden);
+}
+
 function renderView() {
   normalizeNav();
   refreshSecBar();
@@ -600,7 +624,7 @@ function renderColumn() {
   const col = currentColumn();
   cm.items = col ? state.rows.map((row, i) => rowItem(row, col, i)) : [];
   for (const it of cm.items) it.list = cm.items;
-  cm.list.replaceChildren(...cm.items.map((it) => it.li));
+  cm.list.replaceChildren(...withSectionHeads(cm.items.map((it) => it.row), cm.items.map((it) => it.li), 'li'));
   refreshCounts();
   applySearch();
 }
@@ -1098,7 +1122,8 @@ function buildTable() {
   tb = { specs, recs: [], byId: new Map(), cur: null, edit: null, picker: null, grid, heads: [], att: null };
   if (grid) setAtt();
   const head = el('tr', { role: 'row', 'aria-rowindex': '1' }, ...specs.map(headCell));
-  const body = el('tbody', {}, ...(grid && state.attSort ? byAttendance(state.rows) : state.rows).map(tableRow));
+  const rows = grid && state.attSort ? byAttendance(state.rows) : state.rows;
+  const body = el('tbody', {}, ...withSectionHeads(rows, rows.map(tableRow), 'tr', specs.length));
   tb.none = el('tr', { hidden: '' }, el('td', { class: 'tb-none', colspan: String(specs.length) }));
   body.append(tb.none);
   const cls = 'tb' + (grid ? ' att-grid' : '') + (grid && !WIDE.matches ? ' compact' : '');
@@ -1148,14 +1173,14 @@ function setAtt() {
   tb.attHeld = new Map(tb.att.sessions.map((x) => [x.name, x]));
 }
 
-// Lowest % first; ties keep roster order; no held session yet goes last (A11).
+// Lowest % first; ties keep roster order; no held session yet goes last (A11). In All, within each section's block.
 function byAttendance(rows) {
   const att = attStats();
   const key = (r) => {
     const st = att.students.get(r.student_id);
     return st && st.pct !== null ? st.pct : Infinity;
   };
-  return rows.slice().sort((a, b) => (key(a) === key(b) ? 0 : key(a) - key(b)));
+  return rows.slice().sort((a, b) => sectionRank(a) - sectionRank(b) || (key(a) === key(b) ? 0 : key(a) - key(b)));
 }
 
 // P L A X chips (EA as X); a blank in a held session is a dashed chip; anything else as written (shown invalid).
@@ -1334,6 +1359,7 @@ function searchTable() {
     if (!rec.tr.hidden) shown += 1;
   }
   tb.none.hidden = shown > 0;
+  refreshSectionHeads(tb.none.parentNode);
   tb.none.firstChild.replaceChildren(state.search.trim() === '' && riskOnly ? 'Nobody is under 80% so far.'
     : data('span', {}, 'No students match "' + state.search.trim() + '"'));
 }
@@ -2122,6 +2148,7 @@ function applySearch() {
     it.li.hidden = !matches(it.row, state.search);
     if (!it.li.hidden) shown += 1;
   }
+  refreshSectionHeads(cm.list);
   if (state.view === 'attendance' && !sessions().length) {
     cm.empty.replaceChildren(el('p', {}, 'This course has no attendance sessions. Add them on the Mac, then push again.'));
   } else if (state.view === 'attendance' && !currentColumn()) {
@@ -2224,12 +2251,12 @@ function renderSummary() {
     const heads = ['Student ID', 'Name'].concat(summaryFields(null).map((f) => f[0]), 'Grade');
     const cls = (i) => (i === 0 ? 'c-id' : i === 1 ? 'c-name' : 'c-calc');
     const head = el('tr', {}, ...heads.map((h, i) => el('th', { scope: 'col', class: cls(i) }, data('span', {}, h))));
-    const body = el('tbody', {}, ...state.rows.map(summaryRow));
+    const body = el('tbody', {}, ...withSectionHeads(state.rows, state.rows.map(summaryRow), 'tr', heads.length));
     cm.wrap.replaceChildren(el('table', { class: 'tb sum-table', 'aria-label': 'Summary Scores' },
       el('thead', {}, head), body));
   } else {
     cm.summary.replaceChildren(el('ul', { class: 'rows sum-list', 'aria-label': 'Summary Scores' },
-      ...state.rows.map(summaryItem)));
+      ...withSectionHeads(state.rows, state.rows.map(summaryItem), 'li')));
   }
   searchSummary();
 }
@@ -2287,6 +2314,7 @@ function paintSummary(row) {
 function searchSummary() {
   if (!sm) return;
   for (const r of sm.values()) r.node.hidden = !matches(r.row, state.search);
+  refreshSectionHeads(WIDE.matches ? cm.wrap : cm.summary);
 }
 
 // Analytics › Overview: grade-tui's four panels over the grades shown (unsaved edits included).

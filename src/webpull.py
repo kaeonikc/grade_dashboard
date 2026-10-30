@@ -308,11 +308,15 @@ def pull(course: Path, root: Path, yes: bool = False, semester: str | None = Non
     course = Path(course).resolve()
     mirror = copy_to_pull(root, course, semester)
     print(f"🔄 Web pull: {webdrive.shown(root, mirror)} → {course.name}")
+    webdrive.check_readable(mirror, "Nothing was pulled.")  # Drive for Desktop not running (SPEC_drive_unreadable)
     copies = webdrive.conflict_copies(mirror)
     if copies:
         raise Refused(f"❌ Drive has duplicate files in {webdrive.label(mirror)}/: {', '.join(copies)}. Fix "
                       "them as the README's \"Duplicate files\" says, then run again.")
-    pushed = json.loads((mirror / "push.json").read_text(encoding="utf-8"))
+    try:
+        pushed = json.loads((mirror / "push.json").read_text(encoding="utf-8"))
+    except OSError as e:
+        raise webdrive.unreadable(mirror, mirror / "push.json", e, "Nothing was pulled.")
     config = raw_config(course)
     drive_is = f"{pushed.get('course_id', '')} {pushed.get('term', '')}"
     mac_is = f"{config.get('course_id', '')} {config.get('term', '')}"

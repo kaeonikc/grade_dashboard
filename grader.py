@@ -1101,12 +1101,33 @@ def _update_roster(input_file: str, yes: bool = False):
             print(f"⚠️ Warning: Could not create attendance spreadsheet: {e}")
     entry.close()
 
-    if len(merged_df) > len(old_df) and any((target_dir / "data").glob("*.csv")):
-        print("ℹ️  Run grader update (no -i) to add the new students' rows to the score files.")
     if added:
         print(f"✅ config.yaml sections: {', '.join(sections)}")
-        print(f"ℹ️  The folder name {folder} is unchanged; rename it by hand if you want.")
     print(f"🚀 Course update completed successfully!")
+
+    # The folder named after its sections, then the web copy brought up to date (SPEC_sections.md R2-R4)
+    from src import rename
+    course_dir = rename.offer(target_dir, sections, yes, f"grader update -i {input_file}")
+    renamed = course_dir.name != folder
+    if not _score_files_complete(course_dir):
+        print("ℹ️  Run grader update (no -i) to add the new students' rows to the score files"
+              " (it then offers to push to the web copy).")
+    elif added or renamed:
+        rename.offer_push(course_dir, yes, "renamed" if renamed else f"section {sec_num} added")
+
+
+def _score_files_complete(course_dir: Path) -> bool:
+    """Every roster student has a row in every data/*.csv (so a push carries them all)."""
+    from src.sections import roster_file
+    from src.webpush import _students, data_csvs
+    roster = roster_file(course_dir)
+    if roster is None:
+        return True
+    ids = set(_students(roster, roster.name))
+    try:
+        return all(ids <= set(_students(p, p.name)) for p in data_csvs(course_dir))
+    except Exception:
+        return False
 
 def update_course(input_file: str = None, config_file: str = None, purge_empty_orphans: bool = False,
                   yes: bool = False):
@@ -1475,6 +1496,8 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
     save_base(course_dir, kept=settled.kept)
     _refresh_totals(course_dir, "update")
     print("🚀 All databases updated successfully!")
+    from src import rename
+    rename.offer_push(course_dir, yes, "new students", only_if_counts_differ=True)
 
 def _find_bak_files(course_dir: Path) -> list[Path]:
     """
@@ -1811,6 +1834,20 @@ def undo_course(entry_id: str = None, course: str = None, yes: bool = False):
                 sys.exit(1)
         print(f"🔄 Course: {target_dir.resolve().name}")
         print(f"   Restore: {_describe_entry(entry)}")
+        from src import rename
+        if rename.is_rename(entry):
+            if not _confirm(f"Rename the course back to {entry['from']}?", yes):
+                return
+            try:
+                dest = rename.undo(target_dir, entry)
+            except rename.Refused as e:
+                print(e)
+                sys.exit(1)
+            for line in rename.done_lines(entry["to"], dest.name):
+                print(line)
+            rename.offer_push(dest, yes, "renamed")
+            print("✅ Undo completed (redo it with: grader undo <ID of this undo>).")
+            return
         later = later_changes(target_dir, entry["id"])
         if later:
             print(f"   ⚠️  {len(later)} later change(s) to the same file(s) will be lost too:")

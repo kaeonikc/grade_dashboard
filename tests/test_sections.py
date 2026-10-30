@@ -86,6 +86,9 @@ def one_section_course(here) -> Path:
     return here / "2026_S2_Astro51_SEC_51"
 
 
+TWO = "2026_S2_Astro_SEC_51-52"  # the one-section course's name once `update -i -y` has added sec 52 (R2)
+
+
 # ---- parsing ----------------------------------------------------------------------------------------------------
 @pytest.mark.parametrize("course,cid,name", [
     ("SC 2202  ดาราศาสตร์และอวกาศ", "SC 2202", "ดาราศาสตร์และอวกาศ"),
@@ -155,15 +158,17 @@ def test_update_adds_a_section_with_yes(here, capsys):
     capsys.readouterr()
     grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52", time="13:30-17:30")),
                          yes=True)
+    out = capsys.readouterr().out
+    c = here / TWO
     assert course_sections(c) == ["51", "52"]
     cfg = config(c)
     assert cfg["sec_num"] == "51" and cfg["class_schedule"]["time"] == "08:30-12:30"
     assert list(cfg["sections"]) == ["51", "52"]
     assert cfg["sections"]["52"]["class_schedule"]["time"] == "13:30-17:30"
-    out = capsys.readouterr().out
     assert "Total students now: 5 (sec 51: 2 · sec 52: 3)" in out
-    assert "is unchanged; rename it by hand" in out
-    assert (c / "course_info" / "2026_S2_Astro51_SEC_51_student_info.csv").exists()  # nothing renamed
+    assert f"Renamed 2026_S2_Astro51_SEC_51 → {TWO}" in out
+    assert not (here / "2026_S2_Astro51_SEC_51").exists()
+    assert (c / "course_info" / f"{TWO}_student_info.csv").exists()
 
 
 def test_update_asks_before_adding_a_section(here, monkeypatch, capsys):
@@ -173,7 +178,7 @@ def test_update_asks_before_adding_a_section(here, monkeypatch, capsys):
     assert course_sections(c) == ["51"] and "Nothing changed." in capsys.readouterr().out
     answer(monkeypatch, "y")
     grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52")))
-    assert course_sections(c) == ["51", "52"]
+    assert course_sections(here / TWO) == ["51", "52"]
 
 
 def test_update_without_a_terminal_refuses_a_new_section(here, capsys):
@@ -194,6 +199,7 @@ def test_update_fills_an_old_roster_from_sec_num(here):
     cfg.pop("sections")
     cfg_path.write_text(yaml.dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
     grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52")), yes=True)
+    c = here / TWO
     assert roster_sections(c) == {**{s: "51" for s, _ in SEC51}, **{s: "52" for s, _ in SEC52}}
     assert list(config(c)["sections"]) == ["51", "52"]
 
@@ -204,6 +210,7 @@ def test_reupdating_one_section_keeps_the_others(here):
                          yes=True)
     grader.update_course(input_file=str(class_list(here / "repclasslist_Astro51.xlsx", "51", time="09:00-12:00",
                                                    students=SEC51 + [("69000009", "นาย ฌ  เก้า")])))
+    c = here / TWO
     cfg = config(c)
     assert cfg["sections"]["52"]["class_schedule"]["time"] == "13:30-17:30"
     assert cfg["sections"]["51"]["class_schedule"]["time"] == "09:00-12:00" == cfg["class_schedule"]["time"]
@@ -214,7 +221,7 @@ def test_a_student_in_another_sections_list_moves(here, capsys):
     c = one_section_course(here)
     grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52",
                                                    students=SEC52 + [SEC51[0]])), yes=True)
-    assert roster_sections(c)[SEC51[0][0]] == "52"
+    assert roster_sections(here / TWO)[SEC51[0][0]] == "52"
     assert f"{SEC51[0][0]} moves sec 51 → 52" in capsys.readouterr().out
 
 
@@ -235,6 +242,7 @@ def test_update_finds_a_course_made_before_the_id_fix(here):
     cfg["course_id"], cfg["course_name"] = "SC", "2202  ดาราศาสตร์และอวกาศ"  # the old parse
     cfg_path.write_text(yaml.dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
     grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52")), yes=True)
+    c = here / TWO
     cfg = config(c)
     assert (str(cfg["course_id"]), cfg["course_name"]) == ("SC 2202", "ดาราศาสตร์และอวกาศ")
     assert course_sections(c) == ["51", "52"]
@@ -250,12 +258,14 @@ def test_adding_a_section_keeps_attendance_marks(here):
     wb.save(xlsx)
     attendance.auto_sync(c)
     grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52")), yes=True)
+    c = here / TWO
     sheet = xlsx_rows(c)
     head = sheet[0]
     assert head[:4] == ["Student ID", "Name", "Sec", "a1"]
     by_sid = {r[0]: dict(zip(head, r)) for r in sheet[1:]}
     assert by_sid["69000001"]["a1"] == "P" and by_sid["69000003"]["a2"] == "L"
     assert by_sid["69000004"]["Sec"] == "52"
+    xlsx = next((c / "data").glob("*_attendance.xlsx"))
     X, C = attendance.read_xlsx_sheet(xlsx), attendance.read_csv_sheet(next((c / "data").glob("*_attendance.csv")))
     assert X.sessions == C.sessions and X.rows == C.rows and "Sec" not in X.sessions
     assert attendance.plan(c) is None or not attendance.plan(c).has_changes()
@@ -265,8 +275,11 @@ def test_undo_restores_the_one_section_course(here, monkeypatch):
     c = one_section_course(here)
     before = roster(c)
     grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52")), yes=True)
+    monkeypatch.chdir(here / TWO)
+    grader.undo_course(None, None, yes=True)   # the newest change: the rename
+    assert c.is_dir() and not (here / TWO).exists()
     monkeypatch.chdir(c)
-    grader.undo_course(None, None, yes=True)
+    grader.undo_course(None, None, yes=True)   # then the roster update
     assert roster(c) == before and course_sections(c) == ["51"]
 
 
@@ -340,6 +353,48 @@ def test_export_writes_the_course_and_each_section(here):
         assert len(copy) == n + 1
 
 
+def test_export_groups_the_combined_files_by_section(here):
+    from src import tui_api
+    c = two_section_course(here)
+    tui_api.run_export(str(c))
+    p = "2026_S2_Astro_SEC_51-52"
+    both = list(csv.DictReader(io.StringIO((c / "reports" / f"{p}_final_grades.csv").read_text(encoding="utf-8"))))
+    assert [r["Student ID"] for r in both] == ["69000001", "69000003", "69000002", "69000004", "69000006"]
+    copy = (c / "reports" / f"{p}_copy_friendly_scores.csv").read_text(encoding="utf-8").splitlines()[1:]
+    assert [line.split(",")[0] for line in copy] == ["69000001", "69000003", "69000002", "69000004", "69000006"]
+
+
+def test_group_order_and_blocks():
+    from src.sections import block_title, blocks, group_order
+    secmap = {"5": "52", "1": "51", "4": "", "2": "8", "3": "51"}
+    ids = sorted(secmap, key=group_order(secmap))
+    assert ids == ["2", "1", "3", "5", "4"]
+    assert blocks(ids, secmap) == [("8", ["2"]), ("51", ["1", "3"]), ("52", ["5"]), ("", ["4"])]
+    assert block_title("51", 28) == "Sec 51 · 28 students" and block_title("", 1) == "No section · 1 student"
+
+
+def test_dashboard_all_view_prints_section_blocks(here, monkeypatch):
+    from rich.console import Console
+    from rich.prompt import Confirm
+    monkeypatch.setattr(Confirm, "ask", lambda *a, **k: False)
+    from src import dashboard
+    from src.calculators import calculate_final_grades
+    from src.data_loader import load_config, load_course_data
+    c = two_section_course(here)
+    config = load_config(c)
+    df, max_scores = load_course_data(c)
+    final_df = calculate_final_grades(df, config, max_scores)
+    rec = Console(record=True, width=250)
+    dashboard.console, old = rec, dashboard.console
+    try:
+        dashboard.show_student_table(final_df, max_scores, config, True, secmap=roster_sections(c))
+    finally:
+        dashboard.console = old
+    out = rec.export_text()
+    a, b = out.index("Sec 51 · 2 students"), out.index("Sec 52 · 3 students")
+    assert a < out.index("69000003") < b < out.index("69000002")
+
+
 def test_export_of_a_one_section_course_is_as_before(here):
     from src import tui_api
     c = one_section_course(here)
@@ -371,12 +426,14 @@ def test_web_pull_accepts_a_push_made_before_the_id_fix(here, drive_root, capsys
     grader.update_course(config_file=str(cfg_path), yes=True)
     webpush.push(c, drive_root)
     grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52")), yes=True)
+    c = here / TWO
     assert str(config(c)["course_id"]) == "SC 2202"
     capsys.readouterr()
     assert webpull.pull(c, drive_root) == 0
     assert "Nothing to pull" in capsys.readouterr().out
     cfg = config(c)
     cfg["course_id"] = "PHYS1120"
+    cfg_path = next((c / "course_info").glob("*_config.yaml"))
     cfg_path.write_text(yaml.dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
     with pytest.raises(webpull.Refused, match="another course"):
         webpull.pull(c, drive_root)

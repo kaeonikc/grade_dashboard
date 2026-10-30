@@ -92,13 +92,16 @@ function listCourses() {
       const it = opened[open.indexOf(f)];
       const c = it.c;
       if (!c) return { folder: f.path, group: f.group, available: false, reason: it.reason };
-      return {
+      const item = {
         folder: f.path, group: f.group, available: true, course_id: c.course.course_id,
         course_name: c.course.course_name,
         term: c.course.term, pushed_at: c.push.pushed_at, unpulled: c.summary.unpulled,
         last_saved: c.summary.last_saved,
         older_push: c.lines.some(function (l) { return l.push !== c.push.push_id; }),
       };
+      // The folder's old names, for the browser to carry drafts over (SPEC_sections.md R2)
+      if (c.course.renamed_from && c.course.renamed_from.length) item.renamed_from = c.course.renamed_from;
+      return item;
     });
     return { ok: true, courses: courses, groups: found.groups };
   });

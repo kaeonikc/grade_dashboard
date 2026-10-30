@@ -91,3 +91,32 @@ def tagger(secmap: dict):
 def order_key(secmap: dict):
     """Sort key for student ids: by section (numeric), then by id."""
     return lambda sid: (sec_key(secmap.get(str(sid).strip(), "")), str(sid))
+
+
+def group_order(secmap: dict):
+    """
+    Sort key for the All view of a course with sections (SPEC_sections.md R5): section in numeric order, students
+    with no section last, then ID.
+    """
+    def key(sid):
+        sid = str(sid).strip()
+        sec = secmap.get(sid, "")
+        return ((0, sec_key(sec)) if sec else (1, (0, 0, "")), sid)
+    return key
+
+
+def blocks(ids, secmap: dict) -> list[tuple[str, list]]:
+    """[(section, its ids in group order), …] for ids already in group order ("" = no section)."""
+    out = []
+    for sid in ids:
+        sec = secmap.get(str(sid).strip(), "")
+        if not out or out[-1][0] != sec:
+            out.append((sec, []))
+        out[-1][1].append(sid)
+    return out
+
+
+def block_title(sec: str, n: int) -> str:
+    """'Sec 51 · 28 students' (the header line above a section's rows)."""
+    who = f"{n} student{'s' if n != 1 else ''}"
+    return f"Sec {sec} · {who}" if sec else f"No section · {who}"

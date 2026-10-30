@@ -33,6 +33,7 @@ const state = {
   sections: new Map(), // student_id -> Section from the roster
   sectionList: [],   // the roster's sections in numeric order when there are >= 2 (the selector), else []
   section: 'all',    // the section shown: 'all' or one of sectionList
+  sectionPicked: null, // the open course's folder once a chip was tapped: reloads keep that choice (R7)
   tab: 'summary',    // grade-tui's tab (SPEC_web_tabs.md): 'summary', 'raw', 'analytics' or 'grading'
   category: '*',     // Raw Details' category (a category name, '*' = All columns on wide screens)
   menu: false,       // the ☰ Categories menu is shown
@@ -145,7 +146,8 @@ function storedKeys(prefix) {
 }
 
 // A draft, UI memory or gw:last kept under a bare course name that the list no longer has moves to the course's
-// path in a group, when exactly one group holds a course of that name and nothing is kept under that path yet.
+// path in a group, when exactly one group holds a course of that name and nothing is kept under that path yet. Kept
+// under a course's old name (renamed_from) it moves to its new one.
 function migrateKeys(courses) {
   const paths = new Set(courses.map((c) => c.folder));
   const moved = new Map();  // bare name -> its one path in a group (null: in several groups)
@@ -166,6 +168,23 @@ function migrateKeys(courses) {
     }
     const to = target(localStorage.getItem(LAST_KEY));
     if (to) localStorage.setItem(LAST_KEY, to);
+    // A course renamed on the Mac (`2026_S2_Astro51_SEC_51` → `…_Astro_SEC_51-52`, SPEC_sections.md R2): its
+    // course.json names the old folders, and what was kept under them moves to the new one.
+    const renamed = new Map();
+    for (const c of courses) {
+      for (const old of c.renamed_from || []) renamed.set(c.group ? c.group + '/' + old : old, c.folder);
+    }
+    const was = (key) => (renamed.has(key) && !paths.has(key) ? renamed.get(key) : null);
+    for (const prefix of [DRAFT_PREFIX, UI_PREFIX, SECTION_PREFIX]) {
+      for (const key of storedKeys(prefix)) {
+        const to = was(key.slice(prefix.length));
+        if (!to || localStorage.getItem(prefix + to) != null) continue;
+        localStorage.setItem(prefix + to, localStorage.getItem(key));
+        localStorage.removeItem(key);
+      }
+    }
+    const last = was(localStorage.getItem(LAST_KEY));
+    if (last) localStorage.setItem(LAST_KEY, last);
   } catch (e) {
     // kept where they are: a course that no longer matches shows as a draft left behind
   }
@@ -319,7 +338,9 @@ function useSnapshot(snap) {
   state.sectionList = sortSections(state.sections.values());
   if (state.sectionList.length < 2) state.sectionList = [];
   const kept = readSection(snap.open.folder);
-  state.section = state.sectionList.includes(kept) ? kept : 'all';
+  const picked = state.sectionPicked === snap.open.folder &&
+    (state.section === 'all' || state.sectionList.includes(state.section));
+  state.section = picked ? state.section : pickSection(snap.open.course, serverNow(), kept);
   state.rows = sectionRows();
   state.loadedAt = snap.at;
 }
@@ -348,8 +369,66 @@ function sortSections(values) {
 }
 
 function sectionRows() {
-  if (state.section === 'all') return state.allRows;
+  if (state.section === 'all') return state.sectionList.length ? grouped(state.allRows) : state.allRows;
   return state.allRows.filter((r) => state.sections.get(r.student_id) === state.section);
+}
+
+// The All view of a course with sections (SPEC_sections.md R5): section blocks in numeric order (no section last),
+// by Student ID within a block.
+function grouped(rows) {
+  const id = (r) => r.student_id;
+  return rows.slice().sort((a, b) => sectionRank(a) - sectionRank(b) || (id(a) < id(b) ? -1 : id(a) > id(b) ? 1 : 0));
+}
+
+// A row's block in the All view (0, 1, …; no section after the others); 0 for everyone otherwise.
+function sectionRank(row) {
+  if (state.section !== 'all' || !state.sectionList.length) return 0;
+  const i = state.sectionList.indexOf(state.sections.get(row.student_id));
+  return i < 0 ? state.sectionList.length : i;
+}
+
+// [{start, count, section, slot}] for `rows` in grouped order: one block per section (the heading above it), or []
+// with a section chosen or fewer than two sections.
+function sectionBlocks(rows) {
+  if (state.section !== 'all' || !state.sectionList.length) return [];
+  const blocks = [];
+  rows.forEach((row, i) => {
+    const sec = state.sections.get(row.student_id) || '';
+    const last = blocks[blocks.length - 1];
+    if (last && last.section === sec) last.count += 1;
+    else blocks.push({ start: i, count: 1, section: sec, slot: sec ? sectionSlot(row) : 0 });
+  });
+  return blocks;
+}
+
+function sectionTitle(block) {
+  const who = block.count + (block.count === 1 ? ' student' : ' students');
+  return (block.section ? 'Sec ' + block.section : 'No section') + ' · ' + who;
+}
+
+// ---- The section meeting now (R7): the course opens on it, else on the last choice, else All ----
+const THAI_DAYS = { 'อา': 0, 'จ': 1, 'อ': 2, 'พ': 3, 'พฤ': 4, 'ศ': 5, 'ส': 6 };
+const EARLY = 30;  // minutes before class that count as "in class" (you open the app while students arrive)
+
+// True when `iso` (`2026-10-30T09:15:00+07:00`, read as the wall time it states) falls in `schedule` ({day: 'ศ.',
+// time: '08:30-12:30'}) from EARLY minutes before it starts until it ends. A schedule it can't read is never in class.
+function inClass(schedule, iso) {
+  const t = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso || '');
+  const range = /(\d{1,2})[:.](\d{2})\s*-\s*(\d{1,2})[:.](\d{2})/.exec((schedule && schedule.time) || '');
+  if (!t || !range) return false;
+  const days = String(schedule.day || '').split(/[\s,.]+/).map((d) => THAI_DAYS[d]).filter((d) => d !== undefined);
+  const weekday = new Date(Date.UTC(+t[1], +t[2] - 1, +t[3])).getUTCDay();
+  if (!days.includes(weekday)) return false;
+  const now = +t[4] * 60 + +t[5];
+  return now >= +range[1] * 60 + +range[2] - EARLY && now < +range[3] * 60 + +range[4];
+}
+
+// The section a course opens on: the one in class at `iso`, else `remembered` when it is a section, else 'all'.
+function pickSection(course, iso, remembered) {
+  const schedules = (course && course.sections) || {};
+  const now = state.sectionList.find((s) => inClass(schedules[s], iso));
+  if (now) return now;
+  return state.sectionList.includes(remembered) ? remembered : 'all';
 }
 
 function readSection(folder) {
@@ -364,6 +443,7 @@ function readSection(folder) {
 function setSection(section) {
   if (section !== 'all' && !state.sectionList.includes(section)) return;
   state.section = section;
+  state.sectionPicked = state.open.folder;
   try {
     if (section === 'all') localStorage.removeItem(SECTION_PREFIX + state.open.folder);
     else localStorage.setItem(SECTION_PREFIX + state.open.folder, section);
@@ -387,6 +467,7 @@ function closeCourse() {
       groups: state.groups, sections: state.sections, at: state.loadedAt });
   }
   state.open = null;
+  state.sectionPicked = null;
   state.edits = new Map();
   state.forms = {};
   state.checking = false;

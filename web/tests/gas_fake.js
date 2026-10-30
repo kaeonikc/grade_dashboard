@@ -511,4 +511,4 @@ function layoutCourse(driveDir, fixture, o = {}) {
   return dest;
 }
 
-module.exports = { createGas, layoutCourse, formatDate, OWNER, DEFAULT_PUSH, DEFAULT_PUSHED_AT };
+module.exports = { createGas, golden, layoutCourse, formatDate, OWNER, DEFAULT_PUSH, DEFAULT_PUSHED_AT };
