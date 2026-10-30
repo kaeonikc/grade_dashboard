@@ -24,5 +24,8 @@
   "grade_b": 141,
   "grade_c": 221,
   "grade_d": 208,
-  "grade_f": 197
+  "grade_f": 197,
+
+  "//": "One colour per section of a multi-section course (the All view), in section order; up to 4, cycled.",
+  "sections": [81, 221, 141, 114]
 }

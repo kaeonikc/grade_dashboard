@@ -170,6 +170,20 @@ pub struct CourseData {
     /// category → student id → raw total, maximum and % (src/dashboard.py:category_totals).
     #[serde(default)]
     pub category_totals: HashMap<String, HashMap<String, CatTotal>>,
+    /// The roster's sections when the course has ≥2 (SPEC_sections.md), in numeric order; empty otherwise.
+    /// Each student_grades/raw_scores record then has a "Section". Older tui_api.py versions don't send these.
+    #[serde(default)]
+    pub sections: Vec<String>,
+    /// section → its students' grade distribution, roundup and analytics (raw_index into the whole course).
+    #[serde(default)]
+    pub by_section: HashMap<String, SectionStats>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SectionStats {
+    pub grade_distribution: HashMap<String, GradeStats>,
+    pub roundup_summary: RoundupSummary,
+    pub analytics: AnalyticsData,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -278,3 +278,47 @@ def test_section_helpers():
     tag = tagger(secmap)
     assert tag("3") == "[52] " and tag("4") == "[?] "
     assert tagger({"1": "51"})("1") == ""
+
+
+# ---- grade-tui bridge -------------------------------------------------------------------------------------------
+def two_section_course(here) -> Path:
+    """A two-section course with its score files made by `grader update`, and a few scores."""
+    grader.init_course(None, None, None, [str(class_list(here / "repclasslist_Astro51.xlsx", "51")),
+                                          str(class_list(here / "repclasslist_Astro52.xlsx", "52"))])
+    c = here / "2026_S2_Astro_SEC_51-52"
+    grader.update_course(config_file=str(next((c / "course_info").glob("*_config.yaml"))), yes=True)
+    hw = next((c / "data").glob("*_homework.csv"))
+    lines = hw.read_text(encoding="utf-8").splitlines()
+    head = lines[0].split(",")
+    out = [lines[0]]
+    for i, line in enumerate(lines[1:]):
+        cells = line.split(",")
+        cells[head.index("hw1 (100pts)") if "hw1 (100pts)" in head else 2] = str(40 + 10 * i)
+        out.append(",".join(cells))
+    hw.write_text("\n".join(out) + "\n", encoding="utf-8")
+    return c
+
+
+def test_course_data_carries_sections(here):
+    from src import tui_api
+    c = two_section_course(here)
+    d = tui_api.get_course_data(str(c))
+    assert d["status"] == "success", d.get("traceback")
+    assert d["sections"] == ["51", "52"]
+    secs = {r["Student ID"]: r["Section"] for r in d["student_grades"]}
+    assert secs == {r["Student ID"]: r["Section"] for r in d["raw_scores"]} == roster_sections(c)
+    assert set(d["by_section"]) == {"51", "52"}
+    n = {s: sum(v["count"] for v in d["by_section"][s]["grade_distribution"].values()) for s in ("51", "52")}
+    assert n == {"51": 2, "52": 3}
+    assert d["by_section"]["52"]["analytics"]["overview"]["total_count"] == 3
+    for s in ("51", "52"):  # raw_index stays a whole-course row
+        for r in d["by_section"][s]["analytics"]["at_risk"]:
+            assert d["student_grades"][r["raw_index"]]["Student ID"] == r["student_id"]
+
+
+def test_one_section_course_data_has_no_sections(here):
+    from src import tui_api
+    c = one_section_course(here)
+    grader.update_course(config_file=str(next((c / "course_info").glob("*_config.yaml"))), yes=True)
+    d = tui_api.get_course_data(str(c))
+    assert d["sections"] == [] and d["by_section"] == {} and "Section" not in d["student_grades"][0]

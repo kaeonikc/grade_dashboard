@@ -202,14 +202,21 @@ fn draw_dashboard(f: &mut Frame, app: &mut App, area: Rect) {
         0
     };
 
+    let sections: Vec<String> = app.full_data.as_ref().map(|d| d.sections.clone()).unwrap_or_default();
+    let selector_height = if sections.len() >= 2 { 1 } else { 0 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Tab navigation bar
+            Constraint::Length(selector_height), // Section selector (SPEC_sections.md)
             Constraint::Min(5),    // Active tab panel workspace
             Constraint::Length(warning_height), // Warnings drawer
         ])
         .split(area);
+    let chunks = [chunks[0], chunks[2], chunks[3], chunks[1]];
+    if selector_height > 0 {
+        f.render_widget(Paragraph::new(section_selector_line(app, &sections)), chunks[3]);
+    }
 
     // Draw Tab Navigation Bar — 4 individual bordered boxes
     let tab_labels = [" [1] Summary ", " [2] Raw Details ", " [3] Analytics ", " [4] Roundup "];
@@ -268,6 +275,34 @@ fn draw_dashboard(f: &mut Frame, app: &mut App, area: Rect) {
             f.render_widget(warn_p, chunks[2]);
         }
     }
+}
+
+/// ` Sec: ▸All  51  52   n: next section`; the chosen one is a filled chip, each section in its colour.
+fn section_selector_line(app: &App, sections: &[String]) -> Line<'static> {
+    let theme = app.theme;
+    let total = app.full_data.as_ref().map(|d| d.student_grades.len()).unwrap_or(0);
+    let mut spans = vec![Span::styled(" Sec: ", Style::default().fg(theme.inactive_tab))];
+    let chip = |label: String, color: Color, on: bool| {
+        if on {
+            Span::styled(format!("▸{} ", label), Style::default().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD))
+        } else {
+            Span::styled(format!(" {} ", label), Style::default().fg(color))
+        }
+    };
+    spans.push(chip("All".to_string(), theme.fg, app.section.is_none()));
+    for (i, sec) in sections.iter().enumerate() {
+        let n = app.full_data.as_ref()
+            .map(|d| d.student_grades.iter().filter(|r| r.get("Section").and_then(|v| v.as_str()) == Some(sec)).count())
+            .unwrap_or(0);
+        spans.push(Span::raw(" "));
+        spans.push(chip(format!("{} ({})", sec, n), theme.sections[i % theme.sections.len()],
+                        app.section.as_deref() == Some(sec.as_str())));
+    }
+    let shown = app.course_data.as_ref().map(|d| d.student_grades.len()).unwrap_or(0);
+    spans.push(Span::styled(format!("   {} of {} students · ", shown, total), Style::default().fg(theme.inactive_tab)));
+    spans.push(Span::styled("n", Style::default().fg(theme.key_accent).bold()));
+    spans.push(Span::styled(" next section", Style::default().fg(theme.inactive_tab)));
+    Line::from(spans)
 }
 
 fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
@@ -347,8 +382,12 @@ fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .enumerate()
         .map(|(r_idx, record)| {
-            let num_cell = Cell::from(format!("{}", r_idx + 1))
-                .style(Style::default().fg(theme.inactive_tab));
+            // All sections shown: a ▌ marker, an ID chip and the name in the student's section colour
+            let sec_color = app.section_color(record);
+            let num_cell = match sec_color {
+                Some(c) => Cell::from(format!("▌{}", r_idx + 1)).style(Style::default().fg(c)),
+                None => Cell::from(format!("{}", r_idx + 1)).style(Style::default().fg(theme.inactive_tab)),
+            };
             let mut cells: Vec<Cell> = vec![num_cell];
             for col_name in &data.summary_columns {
                 let cell_val = record.get(col_name.as_str()).unwrap_or(&serde_json::Value::Null);
@@ -368,7 +407,12 @@ fn draw_summary_tab(f: &mut Frame, app: &mut App, area: Rect) {
                 let mut cell_style = Style::default().fg(theme.fg);
 
                 if col_name == "Student ID" {
-                    cell_style = cell_style.fg(theme.info);
+                    cell_style = match sec_color {
+                        Some(c) => cell_style.fg(Color::Black).bg(c),
+                        None => cell_style.fg(theme.info),
+                    };
+                } else if col_name == "Name" && sec_color.is_some() {
+                    cell_style = cell_style.fg(sec_color.unwrap());
                 } else if col_name == "Final Score" {
                     cell_style = cell_style.fg(theme.key_accent).bold();
                 } else if col_name == "Grade" {
@@ -720,15 +764,17 @@ fn draw_submission_table(f: &mut Frame, app: &mut App, area: Rect) {
     let header = Row::new(header_cells).height(2).bottom_margin(1).style(Style::default().bg(theme.alt_row));
 
     let rows: Vec<Row> = data.student_grades.iter().enumerate().map(|(r_idx, record)| {
-        let mut cells = vec![
-            Cell::from(format!("{}", r_idx + 1)).style(Style::default().fg(theme.inactive_tab)),
-        ];
+        let sec_color = app.section_color(record);
+        let mut cells = vec![match sec_color {
+            Some(c) => Cell::from(format!("▌{}", r_idx + 1)).style(Style::default().fg(c)),
+            None => Cell::from(format!("{}", r_idx + 1)).style(Style::default().fg(theme.inactive_tab)),
+        }];
         for (b_idx, b) in blocks.iter().enumerate() {
             if b_idx > 0 {
                 cells.push(Cell::from("│").style(sep_style));
             }
             let sid = record.get("Student ID").and_then(|v| v.as_str()).unwrap_or("—").to_string();
-            cells.push(Cell::from(sid).style(Style::default().fg(theme.info)));
+            cells.push(Cell::from(sid).style(Style::default().fg(sec_color.unwrap_or(theme.info))));
 
             let val_text = record.get(b.key)
                 .and_then(|v| v.as_f64())
@@ -1302,13 +1348,20 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
             .unwrap_or("")
             .to_string();
         let marked = app.marks.contains(&sid);
+        let sec_color = app.section_color(record);
         let mut cells = vec![if marked {
             Cell::from(format!("▸{}", r_idx + 1)).style(Style::default().fg(theme.purple).add_modifier(Modifier::BOLD))
+        } else if let Some(c) = sec_color {
+            Cell::from(format!("▌{}", r_idx + 1)).style(Style::default().fg(c))
         } else {
             Cell::from(format!(" {}", r_idx + 1)).style(Style::default().fg(theme.inactive_tab))
         }];
 
-        let mut sid_style = Style::default().fg(if marked { theme.purple } else { theme.info });
+        let mut sid_style = match (marked, sec_color) {
+            (true, _) => Style::default().fg(theme.purple),
+            (false, Some(c)) => Style::default().fg(Color::Black).bg(c),
+            (false, None) => Style::default().fg(theme.info),
+        };
         if app.raw_right_focused && r_idx == app.cursor_row && app.cursor_col == 0 {
             sid_style = Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
         }
@@ -1320,7 +1373,7 @@ fn draw_sub_column_view(f: &mut Frame, app: &mut App, area: Rect) {
                 _ => v.to_string(),
             })
             .unwrap_or_default();
-        let mut name_style = Style::default().fg(theme.fg);
+        let mut name_style = Style::default().fg(sec_color.unwrap_or(theme.fg));
         if app.raw_right_focused && r_idx == app.cursor_row && app.cursor_col == 1 {
             name_style = Style::default().fg(theme.bg).bg(theme.active_tab).add_modifier(Modifier::BOLD);
         }
@@ -2500,6 +2553,10 @@ fn footer_line(app: &App) -> (Line<'static>, u8) {
                         Span::styled(" [e] ", Style::default().fg(theme.key_accent).bold()),
                         Span::raw("Export CSV  "),
                     ]);
+                    if app.full_data.as_ref().is_some_and(|d| d.sections.len() >= 2) {
+                        leg.push(Span::styled(" [n] ", Style::default().fg(theme.key_accent).bold()));
+                        leg.push(Span::raw("Next Section  "));
+                    }
                     if app.active_tab == 0 {
                         if app.summary_right_focused {
                             if app.summary_category_index == 0 {
@@ -3030,7 +3087,10 @@ fn draw_fill_dialog(f: &mut Frame, app: &mut App) {
     let mut target_spans = vec![label(FillField::Target, "Students: ")];
     for t in fill.targets() {
         let text = match t {
-            FillTarget::All => format!("All {}", n_students),
+            FillTarget::All => match &app.section {
+                Some(sec) => format!("All {} in sec {}", n_students, sec),
+                None => format!("All {}", n_students),
+            },
             FillTarget::Marked => format!("Marked {}", app.marks.len()),
             FillTarget::Rows => "Rows".to_string(),
             FillTarget::Group => "Class Group".to_string(),
@@ -3275,6 +3335,36 @@ mod tests {
 
     fn key(app: &mut App, code: crossterm::event::KeyCode) {
         app.update(crate::app::AppEvent::Key(crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE)));
+    }
+
+    #[test]
+    fn section_selector_shows_counts_and_follows_n() {
+        use crossterm::event::KeyCode;
+        let mut app = raw_details_app();
+        let mut full = app.course_data.take().unwrap();
+        for (i, r) in full.student_grades.iter_mut().chain(full.raw_scores.iter_mut()).enumerate() {
+            let sec = if i % 30 < 12 { "51" } else { "52" };
+            r.insert("Section".into(), serde_json::json!(sec));
+        }
+        full.sections = vec!["51".into(), "52".into()];
+        app.full_data = Some(full);
+        app.course_data = app.section_view();
+        let all = screen(&mut app, 140, 30).join("\n");
+        assert!(all.contains("Sec: ▸All") && all.contains("51 (12)") && all.contains("52 (18)"), "{all}");
+        assert!(all.contains("30 of 30 students") && all.contains("[n] Next Section"));
+        key(&mut app, KeyCode::Char('n'));
+        key(&mut app, KeyCode::Char('n'));
+        let s = screen(&mut app, 140, 30);
+        if std::env::var("SHOW").is_ok() { eprintln!("{}", s.join("\n")); }
+        assert!(s.join("\n").contains("▸52 (18)") && s.join("\n").contains("18 of 30 students"));
+    }
+
+    #[test]
+    fn one_section_course_has_no_selector() {
+        let mut app = raw_details_app();
+        app.full_data = app.course_data.clone();
+        let all = screen(&mut app, 140, 30).join("\n");
+        assert!(!all.contains("Sec:") && !all.contains("Next Section"));
     }
 
     #[test]

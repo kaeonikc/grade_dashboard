@@ -27,6 +27,9 @@ pub struct Theme {
     pub grade_dplus: Color,
     pub grade_d: Color,
     pub grade_f: Color,
+    /// One colour per section, by its position in the course's sections (cycled), for the All view's ID chip,
+    /// row marker and name text (SPEC_sections.md).
+    pub sections: [Color; 4],
 }
 
 pub const MONOKAI_PRO: Theme = Theme {
@@ -55,6 +58,7 @@ pub const MONOKAI_PRO: Theme = Theme {
     grade_dplus: Color::Indexed(214),     // Yellow-Orange (#ffaf00)
     grade_d:     Color::Indexed(208),     // Orange        (#ff8700)
     grade_f:     Color::Indexed(160),     // Darker-Red    (#d70000)
+    sections: [Color::Indexed(81), Color::Indexed(221), Color::Indexed(141), Color::Indexed(114)],
 };
 
 fn parse_json_color(val: &serde_json::Value) -> Option<Color> {
@@ -137,6 +141,11 @@ pub fn load_theme() -> Theme {
                         if let Some(val) = obj.get("grade_dplus").and_then(parse_json_color) { theme.grade_dplus = val; }
                         if let Some(val) = obj.get("grade_d").and_then(parse_json_color)     { theme.grade_d = val; }
                         if let Some(val) = obj.get("grade_f").and_then(parse_json_color)     { theme.grade_f = val; }
+                        if let Some(arr) = obj.get("sections").and_then(|v| v.as_array()) {
+                            for (slot, v) in theme.sections.iter_mut().zip(arr) {
+                                if let Some(c) = parse_json_color(v) { *slot = c; }
+                            }
+                        }
 
                         break;
                     }

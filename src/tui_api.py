@@ -325,6 +325,85 @@ def _compute_analytics(final_df: pd.DataFrame, config: dict, max_scores: dict) -
     }
 
 
+def _grade_distribution(final_df: pd.DataFrame, grade_order: list) -> dict:
+    counts = final_df["Grade"].value_counts()
+    total = len(final_df)
+    distribution = {}
+    for g in grade_order:
+        count = int(counts.get(g, 0))
+        pct = float(count / total * 100) if total > 0 else 0.0
+        distribution[g] = {"count": count, "pct": pct}
+    return distribution
+
+
+def _roundup_summary(final_df: pd.DataFrame, grade_order: list) -> dict:
+    roundup_summary = {
+        "improved_count": 0,
+        "distribution": [],
+        "improved_students": []
+    }
+
+    if "Original Grade" in final_df.columns:
+        orig_counts = final_df["Original Grade"].value_counts().reindex(grade_order, fill_value=0)
+        new_counts = final_df["Grade"].value_counts().reindex(grade_order, fill_value=0)
+
+        for grade in grade_order:
+            orig = int(orig_counts[grade])
+            rounded = int(new_counts[grade])
+            if orig == 0 and rounded == 0:
+                continue
+            roundup_summary["distribution"].append({
+                "grade": grade,
+                "original": orig,
+                "rounded": rounded,
+                "change": rounded - orig
+            })
+
+        improved = final_df[final_df["Grade"] != final_df["Original Grade"]]
+        roundup_summary["improved_count"] = len(improved)
+
+        for _, row in improved.iterrows():
+            roundup_summary["improved_students"].append({
+                "Student ID": str(row.get("Student ID", "")),
+                "Name": str(row.get("Name", "")),
+                "Original Final Score": float(row.get("Original Final Score", 0)),
+                "Final Score": float(row.get("Final Score", 0)),
+                "Original Grade": str(row.get("Original Grade", "")),
+                "Grade": str(row.get("Grade", ""))
+            })
+    return roundup_summary
+
+
+def _by_section(final_df: pd.DataFrame, config: dict, max_scores: dict, secmap: dict, sections: list,
+                grade_order: list) -> dict:
+    """grade-tui's section selector (SPEC_sections.md): distribution, roundup and analytics of each section's students,
+    computed here so switching sections needs no round trip."""
+    out = {}
+    sids = final_df["Student ID"].astype(str).str.strip()
+    position = {sid: i for i, sid in enumerate(sids)}
+
+    def whole_course_rows(node):
+        # raw_index points into student_grades/raw_scores (the whole course), not into this section's rows
+        if isinstance(node, dict):
+            if "raw_index" in node and "student_id" in node:
+                node["raw_index"] = position.get(str(node["student_id"]).strip(), node["raw_index"])
+            for v in node.values():
+                whole_course_rows(v)
+        elif isinstance(node, list):
+            for v in node:
+                whole_course_rows(v)
+        return node
+
+    for sec in sections:
+        part = final_df[sids.map(lambda s: secmap.get(s, "") == sec)]
+        out[sec] = {
+            "grade_distribution": _grade_distribution(part, grade_order),
+            "roundup_summary": _roundup_summary(part, grade_order),
+            "analytics": whole_course_rows(_compute_analytics(part, config, max_scores)),
+        }
+    return out
+
+
 def _class_groups(course_path) -> dict:
     """{student id: Class Group} from the roster (course_info/*_student_info.csv); {} without that column."""
     for f in sorted((Path(course_path) / "course_info").glob("*_student_info.csv")):
@@ -382,6 +461,10 @@ def get_course_data(course_path, use_weighted=True):
             summary_cols.append("Grade")
         
         has_coursework_total = "Coursework Total" in final_df.columns
+        # Sections from the roster (SPEC_sections.md): only a course with ≥2 gets the selector and Section fields
+        from src.sections import roster_sections, sections_of
+        secmap = roster_sections(path)
+        sections = sections_of(secmap) if len(sections_of(secmap)) >= 2 else []
         student_grades = []
         for idx, row in final_df[summary_cols].iterrows():
             record = {}
@@ -391,6 +474,8 @@ def get_course_data(course_path, use_weighted=True):
             if has_coursework_total:
                 ct = final_df.at[idx, "Coursework Total"]
                 record["Coursework Total"] = "" if pd.isna(ct) else int(ct)
+            if sections:
+                record["Section"] = secmap.get(str(record["Student ID"]).strip(), "")
             student_grades.append(record)
             
         # Prepare list of raw scores
@@ -417,6 +502,8 @@ def get_course_data(course_path, use_weighted=True):
                     record[col] = invalid_cells[(sid, col)]  # e.g. "abs": shown as typed, counts as 0
             if groups:
                 record["Class Group"] = groups.get(sid, "")
+            if sections:
+                record["Section"] = secmap.get(sid, "")
             raw_scores.append(record)
 
         names = dict(zip(final_df["Student ID"].astype(str), final_df["Name"].astype(str)))
@@ -426,52 +513,10 @@ def get_course_data(course_path, use_weighted=True):
             if col in raw_assignment_cols
         ]
             
-        # Prepare grade distribution
         grade_order = list(config.get("grade_boundaries", {}).keys()) + ["F"]
-        counts = final_df["Grade"].value_counts()
-        total = len(final_df)
-        distribution = {}
-        for g in grade_order:
-            count = int(counts.get(g, 0))
-            pct = float(count / total * 100) if total > 0 else 0.0
-            distribution[g] = {"count": count, "pct": pct}
-            
-        # Prepare roundup summary
-        roundup_summary = {
-            "improved_count": 0,
-            "distribution": [],
-            "improved_students": []
-        }
-        
-        if "Original Grade" in final_df.columns:
-            orig_counts = final_df["Original Grade"].value_counts().reindex(grade_order, fill_value=0)
-            new_counts = final_df["Grade"].value_counts().reindex(grade_order, fill_value=0)
-            
-            for grade in grade_order:
-                orig = int(orig_counts[grade])
-                rounded = int(new_counts[grade])
-                if orig == 0 and rounded == 0:
-                    continue
-                roundup_summary["distribution"].append({
-                    "grade": grade,
-                    "original": orig,
-                    "rounded": rounded,
-                    "change": rounded - orig
-                })
-                
-            improved = final_df[final_df["Grade"] != final_df["Original Grade"]]
-            roundup_summary["improved_count"] = len(improved)
-            
-            for _, row in improved.iterrows():
-                roundup_summary["improved_students"].append({
-                    "Student ID": str(row.get("Student ID", "")),
-                    "Name": str(row.get("Name", "")),
-                    "Original Final Score": float(row.get("Original Final Score", 0)),
-                    "Final Score": float(row.get("Final Score", 0)),
-                    "Original Grade": str(row.get("Original Grade", "")),
-                    "Grade": str(row.get("Grade", ""))
-                })
-                
+        distribution = _grade_distribution(final_df, grade_order)
+        roundup_summary = _roundup_summary(final_df, grade_order)
+
         # Clean weights for display/serialization
         clean_weights = {}
         for cat, w in config.get("weights", {}).items():
@@ -490,6 +535,7 @@ def get_course_data(course_path, use_weighted=True):
         attendance_labels = _compute_attendance_labels(config, attendance_cols)
 
         analytics = _compute_analytics(final_df, config, max_scores)
+        by_section = _by_section(final_df, config, max_scores, secmap, sections, grade_order) if sections else {}
 
         return {
             "status": "success",
@@ -513,6 +559,8 @@ def get_course_data(course_path, use_weighted=True):
             "analytics": analytics,
             "absences": absences,
             "category_totals": category_totals(raw_df, config, max_scores),
+            "sections": sections,
+            "by_section": by_section,
         }
     except Exception as e:
         import traceback

@@ -119,7 +119,13 @@ pub struct App {
     
     // Dashboard data
     pub selected_course_path: String,
+    /// What the tabs show: the whole course, or one section of it (`section`). Tables, fills and stats read this.
     pub course_data: Option<CourseData>,
+    /// The whole course as loaded; `course_data` is made from it (SPEC_sections.md).
+    pub full_data: Option<CourseData>,
+    /// The section shown (None = All); remembered per course for the session in `section_by_course`.
+    pub section: Option<String>,
+    pub section_by_course: std::collections::HashMap<String, Option<String>>,
     pub active_tab: usize, // 0: Summary, 1: Raw Details, 2: Analytics, 3: Roundup
     pub show_left_panel: bool, // [s]: hide/show the left panels on every tab
     
@@ -206,6 +212,9 @@ impl App {
             course_index: 0,
             selected_course_path: String::new(),
             course_data: None,
+            full_data: None,
+            section: None,
+            section_by_course: std::collections::HashMap::new(),
             active_tab: 0,
             show_left_panel: true,
             loading: false,
@@ -310,9 +319,57 @@ impl App {
         self.raw_selected_student = Some(raw_idx);
     }
 
+    /// `full_data` as the tabs show it: everyone, or only `section`'s students with that section's
+    /// distribution, roundup and analytics (their raw_index renumbered to the shown rows).
+    pub fn section_view(&self) -> Option<CourseData> {
+        let full = self.full_data.as_ref()?;
+        let Some(sec) = self.section.as_deref() else { return Some(full.clone()) };
+        Some(only_section(full, sec))
+    }
+
+    /// `n`: All → first section → … → last → All. Only for a course with ≥2 sections.
+    pub fn cycle_section(&mut self) {
+        let Some(full) = self.full_data.as_ref() else { return };
+        if full.sections.len() < 2 {
+            return;
+        }
+        let next = match self.section.as_ref().and_then(|s| full.sections.iter().position(|x| x == s)) {
+            None => Some(full.sections[0].clone()),
+            Some(i) if i + 1 < full.sections.len() => Some(full.sections[i + 1].clone()),
+            Some(_) => None,
+        };
+        let total = full.student_grades.len();
+        self.section = next;
+        self.section_by_course.insert(self.selected_course_path.clone(), self.section.clone());
+        self.course_data = self.section_view();
+        self.cursor_row = 0;
+        self.scroll_row_offset = 0;
+        self.raw_selected_student = None;
+        let shown = self.course_data.as_ref().map(|d| d.student_grades.len()).unwrap_or(0);
+        self.info_msg = Some(match &self.section {
+            Some(s) => format!("Section {}: {} of {} students", s, shown, total),
+            None => format!("All sections: {} students", total),
+        });
+        self.info_msg_ticks = 0;
+    }
+
+    /// The All view's colour for a record's section (None in a one-section course or with a section chosen).
+    pub fn section_color(&self, record: &std::collections::HashMap<String, serde_json::Value>) -> Option<ratatui::style::Color> {
+        if self.section.is_some() {
+            return None;
+        }
+        let full = self.full_data.as_ref()?;
+        let sec = record.get("Section")?.as_str()?;
+        let i = full.sections.iter().position(|s| s == sec)?;
+        Some(self.theme.sections[i % self.theme.sections.len()])
+    }
+
     /// New course data from a load or a save: keeps the cursor/category when `preserve_nav_on_reload`.
     fn apply_course_data(&mut self, data: CourseData) {
-        self.course_data = Some(data);
+        let remembered = self.section_by_course.get(&self.selected_course_path).cloned().flatten();
+        self.section = remembered.filter(|s| data.sections.contains(s));
+        self.full_data = Some(data);
+        self.course_data = self.section_view();
         self.state = AppState::Dashboard;
         if let Some(msg) = self.error_after_reload.take() {
             self.error = Some(msg);
@@ -573,6 +630,7 @@ impl App {
     fn leave_course(&mut self) {
         self.state = AppState::CourseSelect;
         self.course_data = None;
+        self.full_data = None;
         self.edits.clear();
         self.marks.clear();
         self.load_courses();
@@ -782,9 +840,10 @@ impl App {
         self.fill = None;
         self.error = None;
         let shown = if value.is_empty() { "blank".to_string() } else { value };
+        let sec = self.section.as_ref().map(|s| format!(" in sec {}", s)).unwrap_or_default();
         self.info_msg = Some(format!(
-            "Filled {} = {} for {} student{} ({} changed, unsaved). Ctrl+S saves, u undoes.",
-            column, shown, n_rows, if n_rows == 1 { "" } else { "s" }, changed
+            "Filled {} = {} for {} student{}{} ({} changed, unsaved). Ctrl+S saves, u undoes.",
+            column, shown, n_rows, if n_rows == 1 { "" } else { "s" }, sec, changed
         ));
         self.info_msg_ticks = 0;
     }
@@ -1553,6 +1612,11 @@ impl App {
                             self.export_reports();
                         }
                     }
+                    KeyCode::Char('n') => {
+                        if self.state == AppState::Dashboard && self.raw_selected_student.is_none() {
+                            self.cycle_section();
+                        }
+                    }
                     crossterm::event::KeyCode::Char('w') | crossterm::event::KeyCode::Char('W') => {
                         if self.state == AppState::Dashboard {
                             self.start_editing_weights();
@@ -1803,6 +1867,33 @@ impl App {
     }
 }
 
+/// One section's view of a course (SPEC_sections.md): its rows only, with its own distribution, roundup and
+/// analytics, whose raw_index (positions in the whole course) are renumbered to positions in these rows.
+pub fn only_section(full: &CourseData, sec: &str) -> CourseData {
+    let mut d = full.clone();
+    let in_sec = |r: &std::collections::HashMap<String, serde_json::Value>| {
+        r.get("Section").and_then(|v| v.as_str()) == Some(sec)
+    };
+    let keep: Vec<bool> = full.student_grades.iter().map(|r| in_sec(r)).collect();
+    d.student_grades = full.student_grades.iter().zip(&keep).filter(|(_, k)| **k).map(|(r, _)| r.clone()).collect();
+    d.raw_scores = full.raw_scores.iter().zip(&keep).filter(|(_, k)| **k).map(|(r, _)| r.clone()).collect();
+    if let Some(stats) = full.by_section.get(sec) {
+        d.grade_distribution = stats.grade_distribution.clone();
+        d.roundup_summary = stats.roundup_summary.clone();
+        d.analytics = stats.analytics.clone();
+        let pos: std::collections::HashMap<String, usize> = d.raw_scores.iter().enumerate()
+            .filter_map(|(i, r)| r.get("Student ID").map(|v| (crate::edits::cell_text(v), i)))
+            .collect();
+        for o in d.analytics.box_plot.outliers.iter_mut() {
+            o.raw_index = pos.get(&o.student_id).copied().unwrap_or(0);
+        }
+        for a in d.analytics.at_risk.iter_mut() {
+            a.raw_index = pos.get(&a.student_id).copied().unwrap_or(0);
+        }
+    }
+    d
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1843,6 +1934,102 @@ mod tests {
         app.cursor_col = 2 + cols.iter().position(|c| c == column).unwrap();
         app.cursor_row = row;
         app
+    }
+
+    /// The mock course with rows 0–11 in sec 51 and 12–29 in sec 52, loaded the way a bridge reply is.
+    fn sectioned_app() -> App {
+        let mut app = course_app("homework", "hw3", 0);
+        let mut full = app.course_data.take().unwrap();
+        for (i, r) in full.student_grades.iter_mut().chain(full.raw_scores.iter_mut()).enumerate() {
+            r.insert("Section".into(), serde_json::json!(if i % 30 < 12 { "51" } else { "52" }));
+        }
+        full.sections = vec!["51".into(), "52".into()];
+        // sec 52's analytics name its students by whole-course row (as tui_api sends them)
+        let mut a52 = full.analytics.clone();
+        a52.at_risk = vec![crate::types::AtRiskStudent {
+            raw_index: 20,
+            student_id: crate::edits::cell_text(&full.raw_scores[20]["Student ID"]),
+            name: String::new(), final_score: 10.0, grade: "F".into(), reasons: vec!["Failing".into()],
+        }];
+        for (sec, analytics) in [("51", full.analytics.clone()), ("52", a52)] {
+            full.by_section.insert(sec.into(), crate::types::SectionStats {
+                grade_distribution: full.grade_distribution.clone(),
+                roundup_summary: full.roundup_summary.clone(),
+                analytics,
+            });
+        }
+        app.preserve_nav_on_reload = true; // stay on homework / hw3, as after a save
+        app.apply_course_data(full);
+        app
+    }
+
+    fn sections_shown(app: &App) -> Vec<String> {
+        let d = app.course_data.as_ref().unwrap();
+        let mut s: Vec<String> = d.raw_scores.iter().map(|r| crate::edits::cell_text(&r["Section"])).collect();
+        s.dedup();
+        s
+    }
+
+    #[test]
+    fn n_cycles_all_and_each_section() {
+        let mut app = sectioned_app();
+        assert_eq!(app.course_data.as_ref().unwrap().raw_scores.len(), 30);
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!((app.section.as_deref(), app.course_data.as_ref().unwrap().raw_scores.len()), (Some("51"), 12));
+        assert_eq!(app.course_data.as_ref().unwrap().student_grades.len(), 12);
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!((app.section.as_deref(), sections_shown(&app)), (Some("52"), vec!["52".to_string()]));
+        assert_eq!(app.info_msg.as_deref(), Some("Section 52: 18 of 30 students"));
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!((app.section, app.course_data.as_ref().unwrap().raw_scores.len()), (None, 30));
+    }
+
+    #[test]
+    fn the_section_survives_a_reload() {
+        let mut app = sectioned_app();
+        press(&mut app, KeyCode::Char('n'));
+        let full = app.full_data.clone().unwrap();
+        app.apply_course_data(full);
+        assert_eq!(app.section.as_deref(), Some("51"));
+        assert_eq!(app.course_data.as_ref().unwrap().raw_scores.len(), 12);
+    }
+
+    #[test]
+    fn a_section_shows_its_own_analytics_with_rows_renumbered() {
+        let mut app = sectioned_app();
+        press(&mut app, KeyCode::Char('n'));
+        press(&mut app, KeyCode::Char('n'));
+        let d = app.course_data.as_ref().unwrap();
+        let risk = &d.analytics.at_risk[0];
+        assert_eq!(risk.raw_index, 8, "whole-course row 20 is sec 52's 9th row");
+        assert_eq!(crate::edits::cell_text(&d.raw_scores[risk.raw_index]["Student ID"]), risk.student_id);
+    }
+
+    #[test]
+    fn fill_all_touches_only_the_shown_section() {
+        let mut app = sectioned_app();
+        press(&mut app, KeyCode::Char('n'));
+        press(&mut app, KeyCode::Char('n'));
+        app.start_bulk_fill();
+        app.fill.as_mut().unwrap().value = tui_textarea::TextArea::new(vec!["4".to_string()]);
+        app.apply_fill();
+        assert_eq!(app.edits.len(), 18);
+        let full = app.full_data.as_ref().unwrap();
+        for r in &full.raw_scores {
+            let sid = crate::edits::cell_text(&r["Student ID"]);
+            let in52 = crate::edits::cell_text(&r["Section"]) == "52";
+            assert_eq!(app.edits.get(&sid, "hw3").is_some(), in52, "{sid}");
+        }
+        assert!(app.info_msg.as_deref().unwrap().contains("for 18 students in sec 52"));
+    }
+
+    #[test]
+    fn n_does_nothing_in_a_one_section_course() {
+        let mut app = course_app("homework", "hw1", 0);
+        let data = app.course_data.take().unwrap();
+        app.apply_course_data(data);
+        press(&mut app, KeyCode::Char('n'));
+        assert!(app.section.is_none() && app.info_msg.is_none());
     }
 
     fn pending(app: &App, row: usize, col: &str) -> Option<String> {
