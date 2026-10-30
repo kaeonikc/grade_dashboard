@@ -85,3 +85,24 @@ test('short screens: header scrolls away, grid page scrolls, no text inflation',
   assert.match(block, /\.view-table \.table-wrap \{[^}]*height: calc\(100dvh/);
   assert.match(css, /html \{[^}]*-webkit-text-size-adjust: 100%/);
 });
+
+// Section colours (SPEC_sections.md): names and IDs as text on --bg, --bg2 and the ID chip's 14% tint, and --bg as
+// the text of a pressed chip, all >= 4.5:1.
+function mix(a, b, w) {
+  const ch = (h, i) => parseInt(h.slice(i, i + 2), 16);
+  return '#' + [1, 3, 5].map((i) => Math.round(ch(a, i) * w + ch(b, i) * (1 - w)).toString(16).padStart(2, '0')).join('');
+}
+
+for (const [mode, from] of [['light', 0], ['dark', css.indexOf('prefers-color-scheme: dark')]]) {
+  test('section colours reach 4.5:1 in ' + mode, () => {
+    const t = Object.assign(tokens(0), tokens(from));
+    for (const k of [1, 2, 3, 4]) {
+      const sec = t['sec-' + k];
+      assert.ok(sec, mode + ' has --sec-' + k);
+      for (const bg of [t.bg, t.bg2, mix(sec, t.bg, 0.14)]) {
+        const r = contrast(sec, bg);
+        assert.ok(r >= 4.5, mode + ' --sec-' + k + ' on ' + bg + ': ' + r.toFixed(2));
+      }
+    }
+  });
+}

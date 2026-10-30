@@ -9,6 +9,8 @@
     /* Distribution bar fills: grade-tui's hues, softened, both modes; light bars get an edge (SPEC_bar_colours.md) */
     --bar-a: #2772c6; --bar-bp: #2ca2a2; --bar-b: #5aac47; --bar-cp: #a4c34b;
     --bar-c: #e4d457; --bar-dp: #e8a634; --bar-d: #de7b21; --bar-f: #bd3a2e; --bar-edge: 1px;
+    /* Section colours (SPEC_sections.md): text >= 4.5:1 on --bg, --bg2 and their 14% tint (tests/style.test.js) */
+    --sec-1: #1d5fa8; --sec-2: #8a4b00; --sec-3: #6d3cb0; --sec-4: #a3245e;
     color-scheme: light dark;
   }
   @media (prefers-color-scheme: dark) {
@@ -18,6 +20,7 @@
       --grade-a: #7ab8ff; --grade-bp: #4fd1d1; --grade-b: #8fdc5a; --grade-cp: #c6e04a;
       --grade-c: #f2e14a; --grade-dp: #ffc24d; --grade-d: #ff9a4d; --grade-f: #ff8a80;
       --bar-edge: 0;
+      --sec-1: #8ab8ff; --sec-2: #ffc46b; --sec-3: #c4a2ff; --sec-4: #ff8fc0;
     }
   }
   * { box-sizing: border-box; }
@@ -488,4 +491,23 @@
     .view-table .table-wrap { flex: none; height: calc(100vh - 2.75rem); height: calc(100dvh - 2.75rem); }
     .view-table .dock { position: static; }
   }
+
+  /* 16. Sections (SPEC_sections.md): the All | 51 | 52 chips, and in All each row in its section's colour (a line at
+     the left, the ID as a tinted chip, the name in the colour). */
+  .sec-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.5rem 0 0; }
+  .sec-bar[hidden] { display: none; }
+  .s1 { --sec: var(--sec-1); } .s2 { --sec: var(--sec-2); } .s3 { --sec: var(--sec-3); } .s4 { --sec: var(--sec-4); }
+  .sec-chip {
+    min-height: 2.75rem; padding: 0.375rem 1rem; border-radius: 999px; cursor: pointer; font-variant-numeric: tabular-nums;
+    border: 1px solid var(--sec, var(--line)); background: var(--bg); color: var(--sec, var(--text));
+  }
+  .sec-chip[aria-pressed="true"] { background: var(--sec, var(--accent)); border-color: var(--sec, var(--accent));
+    color: var(--bg); font-weight: 600; }
+  .sec-row { --sec-tint: color-mix(in srgb, var(--sec) 14%, var(--bg)); }
+  li.sec-row { box-shadow: inset 4px 0 0 var(--sec); }
+  .sec-row .id { color: var(--sec); background: var(--sec-tint); border-radius: 0.25rem; padding: 0 0.25rem;
+    font-weight: 600; }
+  .sec-row .name, .sec-row .c-name, .sec-row .c-name .link { color: var(--sec); }
+  .tb tr.sec-row td.c-id { color: var(--sec); font-weight: 600;
+    background: linear-gradient(to right, var(--sec) 4px, var(--sec-tint) 4px); }
 </style>

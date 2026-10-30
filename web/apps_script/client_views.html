@@ -359,7 +359,9 @@ function courseView(draft) {
     el('div', { class: 'action-bar' }, cm.discardBtn, cm.saveBtn), cm.tabs);
   cm.announce = el('p', { class: 'sr-only', 'aria-live': 'polite' });
   cm.banner = draftBanner(draft);
-  return [head, cm.banner, cm.views, picker, cm.attBar, cm.list, cm.empty, cm.summary, cm.overview, cm.wrap, cm.grading,
+  // All | 51 | 52 above the tabs, for a course with >= 2 sections (SPEC_sections.md)
+  cm.secBar = el('div', { class: 'sec-bar', role: 'group', 'aria-label': 'Section' });
+  return [head, cm.banner, cm.secBar, cm.views, picker, cm.attBar, cm.list, cm.empty, cm.summary, cm.overview, cm.wrap, cm.grading,
     cm.announce, cm.dock, cm.bar, cm.scrim, cm.menu].filter(Boolean);
 }
 
@@ -395,8 +397,39 @@ function normalizeNav() {
 }
 
 // The current tab and category, from the current state; an open detail is rebuilt with fresh values.
+// The section chips: All, then each section with its student count; the shown one is pressed.
+function refreshSecBar() {
+  cm.secBar.hidden = !state.sectionList.length;
+  if (!state.sectionList.length) return cm.secBar.replaceChildren();
+  const count = (sec) => state.allRows.filter((r) => state.sections.get(r.student_id) === sec).length;
+  const chip = (sec, label, slot) => {
+    const b = button(label, () => pickSection(sec), 'sec-chip' + (slot ? ' s' + slot : ''));
+    b.setAttribute('aria-pressed', String(state.section === sec));
+    return b;
+  };
+  cm.secBar.replaceChildren(chip('all', 'All · ' + state.allRows.length, 0),
+    ...state.sectionList.map((sec, i) => chip(sec, 'Sec ' + sec + ' · ' + count(sec), (i % 4) + 1)));
+}
+
+function pickSection(sec) {
+  if (sec === state.section) return;
+  setSection(sec);
+  if (det && !state.rows.includes(det.row)) closeDetail();
+  renderView();
+  say(sec === 'all' ? 'All sections: ' + F.plural(state.rows.length, 'student')
+    : 'Section ' + sec + ': ' + F.plural(state.rows.length, 'student'));
+}
+
+// In All, a row in a section's colour: a line at its left, the ID as a chip, the name tinted (style.html .sec-row).
+function markSection(node, row) {
+  const slot = sectionSlot(row);
+  if (slot) node.classList.add('sec-row', 's' + slot);
+  return node;
+}
+
 function renderView() {
   normalizeNav();
+  refreshSecBar();
   const v = state.view = modeOf();
   const wideSummary = v === 'summary' && WIDE.matches;
   const grid = v === 'table' && state.category === 'attendance';
@@ -587,6 +620,7 @@ function rowItem(row, col, i) {
   it.li = el('li', { class: att ? 'row att' : 'row' }, it.who,
     el('div', { class: 'cell' }, it.value, el('span', { class: 'mark', 'aria-hidden': 'true' }, '*')),
     att ? codeButtons(it) : null, it.msg);
+  markSection(it.li, row);
   refreshItem(it);
   return it;
 }
@@ -894,9 +928,11 @@ function renderDetail() {
   det.name = data('h2', { id: 'det-name', class: 'det-name', tabindex: '-1' }, row.name);
   det.card = el('div', { class: 'det-card' });
   const group = state.groups.get(row.student_id);
+  const sec = state.sectionList.length ? state.sections.get(row.student_id) : '';
   const sections = state.open.course.category_order.map((cat) => detailSection(row, cat)).filter(Boolean);
   det.panel.replaceChildren(det.bar,
-    el('div', { class: 'det-who' }, el('span', { class: 'id' }, row.student_id + (group ? ' · ' + group : '')),
+    el('div', { class: 'det-who' }, el('span', { class: 'id' },
+      row.student_id + (sec ? ' · Section ' + sec : '') + (group ? ' · ' + group : '')),
       el('div', { class: 'det-steps' }, det.prev, det.next)),
     det.name, det.card, ...sections);
   refreshSummary();
@@ -1235,7 +1271,7 @@ function markPicked() {
 }
 
 function tableRow(row, r) {
-  const tr = el('tr', { role: 'row', 'aria-rowindex': String(r + 2) });
+  const tr = markSection(el('tr', { role: 'row', 'aria-rowindex': String(r + 2) }), row);
   const tds = tb.specs.map((s, c) => {
     const frozen = s.kind === 'id' || s.kind === 'name';
     const td = el('td', { role: frozen ? 'rowheader' : 'gridcell', 'aria-colindex': String(c + 1), class: 'c-' + s.kind });
@@ -1564,7 +1600,11 @@ function openFill() {
       radio('whole', 'Whole column')),
     att ? codeChoice() : typedValue(), msg, hint, count, ea,
     state.search.trim() ? el('p', { class: 'muted' }, 'Fill covers all ' + F.plural(state.rows.length, 'student') +
+      (state.section === 'all' ? '' : ' in section ' + state.section) +
       ', not only the ones your search shows.') : null,
+    state.section !== 'all' && !state.search.trim()
+      ? el('p', { class: 'muted' }, 'Section ' + state.section + ' only: ' + F.plural(state.rows.length, 'student') + '.')
+      : null,
     el('div', { class: 'sheet-actions' }, button('Cancel', () => d.close(), 'btn outline'), go));
   update();
   // Tapping outside the sheet closes it without changes (Esc does too, natively).
@@ -2196,9 +2236,9 @@ function renderSummary() {
 
 function summaryRow(row) {
   const cells = summaryFields(null).map(() => el('td', { class: 'c-calc' })).concat(el('td', { class: 'c-grade' }));
-  const tr = el('tr', {}, el('td', { class: 'c-id' }, row.student_id),
+  const tr = markSection(el('tr', {}, el('td', { class: 'c-id' }, el('span', { class: 'id' }, row.student_id)),
     el('td', { class: 'c-name' }, el('button', { type: 'button', class: 'link', onclick: () => openDetail(row) },
-      data('span', {}, row.name))), ...cells);
+      data('span', {}, row.name))), ...cells), row);
   const paint = () => {
     const g = gradeOf(row);
     summaryFields(g).forEach((f, i) => { cells[i].textContent = f[1]; });
@@ -2226,7 +2266,7 @@ function summaryItem(row, i) {
     toggle.setAttribute('aria-expanded', String(!region.hidden));
     chevron.textContent = region.hidden ? '▸' : '▾';
   });
-  const li = el('li', { class: 'sum-item' }, toggle, region);
+  const li = markSection(el('li', { class: 'sum-item' }, toggle, region), row);
   const paint = () => {
     const g = gradeOf(row);
     final.textContent = g.final_score;

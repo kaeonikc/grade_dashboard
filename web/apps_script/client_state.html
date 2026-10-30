@@ -8,6 +8,7 @@ const UI_PREFIX = 'gw:ui:';
 const MENU_KEY = 'gw:nav:menu';  // the ☰ menu on wide screens, per device ('0' closed); never a course folder name
 const COURSES_KEY = 'gw:courses';  // the last course list, drawn before Drive answers (SPEC_discard_and_speed.md D6)
 const LAST_KEY = 'gw:last';        // the course folder opened last on this device, prefetched with the list (D8)
+const SECTION_PREFIX = 'gw:sec:';  // + folder: the section shown on this device ('all' when absent; SPEC_sections.md)
 // A course's `folder` is its path in grade_web, `<course>` or `<group>/<course>` (SPEC_semester_groups.md D4): every
 // key above that names a course uses it.
 const FRESH_MS = 60000;            // a course in memory this young opens without a recheck (D7)
@@ -19,8 +20,9 @@ const state = {
   courses: null,     // listCourses().courses
   courseGroups: [],  // listCourses().groups: the semester groups in grade_web, [{name, count}]
   open: null,        // the loadCourse reply of the open course (its journal kept current by every reply)
-  rows: [],          // Grades.mergeCourse: students in Raw Details order
-  byId: new Map(),   // student_id -> row
+  rows: [],          // the students shown: allRows, or one section's (SPEC_sections.md); every view reads these
+  allRows: [],       // Grades.mergeCourse: every student in Raw Details order
+  byId: new Map(),   // student_id -> row (every student)
   max: {},           // Grades.fillDefaultMax: each column's max with the current weights
   edits: new Map(),  // unsaved edits, editKey -> {student_id, column, value, original} (the draft's edit shape)
   editsPush: null,   // push_id the unsaved edits were made on (an older one after a draft from before a push)
@@ -28,6 +30,9 @@ const state = {
   grades: [],        // Grades.computeGrades over the saved values plus the unsaved edits, one per row
   gradeById: new Map(),  // student_id -> its entry in grades
   groups: new Map(), // student_id -> Class Group from the roster (shown in the detail)
+  sections: new Map(), // student_id -> Section from the roster
+  sectionList: [],   // the roster's sections in numeric order when there are >= 2 (the selector), else []
+  section: 'all',    // the section shown: 'all' or one of sectionList
   tab: 'summary',    // grade-tui's tab (SPEC_web_tabs.md): 'summary', 'raw', 'analytics' or 'grading'
   category: '*',     // Raw Details' category (a category name, '*' = All columns on wide screens)
   menu: false,       // the ☰ Categories menu is shown
@@ -198,8 +203,9 @@ function lastCourse() {
 // Everything a course shows from, built from a loadCourse reply.
 function snapshotOf(reply) {
   const rows = Grades.mergeCourse(reply.course, reply.roster, reply.files);
+  const info = rosterInfo(reply.roster);
   return { open: reply, rows, byId: new Map(rows.map((r) => [r.student_id, r])),
-    max: Grades.fillDefaultMax(reply.course), groups: classGroups(reply.roster) };
+    max: Grades.fillDefaultMax(reply.course), groups: info.groups, sections: info.sections };
 }
 
 // Keeps a course (at = when Drive last sent it), the newest last, at most KEEP_COURSES.
@@ -305,30 +311,80 @@ function reloadCourse() {
 
 function useSnapshot(snap) {
   state.open = snap.open;
-  state.rows = snap.rows;
+  state.allRows = snap.rows;
   state.byId = snap.byId;
   state.max = snap.max;
   state.groups = snap.groups;
+  state.sections = snap.sections || new Map();
+  state.sectionList = sortSections(state.sections.values());
+  if (state.sectionList.length < 2) state.sectionList = [];
+  const kept = readSection(snap.open.folder);
+  state.section = state.sectionList.includes(kept) ? kept : 'all';
+  state.rows = sectionRows();
   state.loadedAt = snap.at;
 }
 
-// Class Group per student, when the roster has that column.
-function classGroups(rosterText) {
+// Class Group and Section per student, when the roster has those columns.
+function rosterInfo(rosterText) {
   const doc = Csv.parse(rosterText);
   const header = doc.header.map((h) => h.trim());
   const iId = header.indexOf('Student ID');
-  const iGroup = header.indexOf('Class Group');
   const groups = new Map();
-  if (iId >= 0 && iGroup >= 0) for (const r of doc.rows) groups.set((r[iId] || '').trim(), (r[iGroup] || '').trim());
-  return groups;
+  const sections = new Map();
+  for (const [name, map] of [['Class Group', groups], ['Section', sections]]) {
+    const i = header.indexOf(name);
+    if (iId >= 0 && i >= 0) for (const r of doc.rows) map.set((r[iId] || '').trim(), (r[i] || '').trim());
+  }
+  return { groups, sections };
+}
+
+// ---- Sections (SPEC_sections.md): one course folder, the selector shows All or one section ----
+
+// Distinct non-blank sections, numbers in numeric order ('8' before '51'), then any others by text.
+function sortSections(values) {
+  const key = (s) => (/^\d+$/.test(s) ? [0, Number(s), s] : [1, 0, s]);
+  return Array.from(new Set(Array.from(values, (v) => String(v).trim()).filter(Boolean)))
+    .sort((a, b) => { const x = key(a), y = key(b); return x[0] - y[0] || x[1] - y[1] || (x[2] < y[2] ? -1 : x[2] > y[2] ? 1 : 0); });
+}
+
+function sectionRows() {
+  if (state.section === 'all') return state.allRows;
+  return state.allRows.filter((r) => state.sections.get(r.student_id) === state.section);
+}
+
+function readSection(folder) {
+  try {
+    return localStorage.getItem(SECTION_PREFIX + folder) || 'all';
+  } catch (e) {
+    return 'all';
+  }
+}
+
+// Shows `section` ('all' or one of sectionList) and remembers it on this device; grades and stats follow.
+function setSection(section) {
+  if (section !== 'all' && !state.sectionList.includes(section)) return;
+  state.section = section;
+  try {
+    if (section === 'all') localStorage.removeItem(SECTION_PREFIX + state.open.folder);
+    else localStorage.setItem(SECTION_PREFIX + state.open.folder, section);
+  } catch (e) { /* not kept: the course opens on All next time */ }
+  state.rows = sectionRows();
+  recompute();
+}
+
+// The All view's colour slot (1-4) of a student's section, or 0 (one section, a section chosen, or no section).
+function sectionSlot(row) {
+  if (state.section !== 'all' || !state.sectionList.length) return 0;
+  const i = state.sectionList.indexOf(state.sections.get(row.student_id));
+  return i < 0 ? 0 : (i % 4) + 1;
 }
 
 // Back to the course list: the unsaved edits stay only in the draft; the course stays in memory as it now shows
 // (saved values, journal, weights), still dated by its last load.
 function closeCourse() {
   if (state.open) {
-    keepCourse(state.open.folder, { open: state.open, rows: state.rows, byId: state.byId, max: state.max,
-      groups: state.groups, at: state.loadedAt });
+    keepCourse(state.open.folder, { open: state.open, rows: state.allRows, byId: state.byId, max: state.max,
+      groups: state.groups, sections: state.sections, at: state.loadedAt });
   }
   state.open = null;
   state.edits = new Map();
