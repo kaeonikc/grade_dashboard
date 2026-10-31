@@ -65,7 +65,11 @@ function server(name, ...args) {
       state.timing[name] = { total: performance.now() - t0, server: reply && reply.timing };
       document.dispatchEvent(new Event('gw:timing'));
       resolve(reply);
-    }).withFailureHandler(reject)[name](...args);
+    }).withFailureHandler((err) => {
+      // Marked so a failure of the call itself can be told from an error in this page's own code
+      if (err && typeof err === 'object') err.fromGoogle = true;
+      reject(err);
+    })[name](...args);
   });
 }
 
@@ -627,6 +631,7 @@ function setSaved(sid, column, value) {
 // How a failed call reads (Interface "Failures"): offline, auth or other.
 function failureKind(err) {
   if (navigator.onLine === false) return 'offline';
+  if (err instanceof Error && !err.fromGoogle) return 'page';
   return /authoriz|sign[ -]?in|log[ -]?in|\b40[13]\b/i.test(String(err && err.message || err)) ? 'auth' : 'other';
 }
 

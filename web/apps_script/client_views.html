@@ -237,10 +237,13 @@ function showCourse(folder, courseName) {
     }
     if (reply.code === 'BUSY') return failed('Drive is busy with a save from another device. Try again in a moment.');
     show(listHeader(), notice(el('span', {}, "Can't open ", data('span', {}, courseName), '.'), reply.message, back));
-  }, () => {
+  }, (err) => {
     clearTimeout(timer);
-    failed(navigator.onLine === false ? "You're offline. Connect, then try again." :
-      "Google didn't answer. Try again in a moment.");
+    const kind = failureKind(err);
+    if (kind === 'page') console.error(err);
+    failed(kind === 'offline' ? "You're offline. Connect, then try again." : kind === 'page'
+      ? 'Drive sent the course, but this page failed to show it (' + err.name + ': ' + err.message + ').'
+      : "Google didn't answer. Try again in a moment.");
   });
 }
 
