@@ -5,7 +5,6 @@
 
 const DRAFT_PREFIX = 'gw:draft:';
 const UI_PREFIX = 'gw:ui:';
-const MENU_KEY = 'gw:nav:menu';  // the ☰ menu on wide screens, per device ('0' closed); never a course folder name
 const COURSES_KEY = 'gw:courses';  // the last course list, drawn before Drive answers (SPEC_discard_and_speed.md D6)
 const LAST_KEY = 'gw:last';        // the course folder opened last on this device, prefetched with the list (D8)
 const SECTION_PREFIX = 'gw:sec:';  // + folder: the section shown on this device ('all' when absent; SPEC_sections.md)
@@ -36,12 +35,11 @@ const state = {
   sectionPicked: null, // the open course's folder once a chip was tapped: reloads keep that choice (R7)
   tab: 'summary',    // grade-tui's tab (SPEC_web_tabs.md): 'summary', 'raw', 'analytics' or 'grading'
   category: '*',     // Raw Details' category (a category name, '*' = All columns on wide screens)
-  menu: false,       // the ☰ Categories menu is shown
   attSession: false, // Raw Details › attendance shows one session (attendance taking) instead of the grid
   attRisk: false,    // the attendance grid shows only students under 80% (SPEC_attendance_grid.md)
   attSort: false,    // the attendance grid lists the lowest % first
-  view: 'summary',   // what renders, from tab + category + width (modeOf): 'summary', 'table' (wide), 'scores',
-                     // 'attendance' (phone), 'analytics' or 'grading'
+  view: 'summary',   // what renders, from tab + category (modeOf): 'summary', 'table', 'attendance' (a session),
+                     // 'analytics' or 'grading'
   column: null,      // the picked columns[].name in Scores (and the table's Fill column)
   session: null,     // the picked attendance session on the Attendance tab (today's when the course opens)
   search: '',        // the search box text
@@ -799,21 +797,57 @@ function rememberUi() {
   }
 }
 
-// The ☰ menu on wide screens: shown unless this device closed it last (phones always start closed).
-function menuPref() {
-  try {
-    return localStorage.getItem(MENU_KEY) !== '0';
-  } catch (e) {
-    return true;
-  }
+// What renders for the tab and category: Raw is the grid at both widths (SPEC_menu_strip.md M6), and the one-session
+// view while a session is open (SPEC_attendance_grid.md A1).
+function modeOf() {
+  if (state.tab !== 'raw') return state.tab;
+  return state.category === 'attendance' && state.attSession ? 'attendance' : 'table';
 }
 
-function rememberMenu(open) {
-  try {
-    localStorage.setItem(MENU_KEY, open ? '1' : '0');
-  } catch (e) {
-    // only the menu preference is lost
+// The Raw tab's category row: All columns and the points on wide screens only (SPEC_menu_strip.md M2, M11).
+function catEntries(wide) {
+  const cats = Grades.navCategories(state.open.course)
+    .map((cat) => (wide ? { key: cat, label: cat, pts: catPoints(cat) } : { key: cat, label: cat }));
+  return (wide ? [{ key: '*', label: 'All columns' }] : []).concat(cats);
+}
+
+// grade-tui's `[20 pts]`: the category's column maxima (a session counts 1), or its weight × 100 without columns.
+function catPoints(cat) {
+  const course = state.open.course;
+  const cols = Grades.columnsOf(course, cat);
+  if (!cols.length) return Grades.round2((course.weights[cat] || 0) * 100);
+  return Grades.round2(cols.reduce((t, c) => t + (cat === 'attendance' ? 1 : maxOf(c.name)), 0));
+}
+
+// ID, Name, then per category its counted columns and its computed `{category} /{w}`, then the three totals.
+// A Raw Details category (not All columns) shows only its own columns and total. Phones have no ID column: the ID
+// goes under the name in the frozen column.
+function tableColumns(wide) {
+  const course = state.open.course;
+  if (state.category === 'attendance') return attColumns(wide);
+  const one = state.category !== '*';
+  const specs = (wide ? [{ kind: 'id', label: 'Student ID' }] : []).concat({ kind: 'name', label: 'Name' });
+  for (const cat of one ? [state.category] : Grades.navCategories(course)) {
+    for (const col of course.columns) {
+      if (col.category === cat) specs.push({ kind: cat === 'attendance' ? 'code' : 'score', col });
+    }
+    if (Object.prototype.hasOwnProperty.call(course.weights, cat)) {
+      specs.push({ kind: 'calc', cat, label: cat + ' /' + Grades.round2(course.weights[cat] * 100) });
+    }
   }
+  if (one) return specs;
+  specs.push({ kind: 'calc', key: 'coursework_total', label: 'Coursework Total' },
+    { kind: 'calc', key: 'final_score', label: 'Final Score' }, { kind: 'calc', key: 'grade', label: 'Grade' });
+  return specs;
+}
+
+const ATT_COLUMNS = [['total', 'Total'], ['P', 'P'], ['L', 'L'], ['A', 'A'], ['X', 'X'], ['blank', 'blank']];
+
+// (ID,) Name, one `code` column per session (numbered), then Total and the code counts.
+function attColumns(wide) {
+  return (wide ? [{ kind: 'id', label: 'Student ID' }] : []).concat({ kind: 'name', label: 'Name' },
+    sessions().map((col, i) => ({ kind: 'code', col, n: i + 1 })),
+    ATT_COLUMNS.map(([key, label]) => ({ kind: 'att', key, label })));
 }
 
 // The attendance grid's numbers: per student and per session over the sessions held so far, unsaved edits included.

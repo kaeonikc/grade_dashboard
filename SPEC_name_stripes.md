@@ -3,6 +3,8 @@
 Status: approved and built 2026-10-31 (as-built notes at the end). Branch: `section-folders`. Scope: `grade_dashboard/web/apps_script/`.
 Builds on `SPEC_attendance_grid.md` and `SPEC_sections.md`.
 
+Changed 2026-10-31: the phone name column is 9.5rem at 13 px, without the title. See `SPEC_menu_strip.md` M9, M10.
+
 ## Context
 
 The user sent a phone screenshot of Raw › attendance for Astronomy, Sec 51. They asked for two changes (translated

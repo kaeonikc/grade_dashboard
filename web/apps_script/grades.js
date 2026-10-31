@@ -406,6 +406,14 @@ function gwGrades(Csv) {
     return { students, sessions: perSession };
   }
 
+  // A name without its leading title (SPEC_menu_strip.md M10): phone lists have no room for นาย/นางสาว. A title alone
+  // stays, and only one comes off, so `นางสาวนายิกา` keeps `นายิกา`.
+  function plainName(name) {
+    const text = name == null ? '' : String(name);
+    const rest = text.replace(/^(?:นางสาว|นาย|นาง|น\.ส\.)\s*/, '');
+    return rest.trim() === '' ? text : rest;
+  }
+
   // `9.6 / 10 · 96%` (the % rounded down, so a flagged row never reads 80%), or `—` before the first held session.
   function fmtAttTotal(st) {
     if (!st || !st.held) return '—';
@@ -437,7 +445,7 @@ function gwGrades(Csv) {
     ABSENT, CODE_VALUE, classify, sameCell, canonicalValue, validateTyped, round2, letterGrade, mergeCourse,
     fillDefaultMax, computeGrades, sessionDate, fillTargets, GRADE_SCALE, gradeOrder, gradeRanges, distribution,
     gradeClass, pyRound2, quantile, analytics, TABS, navCategories, columnsOf, firstCategory, navFromMemory,
-    attendanceStats, fmtAttTotal, shortDate,
+    attendanceStats, fmtAttTotal, shortDate, plainName,
   };
 }
 if (typeof module !== 'undefined') module.exports = (Csv) => gwGrades(Csv || require('./csv.js')());

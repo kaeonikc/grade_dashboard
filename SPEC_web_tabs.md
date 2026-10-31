@@ -2,6 +2,9 @@
 
 Status: approved 2026-10-19. Branch: `web-app`. Scope: `grade_dashboard/web/`.
 
+Superseded in part (2026-10-31): the ☰ menu and the `s` key are gone, and phone Raw is a grid. See
+`SPEC_menu_strip.md`.
+
 ## Context
 
 The web app's views (Table, Scores, Attendance, Grading) don't match grade-tui, the dashboard the user works in daily.

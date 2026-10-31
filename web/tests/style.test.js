@@ -80,7 +80,8 @@ test('short screens: header scrolls away, grid page scrolls, no text inflation',
   const i = css.indexOf('@media (max-height: 500px)');
   assert.ok(i >= 0, 'has the short-screen block');
   const block = css.slice(i, css.indexOf('\n  }\n', i));
-  assert.match(block, /\.course-head \{ position: static; \}/);
+  assert.match(block, /main:has\(> \.dock\) \{[^}]*overflow: visible/);
+  assert.match(block, /main > \.course-body \{[^}]*overflow: visible/);
   assert.match(block, /\.view-table main \{ height: auto; \}/);
   assert.match(block, /\.view-table \.table-wrap \{[^}]*height: calc\(100dvh/);
   assert.match(css, /html \{[^}]*-webkit-text-size-adjust: 100%/);
@@ -115,12 +116,12 @@ function rule(selector) {
   return m[1];
 }
 
-test('phone grid: the name wraps in a 10.5rem column, never cut', () => {
-  const r = rule('.att-grid.compact .c-name');
+test('phone grid: the name wraps in a 9.5rem column, never cut', () => {
+  const r = rule('.tb.compact .c-name');
   assert.match(r, /white-space:\s*normal/);
-  assert.match(r, /\bwidth:\s*10\.5rem/);
-  assert.match(r, /min-width:\s*10\.5rem/);
-  assert.match(r, /max-width:\s*10\.5rem/);
+  assert.match(r, /\bwidth:\s*9\.5rem/);
+  assert.match(r, /min-width:\s*9\.5rem/);
+  assert.match(r, /max-width:\s*9\.5rem/);
   assert.doesNotMatch(r, /ellipsis/);
 });
 

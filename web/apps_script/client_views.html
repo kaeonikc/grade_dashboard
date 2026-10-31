@@ -231,8 +231,6 @@ function showCourse(folder, courseName) {
   openCourse(folder).then(({ reply, draft, stale }) => {
     clearTimeout(timer);
     if (reply.ok) {
-      // The tab and category used last on this device (openCourse); the ☰ menu starts shown on wide screens only.
-      state.menu = WIDE.matches && menuPref();
       show(...courseView(draft));
       renderView();
       if (stale) recheck();
@@ -260,12 +258,12 @@ function recheck() {
   recheckCourse().then(({ reply, draft }) => {
     if (!state.open || state.open.folder !== folder) return;
     if (reply.ok) {
-      const y = window.scrollY;
+      const at = scrollSpot();
       const student = det && det.row.student_id;
       show(...courseView(cm.banner && cm.banner.isConnected ? draft : null));
       renderView();
       if (student && state.byId.has(student)) openDetail(state.byId.get(student));
-      window.scrollTo(0, y);
+      scrollSpot(at);
       return;
     }
     if (reply.code === 'BUSY') return alertBox("Couldn't check Drive: it's busy with a save from another device.", again());
@@ -291,10 +289,8 @@ function courseView(draft) {
   cm.badge = el('button', { type: 'button', class: 'badge unsaved', hidden: '', onclick: openSaveSheet });
   cm.headLine = el('p', { class: 'muted head-line' });
   cm.strip = storageStrip();
-  cm.menuBtn = el('button', { type: 'button', class: 'icon menu-btn', 'aria-label': 'Categories',
-    'aria-controls': 'cat-menu', 'aria-expanded': 'false', onclick: () => toggleMenu() }, '☰');
   const head = el('header', { class: 'course-head' },
-    el('div', { class: 'course-bar' }, cm.menuBtn,
+    el('div', { class: 'course-bar' },
       el('button', { type: 'button', class: 'icon', 'aria-label': 'Courses', onclick: () => leave(showCourses) }, '‹'),
       data('h1', { class: 'course-name' }, o.course.course_name), cm.badge,
       el('button', { type: 'button', class: 'icon', 'aria-label': 'More', 'aria-haspopup': 'dialog', onclick: openMore },
@@ -316,20 +312,11 @@ function courseView(draft) {
   cm.fill = button('Fill…', openFill, 'btn outline fill-btn');
   cm.label = el('label', { for: 'col' });
   cm.gridBack = button('‹ Grid', () => { state.attSession = false; renderView(); }, 'btn outline grid-back');
-  const picker = el('section', { class: 'col-picker' }, cm.label,
-    el('div', { class: 'col-row' }, cm.gridBack, cm.prev, cm.select, cm.next), cm.line,
-    el('div', { class: 'search-row' }, el('div', { class: 'search' }, cm.search, cm.clear), cm.fill));
-
   // grade-tui's tabs (SPEC_web_tabs.md): a strip on wide screens, the bottom tab bar on phones (CSS shows one).
   cm.views = el('nav', { class: 'views', 'aria-label': 'Tabs' },
     ...TAB_LABELS.map(([tab, label], i) => tabButton(tab, '[' + (i + 1) + '] ' + label, 'btn outline view-btn')));
   cm.tabs = el('nav', { class: 'tabs', 'aria-label': 'Tabs' },
     ...TAB_LABELS.map(([tab, label, short]) => tabButton(tab, short || label, 'tab')));
-  cm.menuList = el('ul', { class: 'menu-list' });
-  cm.menu = el('nav', { id: 'cat-menu', class: 'cat-menu', 'aria-label': 'Categories' },
-    el('p', { class: 'menu-title' }, 'Categories'), cm.menuList);
-  cm.menu.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !WIDE.matches) closeDrawer(); });
-  cm.scrim = el('div', { class: 'scrim', 'aria-hidden': 'true', onclick: () => closeDrawer() });
   // The attendance grid's toolbar (SPEC_attendance_grid.md A1, A11)
   cm.takeToday = button('Take today ›', () => { const t = todaySession(); if (t) openSession(t); }, 'btn outline');
   cm.riskBtn = button('At risk only', () => {
@@ -344,6 +331,9 @@ function courseView(draft) {
   }, 'btn outline toggle');
   cm.attBar = el('div', { class: 'att-bar', role: 'group', 'aria-label': 'Attendance grid' }, cm.takeToday,
     cm.riskBtn, cm.sortBtn);
+  const picker = el('section', { class: 'col-picker' }, cm.label,
+    el('div', { class: 'col-row' }, cm.gridBack, cm.prev, cm.select, cm.next), cm.line,
+    el('div', { class: 'search-row' }, el('div', { class: 'search' }, cm.search, cm.clear), cm.fill, cm.attBar));
   cm.summary = el('div', { class: 'summary' });
   cm.overview = el('div', { class: 'overview' });
   cm.wrap = el('div', { class: 'table-wrap' });
@@ -369,8 +359,12 @@ function courseView(draft) {
   cm.banner = draftBanner(draft);
   // All | 51 | 52 above the tabs, for a course with >= 2 sections (SPEC_sections.md)
   cm.secBar = el('div', { class: 'sec-bar', role: 'group', 'aria-label': 'Section' });
-  return [head, cm.banner, cm.secBar, cm.views, picker, cm.attBar, cm.list, cm.empty, cm.summary, cm.overview, cm.wrap, cm.grading,
-    cm.announce, cm.dock, cm.bar, cm.scrim, cm.menu].filter(Boolean);
+  // The Raw tab's categories, under the sections (SPEC_menu_strip.md M2)
+  cm.catBar = el('div', { class: 'cat-bar', role: 'group', 'aria-label': 'Categories' });
+  // The top stays still; only the body under it scrolls (SPEC_menu_strip.md M4, M5).
+  const top = el('div', { class: 'top-panel' }, head, cm.banner, cm.secBar, cm.catBar, cm.views, picker);
+  cm.body = el('div', { class: 'course-body' }, cm.list, cm.empty, cm.summary, cm.overview, cm.wrap, cm.grading);
+  return [top, cm.body, cm.announce, cm.dock, cm.bar];
 }
 
 const TAB_LABELS = [['summary', 'Summary'], ['raw', 'Raw Details', 'Raw'], ['analytics', 'Analytics'],
@@ -380,15 +374,6 @@ function tabButton(tab, label, cls) {
   const b = button(label, () => setTab(tab), cls);
   b.dataset.tab = tab;
   return b;
-}
-
-// What renders for the tab and category: Raw Details is the table on wide screens and column mode (Scores, or
-// Attendance for the attendance category) on phones. All columns ('*') is wide only.
-// Attendance is the grid (the table, both widths) until a session is opened (SPEC_attendance_grid.md A1).
-function modeOf() {
-  if (state.tab !== 'raw') return state.tab;
-  if (state.category === 'attendance') return state.attSession ? 'attendance' : 'table';
-  return WIDE.matches ? 'table' : 'scores';
 }
 
 // A category always opens on one of its columns: the picked one when it belongs there, else its first.
@@ -417,6 +402,31 @@ function refreshSecBar() {
   };
   cm.secBar.replaceChildren(chip('all', 'All · ' + state.allRows.length, 0),
     ...state.sectionList.map((sec, i) => chip(sec, 'Sec ' + sec + ' · ' + count(sec), (i % 4) + 1)));
+}
+
+// The categories of the Raw tab; the shown one is pressed and kept in view when the row slides.
+function refreshCatBar() {
+  cm.catBar.hidden = state.tab !== 'raw';
+  if (cm.catBar.hidden) return cm.catBar.replaceChildren();
+  const chips = catEntries(WIDE.matches).map((m) => {
+    const b = el('button', { type: 'button', class: 'cat-chip', onclick: () => tapCategory(m.key) },
+      data('span', {}, m.label), m.pts == null ? null : el('span', { class: 'cat-pts' }, ' · ' + m.pts + ' pts'));
+    b.setAttribute('aria-pressed', String(m.key === state.category));
+    return b;
+  });
+  cm.catBar.replaceChildren(...chips);
+  const on = cm.catBar.querySelector('[aria-pressed="true"]');
+  if (!on) return;
+  const left = on.offsetLeft - cm.catBar.offsetLeft;
+  if (left < cm.catBar.scrollLeft) cm.catBar.scrollLeft = left;
+  else if (left + on.offsetWidth > cm.catBar.scrollLeft + cm.catBar.clientWidth) {
+    cm.catBar.scrollLeft = left + on.offsetWidth - cm.catBar.clientWidth;
+  }
+}
+
+// The open session's own category goes back to the grid.
+function tapCategory(key) {
+  if (key !== state.category || state.attSession) setCategory(key);
 }
 
 function tapSection(sec) {
@@ -471,12 +481,14 @@ function refreshSectionHeads(root) {
 function renderView() {
   normalizeNav();
   refreshSecBar();
+  refreshCatBar();
   const v = state.view = modeOf();
   const wideSummary = v === 'summary' && WIDE.matches;
   const grid = v === 'table' && state.category === 'attendance';
   document.body.classList.toggle('view-table', v === 'table' || wideSummary);
   document.body.classList.toggle('view-attgrid', grid);
   cm.attBar.hidden = !grid;
+  cm.search.placeholder = grid && !WIDE.matches ? 'Search' : 'Search ID or name';  // the phone row is shared there
   cm.gridBack.hidden = v !== 'attendance';
   if (grid) refreshAttBar();
   for (const k of ['grading', 'summary', 'analytics']) document.body.classList.toggle('view-' + k, v === k);
@@ -489,7 +501,7 @@ function renderView() {
     cfg = null;
     cm.grading.replaceChildren();
   }
-  if (v !== 'scores' && v !== 'attendance') {
+  if (v !== 'attendance') {
     cm.items = [];
     cm.list.replaceChildren();
     cm.empty.replaceChildren();
@@ -498,7 +510,6 @@ function renderView() {
   if (v !== 'summary') sm = null;
   cm.summary.replaceChildren();
   cm.overview.replaceChildren();
-  renderMenu();
   if (v === 'grading') {
     renderGrading();
     refreshChrome();
@@ -569,40 +580,19 @@ function draftBanner(draft) {
   return box;
 }
 
-// Scores: the current category's columns (total columns are never listed). Attendance: the sessions verbatim,
-// today's marked `· today`.
+// The one-session view's picker: the sessions verbatim, today's marked `· today`.
 function renderPicker() {
-  const course = state.open.course;
-  const att = state.view === 'attendance';
-  cm.label.textContent = att ? 'Session' : 'Column';
-  cm.prev.setAttribute('aria-label', att ? 'Previous session' : 'Previous column');
-  cm.next.setAttribute('aria-label', att ? 'Next session' : 'Next column');
-  const opts = [el('option', { value: '', disabled: '' }, att ? 'Pick a session' : 'Pick a column')];
-  if (att) {
-    const today = todaySession();
-    opts.push(...sessions().map((c) => data('option', { value: c.name }, c.header + (c.name === today ? ' · today' : ''))));
-  } else {
-    const cols = Grades.columnsOf(course, state.category);
-    if (cols.length) opts.push(el('optgroup', { label: state.category }, ...cols.map((c) => optionFor(c))));
-  }
-  cm.select.replaceChildren(...opts);
+  cm.label.textContent = 'Session';
+  cm.prev.setAttribute('aria-label', 'Previous session');
+  cm.next.setAttribute('aria-label', 'Next session');
+  const now = todaySession();
+  cm.select.replaceChildren(el('option', { value: '', disabled: '' }, 'Pick a session'),
+    ...sessions().map((c) => data('option', { value: c.name }, c.header + (c.name === now ? ' · today' : ''))));
   const col = currentColumn();
   cm.select.value = col ? col.name : '';
-  const cols = viewColumns();
-  const i = cols.indexOf(col);
+  const i = sessions().indexOf(col);
   cm.prev.disabled = i <= 0;
-  cm.next.disabled = i < 0 || i >= cols.length - 1;
-}
-
-function optionFor(c) {
-  return data('option', { value: c.name }, c.header + ' · ' + enteredCount(c.name) + '/' + state.rows.length);
-}
-
-// The columns ‹ › step through: the sessions on Attendance, the category's columns on Scores.
-function viewColumns() {
-  const att = state.view === 'attendance';
-  if (att) return sessions();
-  return Grades.columnsOf(state.open.course, state.category).filter((c) => c.category !== 'attendance');
+  cm.next.disabled = i < 0 || i >= sessions().length - 1;
 }
 
 // The column of the current view: the session on Attendance, else the picked column of the category (the table:
@@ -629,7 +619,7 @@ function choose(name) {
 }
 
 function step(delta) {
-  const cols = viewColumns();
+  const cols = sessions();
   const i = cols.indexOf(currentColumn()) + delta;
   if (i >= 0 && i < cols.length) choose(cols[i].name);
 }
@@ -646,21 +636,31 @@ function renderColumn() {
   applySearch();
 }
 
-// One student: ID, name and sub-line on the left (the button that opens the detail), the value on the right (an
-// input for a score column).
+// A student's name as this width shows it: phones leave out the title and keep the name in one piece per part
+// (SPEC_menu_strip.md M10). Screen readers and search use the full name.
+const shownName = (row) => (WIDE.matches ? row.name : Grades.plainName(row.name));
+
+function nameSpan(row) {
+  const span = data('span', { class: 'name' }, '');
+  if (THAI.test(row.name)) span.lang = 'th';
+  span.replaceChildren(...(WIDE.matches ? [row.name] : nameParts(shownName(row))));
+  return span;
+}
+
+// One student in a session: ID, name and sub-line on the left (the button that opens the detail), the code on the
+// right.
 function rowItem(row, col, i) {
   const it = { row, col, sub: el('p', { class: 'sub', id: 'sub-' + i }) };
   it.msg = el('p', { class: 'msg', id: 'msg-' + i, role: 'alert' });
   it.who = el('button', { type: 'button', class: 'who', onclick: () => openDetail(row) },
-    el('span', { class: 'id' }, row.student_id), data('span', { class: 'name' }, row.name), it.sub,
+    el('span', { class: 'id' }, row.student_id), nameSpan(row), it.sub,
     el('span', { class: 'chevron', 'aria-hidden': 'true' }, '›'));
   it.who.setAttribute('aria-label', 'Open ' + row.name + ' ' + row.student_id);
-  // A session (Attendance tab): the code as written on line 1, the code buttons on line 2.
-  const att = col.category === 'attendance';
-  if (att) it.value = el('span', { class: 'code' }); else scoreInput(it);
-  it.li = el('li', { class: att ? 'row att' : 'row' }, it.who,
+  // The code as written on line 1, the code buttons on line 2.
+  it.value = el('span', { class: 'code' });
+  it.li = el('li', { class: 'row att' }, it.who,
     el('div', { class: 'cell' }, it.value, el('span', { class: 'mark', 'aria-hidden': 'true' }, '*')),
-    att ? codeButtons(it) : null, it.msg);
+    codeButtons(it), it.msg);
   markSection(it.li, row);
   refreshItem(it);
   return it;
@@ -747,6 +747,7 @@ function refuse(it, message) {
 
 // Next (delta 1) or previous (-1) visible student; past the last one, Done closes the keypad.
 function move(delta) {
+  if (tb && tb.edit) return moveEdit(delta);
   const it = cm.current;
   if (!it) return;
   if (!commit(it)) {
@@ -769,10 +770,12 @@ function keypad(open) {
   cm.bar.hidden = !open;
   cm.dock.hidden = open;
   document.body.classList.toggle('typing', open);
+  document.body.classList.toggle('typing-grid', open && !!tb && !!tb.edit);  // SPEC_menu_strip.md M8
 }
 
 // ขส moves on to the next student (S3.4); Clear stays.
 function barSet(value, thenNext) {
+  if (tb && tb.edit) return editSet(value, thenNext);
   const it = cm.current;
   if (!it || locked()) return;
   it.value.value = value;
@@ -790,24 +793,48 @@ function nextVisible(it, delta) {
   return null;
 }
 
-// Scrolls a row to the middle of the space between the sticky header and the keypad bar. The detail scrolls on
-// its own, below its sticky bar and summary card.
+// What scrolls under the top area: the course body, or the page on short screens, where the top scrolls away.
+function scrollBox() {
+  return getComputedStyle(cm.body).overflowY === 'visible' ? window : cm.body;
+}
+
+// Reads every scroll position of the course page, or puts one back (a recheck rebuilds the page).
+function scrollSpot(at) {
+  if (!at) return { y: window.scrollY, top: cm.body.scrollTop, gridTop: cm.wrap.scrollTop, gridLeft: cm.wrap.scrollLeft };
+  window.scrollTo(0, at.y);
+  cm.body.scrollTop = at.top;
+  cm.wrap.scrollTop = at.gridTop;
+  cm.wrap.scrollLeft = at.gridLeft;
+  return at;
+}
+
+// Scrolls a row to the middle of the space between the top area and the keypad bar. The detail scrolls on its own,
+// below its sticky bar and summary card.
 function reveal(li) {
   const vv = window.visualViewport;
   const inDetail = det && det.panel.contains(li);
-  const top = inDetail ? Math.max(det.card.getBoundingClientRect().bottom, vv ? vv.offsetTop : 0)
-    : (vv ? vv.offsetTop : 0) + document.querySelector('.course-head').offsetHeight;
+  const box = inDetail ? det.panel : scrollBox();
+  const vvTop = vv ? vv.offsetTop : 0;
+  const top = inDetail ? Math.max(det.card.getBoundingClientRect().bottom, vvTop)
+    : box === window ? vvTop : Math.max(box.getBoundingClientRect().top, vvTop);
   const bottom = (vv ? vv.offsetTop + vv.height : window.innerHeight) - (cm.bar.hidden ? 0 : cm.bar.offsetHeight);
   const r = li.getBoundingClientRect();
-  (inDetail ? det.panel : window).scrollBy(0, r.top + r.height / 2 - (top + bottom) / 2);
+  box.scrollBy(0, r.top + r.height / 2 - (top + bottom) / 2);
 }
 
-// Pins the keypad bar just above the on-screen keyboard (visualViewport shrinks while it is open).
+// Pins the keypad bar just above the on-screen keyboard (visualViewport shrinks while it is open). While typing in
+// the grid, the page takes exactly what the keyboard leaves (SPEC_menu_strip.md M8).
 function placeBar() {
   if (!cm || !cm.bar.isConnected || cm.bar.hidden) return;
   const vv = window.visualViewport;
   const covered = vv ? window.innerHeight - vv.offsetTop - vv.height : 0;
   cm.bar.style.bottom = Math.max(0, covered) + 'px';
+  if (!tb || !tb.edit) return;
+  const root = document.documentElement.style;
+  root.setProperty('--typing-h', (vv ? vv.height : window.innerHeight) + 'px');
+  root.setProperty('--typing-top', (vv ? vv.offsetTop : 0) + 'px');
+  root.setProperty('--bar-h', cm.bar.offsetHeight + 'px');
+  revealCell(tb.edit.td);
 }
 
 function refreshItem(it) {
@@ -834,20 +861,20 @@ function refreshItem(it) {
 
 function fmtMax(column) { return String(Grades.round2(maxOf(column))); }
 
-// Column line (Attendance: the counts line), the picked option's progress and the unsaved badge.
+// The session's counts line, each phone column header's progress, and the unsaved badge.
 function refreshCounts() {
   const col = currentColumn();
-  if (state.view === 'attendance') {
-    cm.line.textContent = col ? codeCounts(col.name) : '';
-    return refreshChrome();
-  }
-  const k = col ? enteredCount(col.name) : 0;
-  const total = state.rows.length;
-  const max = col && col.category !== 'attendance' ? ' · max ' + fmtMax(col.name) : '';
-  cm.line.textContent = col ? col.category + max + ' · ' + k + ' of ' + total + ' entered' : '';
-  const opt = col && cm.select.selectedOptions[0];
-  if (opt) opt.textContent = col.header + ' · ' + k + '/' + total;
+  cm.line.textContent = state.view === 'attendance' && col ? codeCounts(col.name) : '';
+  if (tb) for (const { col: c, b, n } of tb.counted) paintCounted(c, b, n);
   refreshChrome();
+}
+
+// `0/55` under a phone column's header; its button says it in words.
+function paintCounted(col, b, n) {
+  const k = enteredCount(col.name);
+  n.textContent = k + '/' + state.rows.length;
+  b.setAttribute('aria-label', col.header + ', max ' + fmtMax(col.name) + ', ' + k + ' of ' + state.rows.length +
+    ' entered. Select for Fill');
 }
 
 // `P n · L n · A n · X n · EA n · blank n`, unsaved values included; EA only when present.
@@ -882,7 +909,7 @@ function refreshChrome() {
   cm.strip.hidden = !state.storageOff;
   const col = currentColumn();
   cm.fill.disabled = locked() || !col;
-  cm.fill.replaceChildren(...(WIDE.matches && col ? ['Fill… ', data('span', {}, col.header)] : ['Fill…']));
+  cm.fill.replaceChildren(...(col ? ['Fill… ', data('span', {}, WIDE.matches ? col.header : col.name)] : ['Fill…']));
   for (const it of cm.items.concat(det ? det.items : [])) if (it.value.tagName === 'INPUT') it.value.readOnly = locked();
 }
 
@@ -948,7 +975,7 @@ function renderDetail() {
   det.items = [];
   det.sections = [];
   const col = currentColumn();
-  const table = state.category === 'attendance' ? 'Attendance' : 'Table';
+  const table = state.category === 'attendance' ? 'Attendance' : WIDE.matches ? 'Table' : state.category;
   const from = state.view === 'summary' ? 'Summary' : state.view === 'analytics' ? 'Overview'
     : state.view === 'table' ? table : col ? col.name : state.view === 'attendance' ? 'Attendance' : 'Scores';
   const back = button('‹ ' + from, closeDetail, 'btn outline det-back');
@@ -1095,27 +1122,6 @@ function preview(row, column, text) {
 const BIG_TABLE = 300 * 80;
 let tb = null;  // the table: column specs, one record per student, the focused cell, the open editor or picker
 
-// ID, Name, then per category its counted columns and its computed `{category} /{w}`, then the three totals.
-// A Raw Details category (not All columns) shows only its own columns and total.
-function tableColumns() {
-  const course = state.open.course;
-  if (state.category === 'attendance') return attColumns();
-  const one = state.category !== '*';
-  const specs = [{ kind: 'id', label: 'Student ID' }, { kind: 'name', label: 'Name' }];
-  for (const cat of one ? [state.category] : Grades.navCategories(course)) {
-    for (const col of course.columns) {
-      if (col.category === cat) specs.push({ kind: cat === 'attendance' ? 'code' : 'score', col });
-    }
-    if (Object.prototype.hasOwnProperty.call(course.weights, cat)) {
-      specs.push({ kind: 'calc', cat, label: cat + ' /' + Grades.round2(course.weights[cat] * 100) });
-    }
-  }
-  if (one) return specs;
-  specs.push({ kind: 'calc', key: 'coursework_total', label: 'Coursework Total' },
-    { kind: 'calc', key: 'final_score', label: 'Final Score' }, { kind: 'calc', key: 'grade', label: 'Grade' });
-  return specs;
-}
-
 const editable = (s) => s.kind === 'score' || s.kind === 'code';
 
 // A large course shows `Building the table…` until its first paint.
@@ -1131,21 +1137,23 @@ function buildTable() {
     cm.wrap.replaceChildren(data('p', { class: 'muted empty' }, 'No columns pushed for ' + state.category + '.'));
     return;
   }
-  const specs = tableColumns();
+  const specs = tableColumns(WIDE.matches);
   const grid = state.category === 'attendance';
-  tb = { specs, recs: [], byId: new Map(), cur: null, edit: null, picker: null, grid, heads: [], att: null };
+  tb = { specs, recs: [], byId: new Map(), cur: null, edit: null, picker: null, grid, heads: [], counted: [], att: null };
   if (grid) setAtt();
   const head = el('tr', { role: 'row', 'aria-rowindex': '1' }, ...specs.map(headCell));
   const rows = grid && state.attSort ? byAttendance(state.rows) : state.rows;
   const body = el('tbody', {}, ...withSectionHeads(rows, rows.map(tableRow), 'tr', specs.length));
   tb.none = el('tr', { hidden: '' }, el('td', { class: 'tb-none', colspan: String(specs.length) }));
   body.append(tb.none);
-  const cls = 'tb' + (grid ? ' att-grid' : '') + (grid && !WIDE.matches ? ' compact' : '');
+  const cls = 'tb' + (grid ? ' att-grid' : '') + (WIDE.matches ? '' : ' compact');
   const table = el('table', { class: cls, role: 'grid', 'aria-label': grid ? 'Attendance' : 'Course table',
     'aria-rowcount': String(state.rows.length + 1), 'aria-colcount': String(specs.length) }, el('thead', {}, head), body);
   if (grid) table.append(attFoot());
   // A click on an ID or computed cell keeps focus where it was (they aren't focusable).
-  table.addEventListener('mousedown', (e) => { if (e.target.closest('td:not([data-c])')) e.preventDefault(); });
+  table.addEventListener('mousedown', (e) => {
+    if (e.target.closest('td:not([data-c])') || keepsEditor(e.target)) e.preventDefault();
+  });
   table.addEventListener('click', tableClick);
   table.addEventListener('dblclick', (e) => {
     const td = e.target.closest('td[data-c]');
@@ -1172,16 +1180,6 @@ function buildTable() {
 }
 
 // ---- 7b. Attendance grid (SPEC_attendance_grid.md): the table for the attendance category, both widths ----
-const ATT_COLUMNS = [['total', 'Total'], ['P', 'P'], ['L', 'L'], ['A', 'A'], ['X', 'X'], ['blank', 'blank']];
-
-// (ID,) Name, one `code` column per session (numbered), then Total and the code counts. Phones: no ID column (the ID
-// goes under the name in the frozen column).
-function attColumns() {
-  return (WIDE.matches ? [{ kind: 'id', label: 'Student ID' }] : []).concat({ kind: 'name', label: 'Name' },
-    sessions().map((col, i) => ({ kind: 'code', col, n: i + 1 })),
-    ATT_COLUMNS.map(([key, label]) => ({ kind: 'att', key, label })));
-}
-
 function setAtt() {
   tb.att = attStats();
   tb.attHeld = new Map(tb.att.sessions.map((x) => [x.name, x]));
@@ -1276,10 +1274,16 @@ function openSession(column) {
 function refreshAttBar() {
   const t = todaySession();
   cm.takeToday.disabled = !t;
-  cm.takeToday.textContent = t ? 'Take today ›' : 'No session today';
+  // Phones have one row for these and the search (SPEC_menu_strip.md); the label keeps the full wording.
+  const short = (b, wide, phone) => {
+    b.textContent = WIDE.matches ? wide : phone;
+    b.setAttribute('aria-label', wide);
+  };
+  short(cm.takeToday, t ? 'Take today ›' : 'No session today', t ? 'Today ›' : 'No session');
+  short(cm.riskBtn, 'At risk only', 'At risk');
   cm.riskBtn.setAttribute('aria-pressed', String(state.attRisk));
   cm.sortBtn.setAttribute('aria-pressed', String(state.attSort));
-  cm.sortBtn.textContent = state.attSort ? 'Sort: Lowest %' : 'Sort: Roster';
+  short(cm.sortBtn, state.attSort ? 'Sort: Lowest %' : 'Sort: Roster', state.attSort ? 'Lowest %' : 'Roster');
 }
 
 // Headers verbatim; a counted column's header selects it (for Fill…); computed ones announce "computed".
@@ -1294,13 +1298,26 @@ function headCell(s, c) {
     tb.heads.push({ b, s });
     th.append(b);
   } else if (s.col) {
-    th.append(el('button', { type: 'button', class: 'th-btn', 'data-col': s.col.name,
-      onclick: () => { pickColumn(s.col.name); markPicked(); refreshChrome(); } }, data('span', {}, s.col.header)));
+    const n = WIDE.matches ? null : el('span', { class: 'th-sub' });
+    const b = el('button', { type: 'button', class: 'th-btn', 'data-col': s.col.name,
+      onclick: () => pickHead(s.col.name) }, data('span', {}, n ? s.col.name : s.col.header),
+    n && el('span', { class: 'th-sub' }, '/' + fmtMax(s.col.name)), n);
+    if (n) {
+      tb.counted.push({ col: s.col, b, n });
+      paintCounted(s.col, b, n);
+    }
+    th.append(b);
   } else {
     th.append(data('span', {}, s.label));
     if (s.kind === 'calc') th.append(el('span', { class: 'sr-only' }, ' (computed)'));
   }
   return th;
+}
+
+function pickHead(name) {
+  pickColumn(name);
+  markPicked();
+  refreshChrome();
 }
 
 function markPicked() {
@@ -1342,9 +1359,12 @@ function paintCell(rec, s, td, g) {
   if (s.kind === 'id') {
     td.textContent = row.student_id;
   } else if (s.kind === 'name') {
-    td.replaceChildren(...nameParts(row.name));
+    td.replaceChildren(...nameParts(shownName(row)));
     if (THAI.test(row.name)) td.lang = 'th';
-    if (tb.grid && !WIDE.matches) td.append(el('span', { class: 'sub', lang: 'en' }, row.student_id));
+    if (!WIDE.matches) {
+      td.append(el('span', { class: 'sub', lang: 'en' }, row.student_id));
+      td.setAttribute('aria-label', row.name + ' ' + row.student_id);
+    }
   } else if (s.kind === 'att') {
     paintAttCell(row, s, td);
   } else if (s.kind === 'calc') {
@@ -1412,9 +1432,70 @@ function tableClick(e) {
   if (!td || (tb.edit && tb.edit.td === td)) return;
   const r = +td.dataset.r;
   const c = +td.dataset.c;
+  if (keepsEditor(td)) return editOther(r, c);
   focusCell(r, c);
   if (tb.specs[c].kind === 'name') openDetail(tb.recs[r].row);
   else if (tb.specs[c].kind === 'code') openPicker(r, c);
+  else if (!WIDE.matches && tb.specs[c].kind === 'score' && !locked()) editCell(r, c);
+}
+
+// A phone opens a score cell with one tap; the cell's column becomes the one Fill acts on (SPEC_menu_strip.md M7).
+function editCell(r, c) {
+  pickHead(tb.specs[c].col.name);
+  startEdit(r, c, null);
+}
+
+// While typing on a phone, a tap on another score cell goes straight there and the keypad stays open.
+function keepsEditor(target) {
+  const td = target.closest && target.closest('td[data-c]');
+  return !WIDE.matches && !!tb.edit && !!td && td !== tb.edit.td && tb.specs[+td.dataset.c].kind === 'score';
+}
+
+function editOther(r, c) {
+  commitEdit(() => editCell(r, c));
+}
+
+// The next shown student's row from row `r`, or null.
+function shownFrom(r, delta) {
+  for (let i = r + delta; i >= 0 && i < tb.recs.length; i += delta) if (!tb.recs[i].tr.hidden) return i;
+  return null;
+}
+
+// Next ↓ on the keypad bar (M7): same column, next shown student; past the last one the keypad closes.
+function moveEdit(delta) {
+  const { r, c } = tb.edit;
+  const col = tb.specs[c].col;
+  const to = shownFrom(r, delta);
+  if (to !== null) return commitEdit(() => startEdit(to, c, null));
+  if (delta < 0 || !commitEdit()) return;
+  keypad(false);
+  focusCell(r, c);
+  say('End of list · ' + enteredCount(col.name) + ' of ' + state.rows.length + ' entered');
+}
+
+// ขส moves on; Clear stays in the cell, empty.
+function editSet(value, thenNext) {
+  const { r, c, input } = tb.edit;
+  if (locked()) return;
+  input.value = value;
+  if (thenNext) return moveEdit(1);
+  const rec = tb.recs[r];
+  const col = tb.specs[c].col;
+  const res = commitTyped(rec.row, col.name, value);
+  showPop(null, '');
+  if (res.changed) {
+    changed(rec.row);
+    announceCommit({ row: rec.row, col });
+  }
+}
+
+// Scrolls a cell to the middle of the grid's rows, clear of the frozen header and student column.
+function revealCell(td) {
+  const w = cm.wrap.getBoundingClientRect();
+  const name = cm.wrap.querySelector('thead .c-name').getBoundingClientRect();  // sticky, so it's where the rows start
+  const b = td.getBoundingClientRect();
+  const left = b.left < name.right ? b.left - name.right : b.right > w.right ? b.right - w.right : 0;
+  cm.wrap.scrollBy(left, b.top + b.height / 2 - (name.bottom + w.bottom) / 2);
 }
 
 // Navigation mode (Interface "Keyboard"): grade-tui parity, Enter edits, `-` = ขส and P/L/A/X move down.
@@ -1464,18 +1545,26 @@ function keySet(r, c, value, thenDown) {
   if (thenDown) stepCell(r, c, 1, 0);
 }
 
+const KEYPAD_CLOSE_MS = 150;
+
 // The cell editor; `initial` is the key that started it (null: edit the current value).
 function startEdit(r, c, initial) {
   const rec = tb.recs[r];
   const col = tb.specs[c].col;
   const td = rec.tds[c];
+  const phone = !WIDE.matches;
   const input = el('input', { type: 'text', class: 'tb-input', inputmode: 'decimal', autocomplete: 'off',
-    autocorrect: 'off', spellcheck: 'false' });
+    autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'next' });
   input.setAttribute('aria-label', col.header + ' for ' + rec.row.name + ' ' + rec.row.student_id);
   input.value = initial == null ? cellValue(rec.row, col.name) : initial;
   tb.edit = { r, c, td, input };
   td.replaceChildren(input);
-  input.focus();
+  if (phone) {
+    keypad(true);
+    placeBar();
+    cm.nextBtn.textContent = shownFrom(r, 1) === null ? 'Done' : 'Next ↓';
+  }
+  input.focus({ preventScroll: phone });
   if (initial == null) input.select();
   input.addEventListener('input', () => {
     const text = input.value;
@@ -1489,7 +1578,12 @@ function startEdit(r, c, initial) {
       closeEditor();
       showPop(null, '');
       preview(rec.row, null);
+      keypad(false);
       return focusCell(r, c);
+    }
+    if (phone && (e.key === 'Enter' || e.key === 'Tab')) {
+      e.preventDefault();
+      return moveEdit(e.shiftKey ? -1 : 1);
     }
     const go = { Enter: [1, 0], ArrowDown: [1, 0], ArrowUp: [-1, 0], Tab: [0, e.shiftKey ? -1 : 1] }[e.key];
     if (!go) return;
@@ -1498,17 +1592,21 @@ function startEdit(r, c, initial) {
   });
   // Leaving with refused text puts the previous value back; the message stays until the next commit.
   input.addEventListener('blur', () => {
-    if (!tb.edit || tb.edit.input !== input) return;
+    if (!tb || !tb.edit || tb.edit.input !== input) return;
     if (!commitEdit()) {
       closeEditor();
       preview(rec.row, null);
     }
+    // Later than the blur: bringing the top area back now would move the rows under the finger mid-tap.
+    if (phone) setTimeout(() => { if (cm && !(tb && tb.edit)) keypad(false); }, KEYPAD_CLOSE_MS);
   });
 }
 
-// Commits the editor (Typing rules). False when refused: the editor stays with its text selected.
-function commitEdit() {
-  const { r, c, td, input } = tb.edit;
+// Commits the editor (Typing rules). False when refused: the editor stays with its text selected. `thenOpen` opens
+// the next editor before this one leaves the page: focus moves from input to input, so the iPhone keypad stays open.
+function commitEdit(thenOpen) {
+  const ed = tb.edit;
+  const { r, c, td, input } = ed;
   const rec = tb.recs[r];
   const col = tb.specs[c].col;
   const res = commitTyped(rec.row, col.name, input.value);
@@ -1517,7 +1615,8 @@ function commitEdit() {
     input.select();
     return false;
   }
-  closeEditor();
+  if (thenOpen) thenOpen();
+  closeEditor(ed);
   showPop(null, '');
   if (res.changed) {
     changed(rec.row);
@@ -1526,9 +1625,9 @@ function commitEdit() {
   return true;
 }
 
-function closeEditor() {
-  const { r, c, td } = tb.edit;
-  tb.edit = null;
+function closeEditor(ed = tb.edit) {
+  const { r, c, td } = ed;
+  if (tb.edit === ed) tb.edit = null;
   paintCell(tb.recs[r], tb.specs[c], td, gradeOf(tb.recs[r].row));
 }
 
@@ -1827,7 +1926,8 @@ function goTo(sid, column) {
     cm.search.value = '';
     applySearch();
   }
-  if (state.view === 'table' || (state.tab !== 'raw' && WIDE.matches)) {
+  const session = state.view === 'attendance' && sessions().some((x) => x.name === column);
+  if (!session) {
     const col = state.open.course.columns.find((x) => x.name === column);
     if (col && (state.tab !== 'raw' || (state.category !== '*' && state.category !== col.category))) {
       setCategory(col.category);
@@ -2176,10 +2276,6 @@ function applySearch() {
     cm.empty.replaceChildren(el('p', {}, 'This course has no attendance sessions. Add them on the Mac, then push again.'));
   } else if (state.view === 'attendance' && !currentColumn()) {
     cm.empty.replaceChildren(el('p', {}, 'No session is dated today (' + longDate(today()) + '). Pick one above.'));
-  } else if (!viewColumns().length) {
-    cm.empty.replaceChildren(data('p', {}, 'No columns pushed for ' + state.category + '.'));
-  } else if (!currentColumn()) {
-    cm.empty.replaceChildren(el('p', {}, 'Pick a column to enter scores.'));
   } else if (shown === 0) {
     cm.empty.replaceChildren(data('p', {}, 'No students match "' + state.search.trim() + '".'),
       button('Clear search', clearSearch, 'btn outline'));
@@ -2195,65 +2291,7 @@ function clearSearch() {
   cm.search.focus();
 }
 
-// ---- 14. grade-tui's tabs: the ☰ Categories menu, Summary Scores and Overview (SPEC_web_tabs.md) ----
-
-// The current tab's menu: [1] Summary Scores, [2] All columns (wide) and the categories with their points,
-// [3] Overview, [4] none.
-function menuEntries() {
-  if (state.tab === 'summary') return [{ key: 'summary', label: 'Summary Scores' }];
-  if (state.tab === 'analytics') return [{ key: 'overview', label: 'Overview' }];
-  if (state.tab !== 'raw') return [];
-  const cats = Grades.navCategories(state.open.course).map((cat) => ({ key: cat, label: cat, pts: catPoints(cat) }));
-  return (WIDE.matches ? [{ key: '*', label: 'All columns' }] : []).concat(cats);
-}
-
-// grade-tui's `[20 pts]`: the category's column maxima (a session counts 1), or its weight × 100 without columns.
-function catPoints(cat) {
-  const course = state.open.course;
-  const cols = Grades.columnsOf(course, cat);
-  if (!cols.length) return Grades.round2((course.weights[cat] || 0) * 100);
-  return Grades.round2(cols.reduce((t, c) => t + (cat === 'attendance' ? 1 : maxOf(c.name)), 0));
-}
-
-function renderMenu() {
-  const items = menuEntries();
-  const current = state.tab === 'raw' ? state.category : items.length ? items[0].key : null;
-  cm.menuList.replaceChildren(...items.map((m) => {
-    const b = el('button', { type: 'button', class: 'cat-item', onclick: () => pickMenu(m.key) },
-      data('span', {}, m.label), m.pts == null ? null : el('span', { class: 'muted' }, m.pts + ' pts'));
-    if (m.key === current) b.setAttribute('aria-current', 'page');
-    return el('li', {}, b);
-  }));
-  const open = state.menu && items.length > 0;
-  cm.menuBtn.disabled = !items.length;
-  cm.menuBtn.setAttribute('aria-expanded', String(open));
-  cm.menu.hidden = !open;
-  cm.scrim.hidden = !open || WIDE.matches;
-  document.body.classList.toggle('menu-open', open);
-}
-
-// ☰: a side column on wide screens (remembered on this device), a drawer on phones (focus goes into it).
-function toggleMenu() {
-  state.menu = !state.menu;
-  if (WIDE.matches) rememberMenu(state.menu);
-  renderMenu();
-  if (state.menu && !WIDE.matches) {
-    const b = cm.menu.querySelector('[aria-current]') || cm.menu.querySelector('button');
-    if (b) b.focus();
-  }
-}
-
-function closeDrawer() {
-  if (WIDE.matches || !state.menu) return;
-  state.menu = false;
-  renderMenu();
-  cm.menuBtn.focus();
-}
-
-function pickMenu(key) {
-  if (state.tab === 'raw' && key !== state.category) setCategory(key);
-  closeDrawer();
-}
+// ---- 14. grade-tui's tabs: Summary Scores and Overview (SPEC_web_tabs.md) ----
 
 // Summary Scores: the weighted categories as `{category} /{points}`, then Coursework Total, Final Score, Grade.
 let sm = null;  // the shown Summary: student_id -> {node, paint} for live updates and search
@@ -2308,8 +2346,7 @@ function summaryItem(row, i) {
   const region = el('div', { id, class: 'sum-more', hidden: '' }, fields,
     button('Details ›', () => openDetail(row), 'btn outline'));
   const toggle = el('button', { type: 'button', class: 'sum-row', 'aria-expanded': 'false', 'aria-controls': id },
-    el('span', { class: 'who' }, el('span', { class: 'id' }, row.student_id),
-      data('span', { class: 'name' }, row.name)),
+    el('span', { class: 'who' }, el('span', { class: 'id' }, row.student_id), nameSpan(row)),
     final, grade, chevron);
   toggle.addEventListener('click', () => {
     region.hidden = !region.hidden;
@@ -2398,7 +2435,7 @@ function boxPlot(bp) {
     data('p', {}, 'Outliers: ' + outliers)];
 }
 
-// grade-tui's keys on wide screens: 1–4 switch tabs, s shows/hides the menu. Not while typing, in the editing
+// grade-tui's keys on wide screens: 1–4 switch tabs. Not while typing, in the editing
 // grid (digits start an edit there) or with a dialog open.
 document.addEventListener('keydown', (e) => {
   if (!cm || !cm.list.isConnected || !WIDE.matches || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
@@ -2408,23 +2445,14 @@ document.addEventListener('keydown', (e) => {
   if (e.key >= '1' && e.key <= '4') {
     e.preventDefault();
     setTab(Grades.TABS[+e.key - 1]);
-  } else if (e.key === 's' || e.key === 'S') {
-    e.preventDefault();
-    toggleMenu();
   }
 });
 
-// Crossing 960 px: the table <-> column mode (S5.3), and the menu becomes a side column or a closed drawer.
+// Crossing 960 px: Raw and Summary differ by width (the grid's columns and sizes, the Summary list or table).
 WIDE.addEventListener('change', () => {
   if (!cm || !cm.list.isConnected) return;
-  state.menu = WIDE.matches && menuPref();
-  if (state.view !== modeOf() || state.tab === 'summary' ||
-      (state.tab === 'raw' && (state.category === '*' || state.category === 'attendance'))) {
-    renderView();
-  } else {
-    renderMenu();
-    refreshChrome();
-  }
+  if (state.tab === 'raw' || state.tab === 'summary') renderView();
+  else refreshChrome();
 });
 // Esc closes the detail side panel (inputs, sheets and the picker handle their own Esc first).
 document.addEventListener('keydown', (e) => {
