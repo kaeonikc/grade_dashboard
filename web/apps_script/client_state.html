@@ -43,7 +43,8 @@ const state = {
   column: null,      // the picked columns[].name in Scores (and the table's Fill column)
   session: null,     // the picked attendance session on the Attendance tab (today's when the course opens)
   search: '',        // the search box text
-  saving: false,     // a Save or Undo is on its way: edits are locked
+  saving: false,     // a Save or Undo is on its way: Discard, Undo, Reload and the like wait
+  sending: null,     // a background Save (SPEC_fast_save.md): {key -> value sent}; cells stay open, edits stay kept
   checking: false,   // the course shows from memory while Drive is rechecked: edits are locked too (D7)
   loaded: new Map(), // folder -> snapshotOf(reply) + at (ms, when Drive sent it): courses kept in this tab (D7)
   fetching: new Map(),  // folder -> the loadCourse call on its way (a prefetch, a recheck or a tap)
@@ -495,9 +496,14 @@ function closeCourse() {
   state.checking = false;
 }
 
-// Edits, Fill, Save, Discard, Undo, Reload and the Grading forms wait while a save runs or Drive is rechecked.
+// Save, Discard, Undo, Reload and the Grading forms wait while a save runs or Drive is rechecked.
 function locked() {
   return state.saving || state.checking;
+}
+
+// Cells and Fill wait too, except during a background Save (SPEC_fast_save.md S2).
+function busy() {
+  return locked() && !state.sending;
 }
 
 function recompute() {
@@ -585,27 +591,35 @@ function discardEdits() {
 
 // ---- Save and Undo (SPEC "Saving", "Undo last save") ----
 // Sends every unsaved edit. Resolves with the server reply (applied when ok); rejects when the call failed, with
-// every edit kept.
-function saveEdits() {
+// every edit kept. `background` keeps the cells open meanwhile; what changes then stays unsaved (S3).
+function saveEdits(background) {
   state.saving = true;
   const edits = Array.from(state.edits.values());
+  const sent = new Map(edits.map((e) => [editKey(e.student_id, e.column), e.value]));
+  state.sending = background ? sent : null;
   return server('saveBatch', state.open.folder, edits, state.editsPush).then((reply) => {
     state.saving = false;
+    state.sending = null;
     setNow(reply);
-    if (reply.ok) applySaved(reply);
+    if (reply.ok) applySaved(reply, sent);
     return reply;
   }, (err) => {
     state.saving = false;
+    state.sending = null;
     throw err;
   });
 }
 
 // Saved and already cells leave the unsaved edits; a cell changed elsewhere stays unsaved with the Drive value
-// as its new start value, so a second Save writes it on purpose (S8.2).
-function applySaved(reply) {
+// as its new start value, so a second Save writes it on purpose (S8.2). A cell changed since it was sent (`sent`) stays
+// unsaved in the same way.
+function applySaved(reply, sent) {
   for (const c of reply.saved.concat(reply.already)) {
+    const key = editKey(c.student_id, c.column);
+    const e = state.edits.get(key);
     setSaved(c.student_id, c.column, c.value);
-    state.edits.delete(editKey(c.student_id, c.column));
+    if (e && !Grades.sameCell(e.value, sent.get(key))) e.original = c.value;
+    else state.edits.delete(key);
   }
   state.notFound = new Set();
   for (const c of reply.conflicts) {
@@ -941,7 +955,8 @@ function setCell(row, column, value) {
 function putEdit(row, column, value) {
   const key = editKey(row.student_id, column);
   const original = savedValue(row, column);
-  if (Grades.sameCell(value, original)) state.edits.delete(key);
+  // A cell on its way to Drive stays an edit until the reply: what it means then depends on what was saved.
+  if (Grades.sameCell(value, original) && !(state.sending && state.sending.has(key))) state.edits.delete(key);
   else state.edits.set(key, { student_id: row.student_id, column, value, original });
   if (!state.edits.size) state.editsPush = state.open.push.push_id;
 }

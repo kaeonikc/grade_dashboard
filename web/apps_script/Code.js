@@ -5,6 +5,7 @@ const PAGE_TITLE = 'grade_web';
 const JOURNAL = 'web_edits.jsonl';
 const TOP_FILES = ['course.json', 'push.json', JOURNAL];
 const LOCK_WAIT_MS = 25000;
+const CACHE_META = 'meta';
 const NOTE_NONE = 'Nothing to undo';
 const NOTE_PULLED = 'Already pulled to the Mac; use `grader undo` there';
 const UNDO_CHANGED = 'Another device saved since this page loaded. Reload to see the newest save, then try again.';
@@ -155,7 +156,7 @@ function saveBatch(folderName, edits, push) {
       conflicts: plan.conflicts, files: Object.keys(plan.texts).length,
       push_changed: !!push && push !== c.push.push_id, journal: journalReply_(c),
     };
-  });
+  }, CACHE_META);
 }
 
 // Reverts the batch the teacher confirmed, if it is still the one Undo offers (SPEC "Undo last save"). Cells
@@ -172,7 +173,7 @@ function undoLastSave(folderName, batch) {
       ok: true, batch: meta && meta.batch, undoes: batch, saved: savedCells_(plan), already: plan.already,
       conflicts: plan.conflicts, journal: journalReply_(c),
     };
-  });
+  }, CACHE_META);
 }
 
 // Saves the weights or grade boundaries typed on the Grading tab (SPEC "Config save"): one `config` journal line,
@@ -223,15 +224,15 @@ function timed_(name, t0, t1, reply) {
 }
 
 // Runs fn(c) under the lock on an available course (roll-forward and trim done); else NOT_FOUND / UNAVAILABLE.
-// `path` is the course's path in grade_web, as listCourses gave it. `cache` only for display calls: a call that
-// writes or conflict-checks reads every file fresh (D5).
+// `path` is the course's path in grade_web, as listCourses gave it. `cache` for display calls; CACHE_META for saves,
+// which don't change course.json or push.json; anything else reads every file fresh (D5, SPEC_fast_save.md S8).
 function withCourse_(name, path, fn, cache) {
   return withLock_(name, function () {
     const root = gradeWebFolder_();
     const found = root && coursesIn_(root);
     const hit = found && found.courses.filter(function (c) { return c.folder && c.path === path; })[0];
     if (!hit) return fail_('NOT_FOUND', 'No pushed course named ' + path);
-    const opened = openCourses_([hit.folder], !!cache, found.listed)[0];
+    const opened = openCourses_([hit.folder], cache, found.listed)[0];
     if (!opened.c) return fail_('UNAVAILABLE', opened.reason);
     return fn(opened.c);
   });
@@ -307,6 +308,7 @@ function Unavailable_(reason) {
 // unchanged since they were cached are not downloaded; a course with a save pending reads fresh anyway. `listed`
 // ({<folder id>: [record]}, from coursesIn_) saves listing the course folders again.
 function openCourses_(folders, cache, listed) {
+  const meta = cache === CACHE_META;
   const props = PropertiesService.getScriptProperties().getProperties();
   const tops = Object.assign({}, listed);
   const unlisted = folders.filter(function (f) { return !(f.id in tops); }).map(function (f) { return f.id; });
@@ -314,7 +316,7 @@ function openCourses_(folders, cache, listed) {
   const its = folders.map(function (folder) {
     const tree = { '': tops[folder.id] };
     return { folder: folder, tree: tree, top: filesOf_(tree['']), reason: null,
-      cache: cache && !props[pendingKey_(folder)] };
+      cache: !!cache && !props[pendingKey_(folder)] };
   });
   readFor_(its, function (it) { return [fileIn_(it.top, 'course.json'), fileIn_(it.top, 'push.json')]; });
   its.forEach(function (it) {
@@ -351,10 +353,11 @@ function openCourses_(folders, cache, listed) {
       const journalFile = fileIn_(it.top, JOURNAL);
       if (!journalFile) throw new Unavailable_(WHY.noJournal);
       it.c = { folder: it.folder, course: course, push: push, dirs: dirs, archive: it.archive, journalFile: journalFile,
-        cache: it.cache };
+        cache: it.cache && !meta, pullCache: it.cache };
     });
   });
 
+  if (meta) its.forEach(function (it) { it.cache = false; });  // a save appends to the journal: it reads it fresh
   readFor_(its, function (it) { return [it.c && it.c.journalFile]; });
   return its.map(function (it) {
     attempt_(it, function () {
@@ -489,7 +492,7 @@ function pulledThisPush_(c) {
   }).sort(function (a, b) { return a.name < b.name ? -1 : 1; });
   if (!pulls.length) return false;
   const newest = pulls[pulls.length - 1];
-  readAll_([newest], c.cache);
+  readAll_([newest], c.pullCache);
   const header = core_().Journal.parseJournal(textOf_(newest, 'archive/' + newest.name)).lines[0];
   return !!header && header.kind === 'pull' && header.push === c.push.push_id;
 }

@@ -90,13 +90,45 @@ test('saveBatch reads its CSV and the journal fresh even when cached, and caches
   const s = run(gas, 'saveBatch', H.F1, [{ student_id: '9900000001', column: 'hw2', value: '9', original: '' }]);
   assert.strictEqual(s.reply.saved.length, 1);
   const rel = (p) => p.split('/').slice(2).join('/');
-  for (const f of ['course.json', 'push.json', 'web_edits.jsonl', HW]) assert.ok(s.reads.map(rel).includes(f), f + ' read fresh');
-  assert.strictEqual(s.timing.hit, 0);
+  for (const f of ['web_edits.jsonl', HW]) assert.ok(s.reads.map(rel).includes(f), f + ' read fresh');
+  for (const f of ['course.json', 'push.json']) assert.ok(!s.reads.map(rel).includes(f), f + ' from the cache');
+  assert.strictEqual(s.timing.hit, 2);
   assert.ok(s.lists <= 4);
   const r = run(gas, 'loadCourse', H.F1);
   assert.deepStrictEqual(r.reads, [], 'what the save wrote is cached under its new md5');
   assert.strictEqual(r.reply.files[HW], read(folders[H.F1], HW));
   assert.strictEqual(r.reply.journal.unpulled, 1);
+});
+
+test('a saved course.json changed on Drive is read fresh by the next save', (t) => {
+  const { gas, folders } = setup(t, [H.F1]);
+  run(gas, 'loadCourse', H.F1);
+  const file = path.join(folders[H.F1], 'course.json');
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8') + ' ');
+  const s = run(gas, 'saveBatch', H.F1, [{ student_id: '9900000001', column: 'hw2', value: '9', original: '' }]);
+  assert.strictEqual(s.reply.saved.length, 1);
+  assert.ok(s.reads.some((p) => p.endsWith('/course.json')), 'its md5 changed, so the cache misses');
+});
+
+test('with a save pending, the next save reads everything fresh', (t) => {
+  const { gas } = setup(t, [H.F1]);
+  run(gas, 'loadCourse', H.F1);
+  gas.failOn('setContent', 2);
+  assert.throws(() => run(gas, 'saveBatch', H.F1, [{ student_id: '9900000001', column: 'hw2', value: '9', original: '' }]));
+  gas.failOn('setContent', 0);
+  const s = run(gas, 'saveBatch', H.F1, [{ student_id: '9900000002', column: 'hw2', value: '8', original: '' }]);
+  for (const f of ['/course.json', '/push.json']) assert.ok(s.reads.some((p) => p.endsWith(f)), f);
+  assert.strictEqual(s.timing.hit, 0);
+});
+
+test('saveConfig reads course.json fresh', (t) => {
+  const { gas } = setup(t, [H.F1]);
+  const loaded = run(gas, 'loadCourse', H.F1).reply;
+  const weights = loaded.course.weights;
+  const form = Object.fromEntries(Object.keys(weights).map((k) => [k, String(weights[k])]));
+  const s = run(gas, 'saveConfig', H.F1, 'weights', form, weights);
+  assert.ok(s.reply.ok);
+  assert.ok(s.reads.some((p) => p.endsWith('/course.json')));
 });
 
 test('page tokens are followed', (t) => {

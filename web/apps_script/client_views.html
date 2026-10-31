@@ -733,14 +733,22 @@ function commit(it) {
 
 // After a cell of `row` changed: every view that shows the student, the counts and the badge.
 function changed(row) {
+  repaintRow(row);
+  repainted();
+}
+
+function repaintRow(row) {
   for (const it of cm.items) if (it.row === row) refreshItem(it);
-  if (tb && tb.grid) refreshAttGrid();
-  else if (tb && tb.byId.has(row.student_id)) paintRow(tb.byId.get(row.student_id));
+  if (tb && !tb.grid && tb.byId.has(row.student_id)) paintRow(tb.byId.get(row.student_id));
   if (det && det.row === row) {
     for (const it of det.items) refreshItem(it);
     refreshSummary();
   }
   if (sm) paintSummary(row);
+}
+
+function repainted() {
+  if (tb && tb.grid) refreshAttGrid();
   if (state.view === 'analytics') renderOverview();
   refreshCounts();
 }
@@ -782,7 +790,7 @@ function keypad(open) {
 function barSet(value, thenNext) {
   if (tb && tb.edit) return editSet(value, thenNext);
   const it = cm.current;
-  if (!it || locked()) return;
+  if (!it || busy()) return;
   it.value.value = value;
   if (thenNext) move(1);
   else commit(it);
@@ -909,14 +917,15 @@ function refreshChrome() {
   cm.saveBtn.disabled = locked();
   cm.discardBtn.hidden = n === 0;
   cm.discardBtn.disabled = locked();
-  cm.saveBtn.textContent = state.saving && cm.working ? cm.working : 'Save ' + n;
+  cm.saveBtn.textContent = state.sending ? 'Saving ' + state.sending.size + '…'
+    : state.saving && cm.working ? cm.working : 'Save ' + n;
   cm.headLine.textContent = state.saving && cm.working ? cm.working : state.checking ? 'Checking Drive…' : headSummary();
   cm.strip.hidden = !state.storageOff;
   // The attendance grid's Fill picks its session in the sheet (SPEC_fill_dismiss.md F2).
   const col = attGrid() ? null : currentColumn();
-  cm.fill.disabled = locked() || !(col || (attGrid() && sessions().length));
+  cm.fill.disabled = busy() || !(col || (attGrid() && sessions().length));
   cm.fill.replaceChildren(...(col ? ['Fill… ', data('span', {}, WIDE.matches ? col.header : col.name)] : ['Fill…']));
-  for (const it of cm.items.concat(det ? det.items : [])) if (it.value.tagName === 'INPUT') it.value.readOnly = locked();
+  for (const it of cm.items.concat(det ? det.items : [])) if (it.value.tagName === 'INPUT') it.value.readOnly = busy();
 }
 
 function announceCommit(it) {
@@ -1065,7 +1074,7 @@ function codeButtons(it) {
 // A code tap; tapping the code the cell already holds does nothing. On the Attendance tab a code (not Clear) moves
 // focus to the next student (S6.2). Clear stays on the student (its button is now disabled).
 function setCode(it, code) {
-  if (locked() || Grades.sameCell(code, cellValue(it.row, it.col.name))) return;
+  if (busy() || Grades.sameCell(code, cellValue(it.row, it.col.name))) return;
   setCell(it.row, it.col.name, code);
   changed(it.row);
   announceCommit(it);
@@ -1445,7 +1454,7 @@ function tableClick(e) {
   focusCell(r, c);
   if (tb.specs[c].kind === 'name') openDetail(tb.recs[r].row);
   else if (tb.specs[c].kind === 'code') openPicker(r, c);
-  else if (!WIDE.matches && tb.specs[c].kind === 'score' && !locked()) editCell(r, c);
+  else if (!WIDE.matches && tb.specs[c].kind === 'score' && !busy()) editCell(r, c);
 }
 
 // A phone opens a score cell with one tap; the cell's column becomes the one Fill acts on (SPEC_menu_strip.md M7).
@@ -1475,7 +1484,7 @@ function moveEdit(delta) {
 // ขส moves on; Clear stays in the cell, empty.
 function editSet(value, thenNext) {
   const { r, c, input } = tb.edit;
-  if (locked()) return;
+  if (busy()) return;
   input.value = value;
   if (thenNext) return moveEdit(1);
   const rec = tb.recs[r];
@@ -1517,7 +1526,7 @@ function tableKey(e) {
     }
     return;
   }
-  if (locked()) return;
+  if (busy()) return;
   const code = e.key.toUpperCase();
   let act = null;
   if (e.key === 'Enter') act = () => (s.kind === 'score' ? startEdit(r, c, null) : openPicker(r, c));
@@ -1646,7 +1655,7 @@ function place(node, td) {
 
 // The attendance picker `P L A X Clear` under a session cell.
 function openPicker(r, c) {
-  if (locked()) return;
+  if (busy()) return;
   closePicker();
   const rec = tb.recs[r];
   const col = tb.specs[c].col;
@@ -1765,7 +1774,7 @@ function autofocused(node) {
 function openFill() {
   const grid = attGrid();
   let col = grid ? state.open.course.columns.find((c) => c.name === fillSession()) : currentColumn();
-  if (!col || locked()) return;
+  if (!col || busy()) return;
   const att = col.category === 'attendance';
   const heading = data('span', {}, col.header);
   let mode = 'empty';
@@ -1940,8 +1949,8 @@ function doSave(retrying, after) {
   const n = state.edits.size;
   cm.working = 'Saving ' + F.plural(n, 'cell') + '…';
   cm.alert.replaceChildren();
-  saveEdits().then((reply) => {
-    renderView();
+  saveEdits(!after).then((reply) => {
+    if (after) renderView(); else refreshSaved(reply);
     if (!reply.ok) return saveRefused(reply, n, after);
     const listed = reply.conflicts.filter((c) => c.reason !== 'not found');
     const nothing = !retrying && !reply.batch && !reply.saved.length && !reply.conflicts.length;
@@ -1964,6 +1973,17 @@ function doSave(retrying, after) {
       kept(n), button('Retry', () => doSave(true, after), 'btn outline'));
   });
   refreshChrome();
+}
+
+// A background Save's reply: only what it changed repaints, so the scroll, an open cell and a pop-up stay (S4).
+function refreshSaved(reply) {
+  if (!reply.ok) return refreshChrome();
+  const cells = reply.saved.concat(reply.already, reply.conflicts);
+  for (const id of new Set(cells.map((c) => c.student_id))) {
+    if (state.byId.has(id)) repaintRow(state.byId.get(id));
+  }
+  repainted();
+  if (state.view === 'grading' && reply.conflicts.length) renderView();
 }
 
 function kept(n) {
@@ -2096,6 +2116,7 @@ function doUndo(t) {
 
 // ---- 12. Leaving with unsaved edits (S8.7) ----
 function leave(then) {
+  if (state.sending) return say(cm.working);  // the reply must land on this course
   const n = state.edits.size;
   const forms = CONFIG_PARTS.filter(formChanged)
     .map((part) => (part === 'weights' ? 'Weights not saved.' : 'Boundaries not saved.')).join(' ');
