@@ -103,7 +103,28 @@ function listCourses() {
       if (c.course.renamed_from && c.course.renamed_from.length) item.renamed_from = c.course.renamed_from;
       return item;
     });
-    return { ok: true, courses: courses, groups: found.groups };
+    const shown = withoutReplaced_(courses);
+    found.groups.forEach(function (g) {
+      g.count -= courses.filter(function (c) { return c.group === g.name; }).length -
+        shown.filter(function (c) { return c.group === g.name; }).length;
+    });
+    return { ok: true, courses: shown, groups: found.groups };
+  });
+}
+
+// The list without the copies another course in the same group was renamed from (`grader split` leaves the old copy
+// on Drive, no longer pushed). One with edits not pulled yet stays, marked `replaced_by`, so no edit is hidden.
+function withoutReplaced_(courses) {
+  const by = {};
+  courses.forEach(function (c) {
+    (c.renamed_from || []).forEach(function (old) { by[c.group ? c.group + '/' + old : old] = c.folder; });
+  });
+  return courses.filter(function (c) {
+    const to = by[c.folder];
+    if (!to || to === c.folder) return true;
+    if (!c.unpulled) return false;
+    c.replaced_by = to;
+    return true;
   });
 }
 

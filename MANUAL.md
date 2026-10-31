@@ -165,7 +165,10 @@ grader init -i repclasslist_Astro_sec51.xls -i repclasslist_Astro_sec52.xls
   section; with a section shown, only that one.
 - **grade_web** gets the course as one: `grader web-push` sends every section together, the phone shows the chips and
   opens on **the section in class now** (from 30 minutes before the class until it ends), and `grader web-pull` puts
-  each edit back into its student's section folder.
+  each edit back into its student's section folder. After the split the old web copy leaves the phone's list (it
+  stays listed, marked, only while it has edits not pulled). **No 51 / 52 buttons on the phone?** The web app there
+  is an older version: run `web/scripts/deploy.sh` (`clasp push` alone doesn't change the phone's URL), then close
+  the grade_web tab and open it again.
 - **Exams:** `exam submit link` links the exam to the course folder; `exam mark roster` checks every section's
   students, and `exam submit scores` writes each score into its student's section file (one history entry).
 - **Exports** (grade-tui `e`, `grader dashboard`): `reports/<course>_final_grades.csv` with a `Section` column, and

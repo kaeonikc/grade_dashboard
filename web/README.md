@@ -64,7 +64,19 @@ The web app runs as you, and only you can open it. Both settings come from `apps
 (`executeAs: USER_DEPLOYING`, `access: MYSELF`). To check them, open the editor (`clasp open-script`), then
 Deploy > Manage deployments. They should read "Execute as: Me" and "Who has access: Only myself".
 
-After a code change, push and update the **same** deployment so the URL stays the same:
+After a code change, commit it and run:
+
+```bash
+web/scripts/deploy.sh
+```
+
+`clasp push` alone is not enough: it updates only @HEAD (the /dev URL), and the phone's /exec URL stays on its old
+version. `deploy.sh` pushes, makes a version named after the last commit to `apps_script/`, moves every deployment
+to it (same URL), and checks `list-deployments` until they all show it. It refuses when clasp isn't logged in with
+the CMRU account or `apps_script/` has uncommitted changes. Then close the grade_web tab on the phone and open it
+again.
+
+By hand, push and update the **same** deployment so the URL stays the same:
 
 ```bash
 clasp push --force

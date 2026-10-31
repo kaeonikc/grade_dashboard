@@ -201,6 +201,8 @@ function courseCard(c, showFolder) {
     el('span', {}, F.journalLine(c, state.now)),
     c.older_push ? el('span', { class: 'warn' }, "Some of these edits were saved while the latest push was " +
       "syncing. They're kept; pull them on the Mac: grader web-pull") : null,
+    c.replaced_by ? el('span', { class: 'warn' }, 'Replaced by ' + c.replaced_by + '. Pull these edits on the Mac ' +
+      '(grader web-pull), then this copy leaves the list') : null,
     drafts ? el('span', { class: 'unsaved' }, '● ' + drafts + ' unsaved on this device') : null,
     el('span', { class: 'chevron', 'aria-hidden': 'true' }, '›'));
 }

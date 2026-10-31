@@ -223,7 +223,7 @@ label), `web/apps_script/{Code.js,client_state.html}`, `MANUAL.md`, `INTEGRATION
 - Keeping the one-folder `Section`-column model working beside the new layout (F10). `grader split` converts it.
 - Moving or deleting the old Drive copy of a split course (grader says you can delete it).
 - More than one level of nesting, and a section folder outside its course folder.
-- Running `grader split` on the real course, deploying grade_web (`clasp push`) and pushing to the real Drive: you
+- Running `grader split` on the real course, deploying grade_web (`web/scripts/deploy.sh`) and pushing to the real Drive: you
   do those.
 
 ## Tests
@@ -283,5 +283,5 @@ sync/history/exports, tui_api + grade-tui, grade_web, exam_projects (its own rep
 6. **exam_projects:** a scratch exam linked to `2026_S2_Astro/` with a results.csv for students of both sections:
    `exam mark roster` lists absences across 55 students, and `exam submit scores` writes each score into its
    section's CSV (one history entry; `grader undo` reverts both).
-7. **You, after `clasp push`:** on the phone the Astro course opens on the section in class, All shows both blocks,
+7. **You, after `web/scripts/deploy.sh`:** on the phone the Astro course opens on the section in class, All shows both blocks,
    and a mark saved for sec 52 comes back into `sec52/` with `grader web-pull`.

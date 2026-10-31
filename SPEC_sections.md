@@ -162,7 +162,7 @@ no code change.
 - Removing a section or students (`update` never removes, as today).
 - exam_projects features per section (`exam mark roster` per section, per-section score submission). The INTEGRATION
   note is the only change there.
-- Deploying grade_web (`clasp push`) and touching the real course in `~/cmru/teachings`: you do those.
+- Deploying grade_web (`web/scripts/deploy.sh`) and touching the real course in `~/cmru/teachings`: you do those.
 
 ## Test plan
 Python (`python -m pytest tests/`):
@@ -209,7 +209,7 @@ In the scratchpad, never in `~/cmru/teachings`:
 5. `grader web-push --drive-root <scratch>/drive` prints the per-section count. Editing one sec-52 cell in the pushed
    CSV, then `grader web-pull --drive-root <scratch>/drive`, shows that line with `[52]`.
 6. `grader mock`, then `grader dashboard`: the section question filters the tables and distribution.
-7. grade_web, after you `clasp push`: open the Astro copy on a phone. The chips appear, filter, are remembered after
+7. grade_web, after you run `web/scripts/deploy.sh`: open the Astro copy on a phone. The chips appear, filter, are remembered after
    reload, and the colours read well in light and dark.
 
 ---
@@ -305,7 +305,7 @@ The data side of revision 1 is correct. The real Astro course `~/cmru/teachings/
 5. **Grades:** grade-tui's All view shows both blocks. `n` → 51 for sec 51 alone, with its own stats and distribution.
    `e` exports the combined file plus `_sec51` / `_sec52` files for submitting each section to the registrar.
 6. **Undo:** `grader history` / `grader undo` as before, the rename included.
-7. **Deploy the web part once:** `cd web && clasp push` (you do this).
+7. **Deploy the web part once:** `web/scripts/deploy.sh` (`clasp push` alone leaves the phone's URL on its old version).
 
 ### Files
 `grader.py` (update flow and prompts), `src/rename.py` (new), `src/sections.py` (`group_order`, target name),
@@ -317,7 +317,7 @@ The data side of revision 1 is correct. The real Astro course `~/cmru/teachings/
 - Any change to score CSVs or the roster file (R6).
 - Per-section weights, boundaries, columns or session dates. One attendance sheet per section.
 - Finding and rewriting exam_projects `grading_dir:` links (grader only prints the note).
-- `clasp push`, and running the rename on the real `~/cmru/teachings` course: you do both. I only work on scratch
+- Deploying grade_web (`web/scripts/deploy.sh`), and running the rename on the real `~/cmru/teachings` course: you do both. I only work on scratch
   copies.
 
 ### Tests
@@ -348,5 +348,5 @@ The data side of revision 1 is correct. The real Astro course `~/cmru/teachings/
    27 rows, and j/k never lands on a header. `n` → 51 shows 28 rows and no headers. A bulk fill in All touches all
    55 rows. Export writes the combined (grouped) file plus `_sec51`/`_sec52`.
 5. `node` check of `pickSection` with Fri 09:00 → 51, Fri 13:15 → 52, Mon → last/All.
-6. After you `clasp push`: open the Astro copy on the phone during a class slot. It opens on that section, All shows
+6. After you run `web/scripts/deploy.sh`: open the Astro copy on the phone during a class slot. It opens on that section, All shows
    two blocks, and the colours read well in light and dark.
