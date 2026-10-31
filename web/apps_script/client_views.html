@@ -345,7 +345,7 @@ function courseView(draft) {
   cm.overview = el('div', { class: 'overview' });
   cm.wrap = el('div', { class: 'table-wrap' });
   cm.grading = el('div', { class: 'grading' });
-  cm.list = el('ul', { class: 'rows' });
+  cm.list = el('ul', { class: 'rows roster' });
   cm.list.addEventListener('keydown', attendanceKey);
   cm.empty = el('div', { class: 'empty' });
   cm.nextBtn = el('button', { type: 'button', class: 'btn kbar-next', onclick: () => move(1) }, 'Next ↓');
@@ -430,6 +430,15 @@ function markSection(node, row) {
   const slot = sectionSlot(row);
   if (slot) node.classList.add('sec-row', 's' + slot);
   return node;
+}
+
+// Every second shown student in `nodes` (one per row of `rows`, same order) gets `stripe` (SPEC_name_stripes.md N3,
+// R2), and `list` takes the colour of the one section shown.
+function stripeRows(list, rows, nodes) {
+  const at = new Map(rows.map((row, i) => [row.student_id, nodes[i]]));
+  const striped = stripes(rows, (row) => !at.get(row.student_id).hidden);
+  rows.forEach((row, i) => nodes[i].classList.toggle('stripe', striped.has(row.student_id)));
+  for (let k = 1; k <= 4; k++) list.classList.toggle('s' + k, tableSlot() === k);
 }
 
 // In All, a heading above each section's students (SPEC_sections.md R5): `Sec 51 · 28 students`. `nodes` are the
@@ -1131,8 +1140,7 @@ function buildTable() {
   const body = el('tbody', {}, ...withSectionHeads(rows, rows.map(tableRow), 'tr', specs.length));
   tb.none = el('tr', { hidden: '' }, el('td', { class: 'tb-none', colspan: String(specs.length) }));
   body.append(tb.none);
-  const cls = 'tb' + (grid ? ' att-grid' : '') + (grid && !WIDE.matches ? ' compact' : '') +
-    (tableSlot() ? ' s' + tableSlot() : '');
+  const cls = 'tb' + (grid ? ' att-grid' : '') + (grid && !WIDE.matches ? ' compact' : '');
   const table = el('table', { class: cls, role: 'grid', 'aria-label': grid ? 'Attendance' : 'Course table',
     'aria-rowcount': String(state.rows.length + 1), 'aria-colcount': String(specs.length) }, el('thead', {}, head), body);
   if (grid) table.append(attFoot());
@@ -1372,8 +1380,7 @@ function searchTable() {
     if (!rec.tr.hidden) shown += 1;
   }
   tb.none.hidden = shown > 0;
-  const striped = stripes(tb.recs.map((rec) => rec.row), (row) => !tb.byId.get(row.student_id).tr.hidden);
-  for (const rec of tb.recs) rec.tr.classList.toggle('stripe', striped.has(rec.row.student_id));
+  stripeRows(tb.none.closest('table'), tb.recs.map((rec) => rec.row), tb.recs.map((rec) => rec.tr));
   refreshSectionHeads(tb.none.parentNode);
   tb.none.firstChild.replaceChildren(state.search.trim() === '' && riskOnly ? 'Nobody is under 80% so far.'
     : data('span', {}, 'No students match "' + state.search.trim() + '"'));
@@ -2163,6 +2170,7 @@ function applySearch() {
     it.li.hidden = !matches(it.row, state.search);
     if (!it.li.hidden) shown += 1;
   }
+  stripeRows(cm.list, cm.items.map((it) => it.row), cm.items.map((it) => it.li));
   refreshSectionHeads(cm.list);
   if (state.view === 'attendance' && !sessions().length) {
     cm.empty.replaceChildren(el('p', {}, 'This course has no attendance sessions. Add them on the Mac, then push again.'));
@@ -2270,7 +2278,7 @@ function renderSummary() {
     cm.wrap.replaceChildren(el('table', { class: 'tb sum-table', 'aria-label': 'Summary Scores' },
       el('thead', {}, head), body));
   } else {
-    cm.summary.replaceChildren(el('ul', { class: 'rows sum-list', 'aria-label': 'Summary Scores' },
+    cm.summary.replaceChildren(el('ul', { class: 'rows roster sum-list', 'aria-label': 'Summary Scores' },
       ...withSectionHeads(state.rows, state.rows.map(summaryItem), 'li')));
   }
   searchSummary();
@@ -2329,6 +2337,8 @@ function paintSummary(row) {
 function searchSummary() {
   if (!sm) return;
   for (const r of sm.values()) r.node.hidden = !matches(r.row, state.search);
+  const list = [...sm.values()];
+  if (list.length) stripeRows(list[0].node.parentNode, list.map((r) => r.row), list.map((r) => r.node));
   refreshSectionHeads(WIDE.matches ? cm.wrap : cm.summary);
 }
 

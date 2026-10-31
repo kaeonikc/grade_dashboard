@@ -525,9 +525,11 @@
   .tb tr.sec-head th span { position: sticky; left: 0.25rem; }
   /* SPEC_name_stripes.md N3: every second shown row washed in its section's colour (the app blue without sections),
      over each cell's own background, so grey computed cells stay grey and the frozen cells stay opaque. */
-  .tb tr.stripe { --stripe: color-mix(in srgb, var(--sec, var(--accent)) 8%, transparent);
+  .stripe { --stripe: color-mix(in srgb, var(--sec, var(--accent)) 8%, transparent);
     --stripe-grey: color-mix(in srgb, var(--sec, var(--accent)) 5%, transparent); }
-  .tb tr.stripe td { background-image: linear-gradient(var(--stripe), var(--stripe)); }
+  .tb tr.stripe td, li.stripe { background-image: linear-gradient(var(--stripe), var(--stripe)); }
+  /* R2: the phone lists of students (Raw, a session, Summary) get the same stripes, inset from the edges */
+  .roster > li:not(.sec-head) { padding-left: 0.5rem; padding-right: 0.5rem; }
   /* lighter over grey, so grade text there keeps 4.5:1 */
   .tb tr.stripe td.c-calc, .tb tr.stripe td.c-att {
     background-image: linear-gradient(var(--stripe-grey), var(--stripe-grey));

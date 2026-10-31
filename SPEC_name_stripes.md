@@ -175,3 +175,32 @@ What the code does now:
   - An unsaved cell stays plain amber.
   - The frozen column is opaque.
 - **Suites:** web 195/195, Python 266, `E2E OK`.
+
+## Revision 2 (2026-10-31): stripes on every list of students
+The user asked (translated from Thai) for the alternating light background on the other pages too, not only
+attendance.
+
+- **R2. Where.** The same stripes (N3) now appear in every list of students:
+  - the phone score list (Raw › a score column);
+  - the phone list for one attendance session;
+  - the phone Summary list;
+  - the computer Summary table.
+
+  They use the same rules as the grids: every second shown student, restarting under each section heading in All,
+  in the section's colour (the app blue without sections), and still alternating after a search.
+- **How.**
+  - `stripeRows(list, rows, nodes)` in `client_views.html` is the one place that puts `stripe` on the rows. It also
+    gives the list or table the colour of the section shown, using `tableSlot`.
+  - `searchTable`, `applySearch` and `searchSummary` call it.
+  - `--stripe` is now defined on any `.stripe`, and `li.stripe` gets the wash.
+  - The two phone lists are `ul.roster`. Their items gain 0.5rem side padding, so the colour doesn't touch the text.
+    This also moves the name clear of the All-view section bar, which used to cover the first letter.
+- **Unchanged.**
+  - Names in these lists still end in "…" when too long. N1 and N2 cover the grids only.
+  - The Grading lists (weights, grade boundaries) aren't student lists and get no stripes.
+- **Checked in Chromium** (phone 390×664 and 1280×800):
+  - the score list in Sec 51, Sec 52, All, and All with a search;
+  - the session list;
+  - Summary in Sec 51 and All on the phone, and Sec 52 and All on the computer.
+
+  All alternate correctly, with the expected student and heading counts.

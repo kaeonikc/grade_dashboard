@@ -160,3 +160,11 @@ for (const [mode, from] of [['light', 0], ['dark', css.indexOf('prefers-color-sc
     }
   });
 }
+
+test('phone student lists are striped like the grids, inset from the edges (SPEC_name_stripes.md R2)', () => {
+  assert.match(css, /\.tb tr\.stripe td, li\.stripe \{ background-image: linear-gradient\(var\(--stripe\), var\(--stripe\)\); \}/);
+  const r = rule('.roster > li:not(.sec-head)');
+  assert.match(r, /padding-left:\s*0\.5rem/);
+  assert.match(r, /padding-right:\s*0\.5rem/);
+  assert.match(rule('.stripe'), /--stripe:/, 'the wash is defined on any striped row, not only table rows');
+});
