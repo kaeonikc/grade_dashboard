@@ -408,7 +408,7 @@ function refreshSecBar() {
   if (!state.sectionList.length) return cm.secBar.replaceChildren();
   const count = (sec) => state.allRows.filter((r) => state.sections.get(r.student_id) === sec).length;
   const chip = (sec, label, slot) => {
-    const b = button(label, () => pickSection(sec), 'sec-chip' + (slot ? ' s' + slot : ''));
+    const b = button(label, () => tapSection(sec), 'sec-chip' + (slot ? ' s' + slot : ''));
     b.setAttribute('aria-pressed', String(state.section === sec));
     return b;
   };
@@ -416,7 +416,7 @@ function refreshSecBar() {
     ...state.sectionList.map((sec, i) => chip(sec, 'Sec ' + sec + ' · ' + count(sec), (i % 4) + 1)));
 }
 
-function pickSection(sec) {
+function tapSection(sec) {
   if (sec === state.section) return;
   setSection(sec);
   if (det && !state.rows.includes(det.row)) closeDetail();
