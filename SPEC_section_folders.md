@@ -190,6 +190,26 @@ Every module that today derives paths from a course folder goes through it: `dat
   folder, `sections[N].folder`, a section's roster and data paths, history at the top) and drops the `Section`
   column note.
 
+## As built (2026-10-31): where the implementation differs from the plan above
+
+1. **grade_web: one merged copy, no web code change.** `grader web-push` sends a course with section folders as one
+   flat course: a roster of every section with a `Section` column, and one `data/<prefix>_<category>.csv` per
+   category holding every section's rows (`webpush.merged_copy`). grade_web already shows that shape with its
+   All / 51 / 52 chips, section blocks and "section in class" (SPEC_sections.md Revision 2), so `Code.js` and the
+   client are unchanged. `grader web-pull` puts each edit into its student's section folder
+   (`webpull.data_dir_of`), one history entry. The Drive copy therefore has no `sec51/` folders inside.
+2. **`grader split` keeps the old history in `<old>_before_split/`.** One file becomes two, so old snapshots can't
+   be renamed into the new course meaningfully; the new course's history starts with the split entry, and
+   `grader undo` of it is refused once anything has changed in the new course.
+3. **`grader update` / `sync` across sections** write the history entries they always did (per file or per section,
+   as for a flat course). A grade-tui save, a web pull and an `exam submit scores` are one entry across sections.
+4. **grade-tui's Rust is unchanged.** The course-list label (`2026_S2_Astro · sec 51, 52`) comes from
+   `tui_api.get_courses`, and the All view's section blocks already group by each record's `Section`.
+5. **A column added by hand to one section's CSV**: `grader sync` offers it for the config as usual; `grader update`
+   then creates it (empty) in the other sections. It is not created automatically by `sync`.
+6. **A flat course's roster keeps the `Section` column** the class-list converter writes (one value); it means
+   nothing for a flat course and is never read except by `grader split`.
+
 ## Files
 grade_dashboard: `src/course.py` (new), `src/data_loader.py`, `src/sync.py`, `src/attendance.py`, `src/columns.py`,
 `src/history.py`, `src/sections.py`, `src/rename.py` (rename offer removed; the module keeps what `split` reuses),

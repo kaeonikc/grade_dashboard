@@ -21,8 +21,8 @@ category's default has a bare header (`4`, not `4 (10pts)`). See "Points" below.
 
 | Thing | Owner | exam may |
 |---|---|---|
-| Course folder `<term>_<abbr>_SEC_<n>/` (from 2026-10-20; `<abbr>` from `--abbr` or `repclasslist_<abbr>.xls`), `<term>_<abbr>_SEC_51-52/` for several sections, older ones `<term>_<name>[_SEC_<n>]_grading/`. `<prefix>` is the stem of `course_info/<prefix>_config.yaml`, never derived from the folder name | grade_dashboard (`grader init`) | read it |
-| Roster `course_info/<prefix>_student_info.csv` (`Student ID,Name,Class Group[,Section]`) | grade_dashboard (`grader init/update -i repclasslist.xls`) | read it by column name; never write it |
+| Course folder `<term>_<abbr>_SEC_<n>/` (from 2026-10-20; `<abbr>` from `--abbr` or `repclasslist_<abbr>.xls`), `<term>_<abbr>/` with a sub-folder per section for several sections (see "Section folders"), older ones `<term>_<name>[_SEC_<n>]_grading/`. `<prefix>` is the stem of `course_info/<prefix>_config.yaml`, never derived from the folder name | grade_dashboard (`grader init`) | read it |
+| Roster `course_info/<prefix>_student_info.csv` (`Student ID,Name,Class Group[,Section]`; in each section folder for a course with section folders) | grade_dashboard (`grader init/update -i repclasslist.xls`) | read it by column name; never write it |
 | Config `course_info/<prefix>_config.yaml` (`data_mapping`, `weights`, …) | grade_dashboard (you, `grader sync`) | read it; **never write it** |
 | Score files `data/<prefix>_<category>.csv` | grade_dashboard (`grader mkdb/update`) | change the cells of its mapped columns; **add** its own missing part columns; fix their header points; recompute that file's `total` |
 | Attendance `data/<prefix>_attendance.xlsx/.csv` | grade_dashboard (`grader sync` keeps the two in step; the score-total rule doesn't apply) | never touch them |
@@ -30,11 +30,23 @@ category's default has a bare header (`4`, not `4 (10pts)`). See "Points" below.
 
 exam never adds or removes rows, never changes columns other than its own, and never writes `ขส` over a score.
 
-**Several sections in one folder** (from 2026-10-30, grade_dashboard `SPEC_sections.md`): a course taught to two or more
-sections can be one folder. Its roster then has a `Section` column (`51`, `52`), and its config lists them under
-`sections:`, with `sec_num` the first one. Score files are shared, one row per student whatever the section, so an
-exam for all sections links to that one folder. A `course_id` keeps the class list's spelling, which may have a space
-(`SC 2202`).
+**Section folders** (from 2026-10-31, grade_dashboard `SPEC_section_folders.md`): a course taught to two or more
+sections is one course folder `<term>_<abbr>/` holding the shared config `course_info/<prefix>_config.yaml`, the one
+`history/` for every change, and a sub-folder per section, named in the config:
+
+```yaml
+sections:
+  '51': {folder: sec51, class_schedule: {…}, exam_schedule: …}
+  '52': {folder: sec52, class_schedule: {…}, exam_schedule: …}
+```
+
+Each section folder has its own roster `sec51/course_info/<prefix>_SEC_51_student_info.csv` and score files
+`sec51/data/<prefix>_SEC_51_<category>.csv` (the same rules as a flat course's), and no config. An exam for all
+sections links to the course folder: each student's score goes into their own section's file, and one submit is one
+history entry in the course's `history/` (paths like `sec51/data/…`). A section folder is never a course of its own
+(it has no config), but `--to sec51` means that section alone. The older one-folder layout with a roster `Section`
+column (2026-10-30) is converted by `grader split`. A `course_id` keeps the class list's spelling, which may have a
+space (`SC 2202`).
 A roster student without a row in the data CSV is reported ("run `grader update`") and skipped.
 
 ## Finding the course from an exam
@@ -52,7 +64,7 @@ matches when:
 `exam submit link` writes the following into `<exam>_metadata.yaml`:
 
 ```yaml
-grading_dir: ../../2026_S1_…_SEC_51_grading      # or a list, for several sections
+grading_dir: ../../2026_S1_…_SEC_51_grading      # or a list; or a course with section folders, for all of them
 grade_category: final                             # the data_mapping category
 grade_columns: {mcq: final_mcq, fill: final_fill} # raw MCQ and raw fill, each into its own column
 # or:   grade_columns: {score: final_exam}        # MCQ + fill in one column

@@ -1,3 +1,8 @@
+> **Replaced by SPEC_section_folders.md (2026-10-31):** a course with several sections is now one sub-folder per
+> section sharing one config. The All / 51 / 52 selector, section blocks, colours and "phone opens on the section in
+> class" below still describe the apps; the one-folder `Section`-column layout and the rename on `update -i` are gone
+> (`grader split` converts an old course).
+
 # SPEC — Courses with several sections (Astronomy SC 2202, sec 51 + 52)
 
 ## Context

@@ -130,46 +130,55 @@ working as they are: every tool takes the prefix from `course_info/<prefix>_conf
 
 ### A course with several sections
 
-When you teach one course to two (or more) sections, keep them in **one folder**: one roster, one set of score files,
-one grading scheme. The university gives one class list per section, and grader reads each one's `Sec`.
+When you teach one course to two (or more) sections, the course is **one folder with a sub-folder per section**. Each
+section keeps its own roster, score files and attendance sheet; the course shares one config (weights, columns,
+points, grade boundaries) and one history. The university gives one class list per section: name them
+`repclasslist_<abbr>_sec<N>.xls`.
 
 ```bash
-grader init -i repclasslist_Astro51.xls -i repclasslist_Astro52.xls     # a new course: 2026_S2_Astro_SEC_51-52/
-grader update -i repclasslist_Astro52.xls                               # or add sec 52 to an existing course
+grader init -i repclasslist_Astro_sec51.xls -i repclasslist_Astro_sec52.xls
 ```
 
-- The abbreviation comes from the file names with the section digits dropped (`Astro51` + `Astro52` → `Astro`), or
-  from `--abbr`.
-- `grader update -i` with a section the course doesn't have yet asks three things, in order (`-y` answers yes to
-  all of them; without a terminal and without `-y` it refuses to add a section):
-  1. `Add section 52 (27 students) to this course? [y/N]`
-  2. `Rename 2026_S2_Astro51_SEC_51 → 2026_S2_Astro_SEC_51-52? [y/N]`. Everything named after the course moves:
-     the folder, every `<prefix>_*` file (`.bak` files and `history/` snapshots too), the paths in `history/log.jsonl`
-     and the Drive copy. Your shell is still in the old path afterwards, so `cd ../2026_S2_Astro_SEC_51-52`. Any
-     `grader update -i` offers this rename while the name doesn't match the sections, so a course that already has
-     both sections gets it the next time you run `grader update -i ../repclasslist_Astro52.xls`. grader refuses
-     when a folder of the new name exists or the Drive copy has web edits not pulled yet (pull them first).
-  3. `The web copy has 28 students, the course has 55. Push now? [y/N]`, only when the course has a Drive copy.
-     It runs `grader web-push`, so the phone sees the new section. When the score files don't have the new
-     students yet, grader says to run `grader update` (no `-i`) first, and that asks the push question instead.
-- `grader undo` reverses the rename (the newest change after it), then the roster update. Undoing an older score
-  change after the rename restores the renamed file. If an exam links the course (`grading_dir:` in its metadata),
-  run `exam submit link` again after a rename.
-- The roster gets a `Section` column, and `config.yaml` a `sections:` list with each section's class time. The
-  top-level `sec_num`, `class_schedule` and `exam_schedule` are the first section's, and the attendance dates come
-  from them, so every section shares the same session columns.
-- The attendance xlsx gets a `Sec` column after `Name` for sorting and filtering in Excel. grader fills it from the
-  roster, so don't edit it. The attendance csv has no `Sec` column.
-- A student found in another section's class list moves to that section (grader says so).
-- grade-tui and grade_web show **All | 51 | 52** above the data. `n` in grade-tui (the chips in grade_web) shows one
-  section: its rows, statistics, grade distribution and Fill Column only. **All** lists the sections in blocks, each
-  under a heading line `── Sec 51 · 28 students ──` and in its own colour. `grader dashboard` asks which section to
-  show and prints the same blocks for All. The cursor and Fill Column work on students only, never on a heading.
-- On the phone, grade_web opens a course on **the section in class now** (from `sections:` in config, from 30
-  minutes before the class until it ends), so taking attendance shows only that section. Outside class times it
-  opens on your last choice. A chip you tap stays chosen until you leave the course.
-- Score files stay as they are: one file per category for all sections, sorted by Student ID, with no section column.
-  Exports write the whole course (in section blocks) and one file per section ([section 10](#10-submitting-grades)).
+```
+2026_S2_Astro/
+├── course_info/2026_S2_Astro_config.yaml     the shared config; sections: 51 → sec51, 52 → sec52, with class times
+├── history/                                   every change, any section (grader history / grader undo)
+├── reports/                                   the combined exports (every section, in section blocks)
+├── sec51/  course_info/<roster>  data/2026_S2_Astro_SEC_51_homework.csv …  reports/
+└── sec52/  …
+```
+
+- **The trigger:** a class list named `…_sec<N>.xls`, or several class lists at once. The number in the name must be
+  the `Sec` inside the sheet (grader refuses otherwise). One file without `_sec` makes a flat course, as before.
+- **Adding a section later:** `grader init -i repclasslist_Astro_sec51.xls` makes `sec51/` only; later
+  `grader update -i repclasslist_Astro_sec52.xls` asks `Add section 52 (27 students) to 2026_S2_Astro? [y/N]` and
+  makes `sec52/` with its score files and attendance sheet (`-y` says yes). A flat one-section course gets the same
+  question, and on yes it moves into folders first (`<term>_<abbr>/sec51/`; the old folder is kept as
+  `…_before_split`).
+- **Running commands:** from the course folder or any section folder, `grader update`, `grader mkdb`, `grader sync`,
+  `grader web-push` and `grader web-pull` work on every section; `grader history` and `grader undo` show the course's
+  one history. `grader update -i` finds the section by the class list.
+- **A student in another section's list** moves there, scores and attendance marks included (grader says so).
+- **grade-tui** lists the course once (`2026_S2_Astro · sec 51, 52`) and shows **All | 51 | 52** (`n` cycles). All
+  lists the sections in blocks under a heading `── Sec 51 · 28 students ──`, and you can edit in All: each cell is
+  saved into its student's section folder, and one save is one `grader undo`. Fill Column in All fills every
+  section; with a section shown, only that one.
+- **grade_web** gets the course as one: `grader web-push` sends every section together, the phone shows the chips and
+  opens on **the section in class now** (from 30 minutes before the class until it ends), and `grader web-pull` puts
+  each edit back into its student's section folder.
+- **Exams:** `exam submit link` links the exam to the course folder; `exam mark roster` checks every section's
+  students, and `exam submit scores` writes each score into its student's section file (one history entry).
+- **Exports** (grade-tui `e`, `grader dashboard`): `reports/<course>_final_grades.csv` with a `Section` column, and
+  each section's own files in `sec<N>/reports/`, for submitting each section to the registrar
+  ([section 10](#10-submitting-grades)).
+
+**A course made the older way** (one folder, a `Section` column in its roster, from 30 Oct 2026): run `grader split`
+in it. It shows what it will make, asks, then builds `<term>_<abbr>/` with a folder per section, moving every score
+and attendance mark to its student's section, and keeps the old folder as `<old>_before_split`. It refuses when the
+attendance xlsx and csv differ (run `grader sync`), when the web copy has edits not pulled yet (run `grader web-pull`)
+or can't be read (start Google Drive). `grader undo` of the split puts the old folder back, as long as nothing has
+changed in the new one. When you're happy, delete `<old>_before_split`, push the new course (`grader split` offers
+it), and delete the old web copy in Drive.
 
 Without a class list you can run `grader init --course_name "General Relativity" --term 2026_S2 --course_id PHYS4101`.
 This gives an empty roster that you fill in yourself. The folder is `2026_S2_<ABBR>/` (add `--abbr GR`, or
@@ -413,8 +422,8 @@ What `exam submit scores` does to your course folder. It **copies** the exam's d
   is kept.
 - **Totals.** It saves the file in `history/` first, so `grader undo` can put it back, and then recalculates
   `total`.
-- **Two sections.** If one exam covers two sections (two course folders), each student's score goes to the section
-  whose roster lists them.
+- **Two sections.** If one exam covers two sections (a course with section folders, or two course folders), each
+  student's score goes to the section whose roster lists them, and one submit is one history entry per course.
 
 Essay or hand-marked exams don't go through `exam submit scores`. Type those scores in grade-tui, or into the CSV, and use
 `ขส` for absent students.
@@ -602,10 +611,11 @@ the same way: whichever side you edited wins. If you changed a header's points b
 | Command | Does |
 |---|---|
 | `grader init -i <class list.xls> [--abbr ABBR]` | create a course folder from the class list, named `<term>_<ABBR>_SEC_<n>` |
-| `grader init -i <sec 51.xls> -i <sec 52.xls>` | one course folder for several sections, `<term>_<ABBR>_SEC_51-52` |
+| `grader init -i <…_sec51.xls> -i <…_sec52.xls>` | one course folder `<term>_<ABBR>/` with `sec51/`, `sec52/` |
 | `grader init --course_name N --term 2026_S1 --course_id C` | create one without a class list |
 | `grader mkdb [config.yaml]` | create the missing score files from `data_mapping` |
-| `grader update -i <class list.xls> [-y]` | merge a newer class list into the roster; another section's list adds that section, then offers to rename the folder after its sections and to push (asks; `-y` says yes) |
+| `grader update -i <class list.xls> [-y]` | merge a newer class list into its section's roster; another section's list adds that section's folder (asks; `-y` says yes) |
+| `grader split [COURSE] [-y]` | turn a one-folder course with a roster `Section` column into one folder per section (asks; the old folder is kept as `…_before_split`) |
 | `grader update [config.yaml] [--purge-empty-orphans] [--yes]` | align the score files with the config |
 | `grader sync [--course DIR] [--yes]` | after editing CSVs or the attendance sheet by hand: refresh totals, add your new columns to the config, sync the attendance xlsx ↔ csv (asks) |
 | `grader history [--course DIR] [-n N]` | list saved versions |

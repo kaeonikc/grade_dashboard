@@ -35,11 +35,15 @@ src/
   calculators.py    # Weighted grade calculation, rules, letter grade assignment
   dashboard.py      # Streamlit UI (actual dashboard target; grader.py delegates here)
   complete.py       # zsh Tab completion: generates _grader from grader's parser; dynamic lists (stdlib only)
+  course.py         # Where a course's pieces are: flat, or one sub-folder per section sharing one config
+  split.py          # `grader split`: a one-folder course with a roster Section column → section folders
 courses/
   <term>_<name>/
     config.yaml     # Per-course weights, data_mapping, grade_boundaries, rules
     data/           # Drop CSV or XLSX files here; all files are auto-merged on Student ID
     reports/        # Export destination (final_grades.csv, copy_friendly_scores.csv)
+  <term>_<abbr>/    # a course with several sections: the shared config, history/, reports/ and
+    sec51/ sec52/   # one folder per section with its roster, data/ and reports/
 ```
 
 **Data flow:** `grader.py dashboard` → `streamlit run src/dashboard.py` → `load_config` + `load_course_data` → `calculate_final_grades` → UI render / CSV export.
@@ -56,15 +60,16 @@ The config's points are loaded first and a header's `(Npts)` overrides them. A c
 (`category_default`, `header_for`) lives in `src/points.py`, and `src/sync.py:mapping()` returns resolved points.
 exam_projects has a copy (INTEGRATION.md "Default points"). See SPEC_default_points.md.
 
-### Sections (src/sections.py, SPEC_sections.md)
-One folder can hold several sections of a course. The roster's `Section` column is the source of truth
-(`roster_sections`); a course "has sections" only when it names ≥2, and only then do grade-tui (`n`), grade_web (chips),
-exports (`_sec<N>` files) and CLI lines (`[51]`) change. config.yaml's `sections:` holds each section's schedule;
-the top-level `sec_num`/`class_schedule`/`exam_schedule` stay the first section's. The attendance xlsx has a read-only
-`Sec` column (`attendance.SEC`), which is never a session and never in the csv. Revision 2: All views list students
-in section blocks under a heading (`sections.group_order`, grade-tui `grouped_all`/`section_heads`, grade_web
-`sectionBlocks`), and `update -i` offers to rename a folder whose `_SEC_` part doesn't match (`src/rename.py`: files,
-history/ and the Drive copy move together; `grader undo` reverses it), then to push.
+### Sections (src/course.py, SPEC_section_folders.md)
+A course with several sections is `<term>_<abbr>/` holding the shared config (`sections[N].folder`), `history/` and
+`reports/`, plus `sec<N>/` per section with its own roster, `data/` and `reports/` but no config. `src/course.py`
+(`at`, `config_path`, `config_for`, `prefix_for`, `history_root`, `units`) is the one place that knows this: a
+section folder reads the shared config overlaid with its own `sec_num`/schedules, and its changes log into the
+course's `history/` (paths `sec51/data/…`). Course-level commands (`update`, `mkdb`, `sync`) loop over
+`course.sections`; `data_loader.load_course` merges them for grade-tui and exports; `tui_api.apply_edits` routes each
+edit to its student's section; `webpush.merged_copy` pushes the course to Drive as one flat course (roster `Section`
+column) and `webpull` routes edits back. `src/split.py` (`grader split`) converts the older one-folder layout. A flat
+course behaves exactly as before.
 
 ### Grade calculation (calculators.py)
 1. Each category's raw scores are summed and divided by the possible max (respecting `drop_lowest_homework` rule if set) to produce a percentage.
