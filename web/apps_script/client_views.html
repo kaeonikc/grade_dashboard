@@ -309,6 +309,7 @@ function courseView(draft) {
   cm.search.addEventListener('input', () => { state.search = cm.search.value; applySearch(); });
   cm.clear = el('button', { type: 'button', class: 'icon search-clear', 'aria-label': 'Clear search',
     onclick: clearSearch }, '×');
+  cm.clear.hidden = state.search === '';
   cm.fill = button('Fill…', openFill, 'btn outline fill-btn');
   cm.label = el('label', { for: 'col' });
   cm.gridBack = button('‹ Grid', () => { state.attSession = false; renderView(); }, 'btn outline grid-back');
@@ -603,6 +604,10 @@ function currentColumn() {
   if (!col || att) return col;
   if (state.view === 'table') return state.category === '*' || col.category === state.category ? col : undefined;
   return col.category !== 'attendance' && col.category === state.category ? col : undefined;
+}
+
+function attGrid() {
+  return state.view === 'table' && state.category === 'attendance';
 }
 
 // A column picked anywhere opens Raw Details on its category (a session: Attendance) with it.
@@ -907,8 +912,9 @@ function refreshChrome() {
   cm.saveBtn.textContent = state.saving && cm.working ? cm.working : 'Save ' + n;
   cm.headLine.textContent = state.saving && cm.working ? cm.working : state.checking ? 'Checking Drive…' : headSummary();
   cm.strip.hidden = !state.storageOff;
-  const col = currentColumn();
-  cm.fill.disabled = locked() || !col;
+  // The attendance grid's Fill picks its session in the sheet (SPEC_fill_dismiss.md F2).
+  const col = attGrid() ? null : currentColumn();
+  cm.fill.disabled = locked() || !(col || (attGrid() && sessions().length));
   cm.fill.replaceChildren(...(col ? ['Fill… ', data('span', {}, WIDE.matches ? col.header : col.name)] : ['Fill…']));
   for (const it of cm.items.concat(det ? det.items : [])) if (it.value.tagName === 'INPUT') it.value.readOnly = locked();
 }
@@ -1152,7 +1158,7 @@ function buildTable() {
   if (grid) table.append(attFoot());
   // A click on an ID or computed cell keeps focus where it was (they aren't focusable).
   table.addEventListener('mousedown', (e) => {
-    if (e.target.closest('td:not([data-c])') || keepsEditor(e.target)) e.preventDefault();
+    if (e.target.closest('td:not([data-c])')) e.preventDefault();
   });
   table.addEventListener('click', tableClick);
   table.addEventListener('dblclick', (e) => {
@@ -1257,7 +1263,10 @@ function refreshAttGrid() {
 function scrollToLatest(head, name) {
   const held = tb.specs.map((s, c) => [s, c]).filter(([s]) => s.kind === 'code' && tb.attHeld.get(s.col.name).held);
   if (!held.length) return;
-  const th = head.children[held[held.length - 1][1]];
+  showSession(head.children[held[held.length - 1][1]], name);
+}
+
+function showSession(th, name) {
   cm.wrap.scrollLeft = Math.max(0, th.offsetLeft - (name.offsetLeft + name.offsetWidth) - 2 * th.offsetWidth);
 }
 
@@ -1274,6 +1283,7 @@ function openSession(column) {
 function refreshAttBar() {
   const t = todaySession();
   cm.takeToday.disabled = !t;
+  cm.takeToday.hidden = !t && !WIDE.matches;  // no room on a phone row for a button that can't be pressed
   // Phones have one row for these and the search (SPEC_menu_strip.md); the label keeps the full wording.
   const short = (b, wide, phone) => {
     b.textContent = WIDE.matches ? wide : phone;
@@ -1432,7 +1442,6 @@ function tableClick(e) {
   if (!td || (tb.edit && tb.edit.td === td)) return;
   const r = +td.dataset.r;
   const c = +td.dataset.c;
-  if (keepsEditor(td)) return editOther(r, c);
   focusCell(r, c);
   if (tb.specs[c].kind === 'name') openDetail(tb.recs[r].row);
   else if (tb.specs[c].kind === 'code') openPicker(r, c);
@@ -1443,16 +1452,6 @@ function tableClick(e) {
 function editCell(r, c) {
   pickHead(tb.specs[c].col.name);
   startEdit(r, c, null);
-}
-
-// While typing on a phone, a tap on another score cell goes straight there and the keypad stays open.
-function keepsEditor(target) {
-  const td = target.closest && target.closest('td[data-c]');
-  return !WIDE.matches && !!tb.edit && !!td && td !== tb.edit.td && tb.specs[+td.dataset.c].kind === 'score';
-}
-
-function editOther(r, c) {
-  commitEdit(() => editCell(r, c));
 }
 
 // The next shown student's row from row `r`, or null.
@@ -1691,6 +1690,61 @@ function closePicker() {
   box.remove();
 }
 
+// ---- A tap outside only closes (SPEC_fill_dismiss.md D1-D4): nothing under it reacts ----
+// One guard for the attendance pop-up and for a phone's score cell; typing on a computer stays like a spreadsheet.
+// It acts on pointerup because iOS Safari sends no click for a tap on a plain element, and a drag is a scroll.
+const TAP_SLOP_PX = 10;
+const TAP_CLICK_MS = 700;  // how long after the tap its own click may still arrive
+let outsideTap = null;     // where a tap outside began
+let swallowUntil = 0;
+
+function insideOpen(target) {
+  return tb.picker ? tb.picker.contains(target) : tb.edit.td.contains(target) || cm.bar.contains(target);
+}
+
+function outsideDown(e) {
+  outsideTap = null;
+  swallowUntil = 0;
+  if (tb && (tb.picker || (tb.edit && !WIDE.matches)) && !insideOpen(e.target)) {
+    outsideTap = { x: e.clientX, y: e.clientY };
+  }
+}
+
+function outsideCancel() {
+  outsideTap = null;
+}
+
+// Keeps focus where it is, so a tap on the search box doesn't open the keyboard.
+function outsideMouse(e) {
+  if (outsideTap || Date.now() < swallowUntil) e.preventDefault();
+}
+
+function outsideUp(e) {
+  const tap = outsideTap;
+  outsideTap = null;
+  if (!tap || Math.hypot(e.clientX - tap.x, e.clientY - tap.y) >= TAP_SLOP_PX) return;
+  swallowUntil = Date.now() + TAP_CLICK_MS;
+  if (tb.picker) {
+    closePicker();
+    tb.recs[tb.cur.r].tds[tb.cur.c].focus({ preventScroll: true });
+  } else if (tb.edit) {
+    tb.edit.input.blur();  // the input's blur keeps the number, or puts the old value back with the message
+  }
+}
+
+function outsideClick(e) {
+  if (Date.now() >= swallowUntil) return;
+  swallowUntil = 0;
+  e.preventDefault();
+  e.stopPropagation();
+}
+
+document.addEventListener('pointerdown', outsideDown, true);
+document.addEventListener('pointercancel', outsideCancel, true);
+document.addEventListener('mousedown', outsideMouse, true);
+document.addEventListener('pointerup', outsideUp, true);
+document.addEventListener('click', outsideClick, true);
+
 // ---- Dialogs (9-12 and the More sheet). The element with `autofocus` gets the initial focus ----
 let dialogCount = 0;
 function dialog(title, ...content) {
@@ -1709,9 +1763,11 @@ function autofocused(node) {
 
 // ---- 8. Fill Column sheet (S7): the cells go in as unsaved edits, nothing is written to Drive ----
 function openFill() {
-  const col = currentColumn();
+  const grid = attGrid();
+  let col = grid ? state.open.course.columns.find((c) => c.name === fillSession()) : currentColumn();
   if (!col || locked()) return;
   const att = col.category === 'attendance';
+  const heading = data('span', {}, col.header);
   let mode = 'empty';
   let value = att ? 'P' : null;  // null: no valid value typed yet
   let plan = [];
@@ -1723,7 +1779,7 @@ function openFill() {
     if (!plan.length) return;
     d.close();
     fillColumn(col.name, plan);
-    renderView();
+    if (grid && tb) showFilled(col.name); else renderView();
     say('Filled ' + F.plural(plan.length, 'cell') + ' (unsaved)');
   });
   const update = () => {
@@ -1742,14 +1798,17 @@ function openFill() {
     r.addEventListener('change', () => { mode = m; update(); });
     return el('label', { class: 'radio' }, r, label);
   };
-  const d = dialog(el('span', {}, 'Fill ', data('span', {}, col.header)),
+  // A filter hides students, but Fill covers them all.
+  const hidden = state.search.trim() ? 'your search shows' : grid && state.attRisk ? 'At risk only shows' : '';
+  const scope = fillScope(col);
+  const d = dialog(el('span', {}, 'Fill ', heading), grid ? sessionChoice() : null,
     el('fieldset', { class: 'fill-cells' }, el('legend', {}, 'Cells'), radio('empty', 'Only empty cells'),
       radio('whole', 'Whole column')),
     att ? codeChoice() : typedValue(), msg, hint, count, ea,
-    state.search.trim() ? el('p', { class: 'muted' }, 'Fill covers all ' + F.plural(state.rows.length, 'student') +
-      (state.section === 'all' ? '' : ' in section ' + state.section) +
-      ', not only the ones your search shows.') : null,
-    state.section !== 'all' && !state.search.trim()
+    scope ? el('p', { class: 'muted' }, scope) : null,
+    hidden ? el('p', { class: 'muted' }, 'Fill covers all ' + F.plural(state.rows.length, 'student') +
+      (state.section === 'all' ? '' : ' in section ' + state.section) + ', not only the ones ' + hidden + '.') : null,
+    state.section !== 'all' && !hidden
       ? el('p', { class: 'muted' }, 'Section ' + state.section + ' only: ' + F.plural(state.rows.length, 'student') + '.')
       : null,
     el('div', { class: 'sheet-actions' }, button('Cancel', () => d.close(), 'btn outline'), go));
@@ -1764,6 +1823,20 @@ function openFill() {
   const title = d.querySelector('h2');
   title.tabIndex = -1;
   title.focus();
+
+  // The attendance grid: every session, today's marked, as in the one-session view (SPEC_fill_dismiss.md F2).
+  function sessionChoice() {
+    const now = todaySession();
+    const select = el('select', { id: 'fill-session', class: 'col-select fill-session' },
+      ...sessions().map((c) => data('option', { value: c.name }, c.header + (c.name === now ? ' · today' : ''))));
+    select.value = col.name;
+    select.addEventListener('change', () => {
+      col = sessions().find((c) => c.name === select.value);
+      heading.textContent = col.header;
+      update();
+    });
+    return el('div', { class: 'fill-row' }, el('label', { for: 'fill-session' }, 'Session'), select);
+  }
 
   // Attendance: one of P L A X Clear pressed at a time (S7.4).
   function codeChoice() {
@@ -1804,6 +1877,15 @@ function openFill() {
     absent.lang = 'th';
     return el('div', { class: 'fill-row' }, el('label', { for: 'fill-value' }, 'Value'), input, absent);
   }
+}
+
+// The grid after a fill: its numbers repaint where it stands, with the filled session in view.
+function showFilled(name) {
+  refreshAttGrid();
+  searchTable();
+  refreshCounts();
+  const head = tb.heads.find((h) => h.s.col.name === name);
+  if (head) showSession(head.b.closest('th'), cm.wrap.querySelector('thead .c-name'));
 }
 
 // `Wed 21 Jan 2027` for a 'YYYY-MM-DD' date (edge 47).

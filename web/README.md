@@ -20,7 +20,7 @@ Drive needs edit access shared to the CMRU account.
 Status: the web app follows grade-tui's tabs: [1] Summary Scores, [2] Raw Details (one category at a time, picked
 from the row under the sections; a grid with the students frozen on the left, with Fill, Save and undo), [3] Analytics
 › Overview (statistics, grade distribution, histogram, box plot) and [4] Grading (weights and boundaries, each
-letter's interval, live distribution). Attendance opens as an overview grid like grade-tui's (`../SPEC_attendance_grid.md`). See also
+letter's interval, live distribution). Attendance opens as an overview grid like grade-tui's (`../SPEC_attendance_grid.md`), with Fill on any session. A tap outside a P/L/A/X pop-up or a phone's score cell only closes it (`../SPEC_fill_dismiss.md`). See also
 `../SPEC_web_tabs.md`, `../SPEC_menu_strip.md` (categories, frozen top area, phone grid), `../SPEC_grade_order.md` and
 `../SPEC_landscape.md` (phone landscape).
 

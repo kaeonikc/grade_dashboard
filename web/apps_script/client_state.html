@@ -882,6 +882,23 @@ function todaySession() {
   return s ? s.name : null;
 }
 
+// The session the attendance grid's Fill starts on: today's, else the latest held, else the first, else null
+// (SPEC_fill_dismiss.md F2).
+function fillSession() {
+  const all = sessions();
+  if (!all.length) return null;
+  const held = attStats().sessions.filter((s) => s.held);
+  return todaySession() || (held.length ? held[held.length - 1].name : all[0].name);
+}
+
+// All covers every section, and sections meet at different times, so the Fill sheet says so on attendance (F5).
+function fillScope(column) {
+  if (column.category !== 'attendance' || state.section !== 'all' || !state.sectionList.length) return null;
+  const size = (sec) => state.allRows.filter((r) => state.sections.get(r.student_id) === sec).length;
+  return 'All sections: ' + Journal.fmt.plural(state.allRows.length, 'student') + ' (' +
+    state.sectionList.map((sec) => 'Sec ' + sec + ' · ' + size(sec)).join(', ') + ')';
+}
+
 // The line under the course name (SPEC_status_line.md): the class time of the one section shown, students under 80%
 // attendance among those shown, edits not pulled, and how old the push is. Only what applies; Pushed always, last.
 function headSummary() {

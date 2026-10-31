@@ -378,7 +378,6 @@
   .att-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; }
   @media (min-width: 960px) { .att-bar { flex-basis: 100%; } }
   .toggle[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
-  .view-attgrid .fill-btn { display: none; }
   .att-chip {
     display: inline-flex; align-items: center; justify-content: center; min-width: 1.75rem; height: 1.75rem;
     padding: 0 0.25rem; border: 2px solid currentColor; border-radius: 0.5rem; background: var(--bg2); font-weight: 700;
@@ -563,6 +562,9 @@
     .cat-chip { padding: 0.125rem 0.3125rem; font-size: 0.8125rem; }
     .fill-btn, .grid-back, .att-bar .btn { min-width: 0; min-height: 2.25rem; padding: 0.125rem 0.5rem; font-size: 0.8125rem; }
     .search-row, .view-table .search-row { flex-wrap: nowrap; }
+    .search-row .search { min-width: 4.5rem; }
+    .search-input { min-width: 0; }
+    .search-input:placeholder-shown { padding-right: 0.25rem; }  /* the × shows only with text */
     .att-bar { flex: none; flex-wrap: nowrap; gap: 0.25rem; }
     .view-table .course-body { margin: 0 -1rem; }
     .view-table .table-wrap { border-width: 0; }
@@ -574,6 +576,12 @@
     .sum-row { min-height: 2.5rem; padding: 0; font-size: 0.875rem; }
     li.sec-head { padding-top: 0.375rem; padding-bottom: 0.125rem; font-size: 0.8125rem; }
     .tb tr.sec-head th { height: 1.75rem; padding: 0.125rem 0.25rem; font-size: 0.8125rem; }
+  }
+
+  /* The attendance row on the narrowest phones, on a class day with the sort on Lowest % */
+  @media (max-width: 359.98px) {
+    .search-row, .view-table .search-row { gap: 0.25rem; }
+    .fill-btn, .att-bar .btn { padding-left: 0.3125rem; padding-right: 0.3125rem; }
   }
 
   /* M8: typing in the grid: the page takes what the keyboard leaves, the top slides away, the column headers stay */
