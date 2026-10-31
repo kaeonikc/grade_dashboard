@@ -11,6 +11,10 @@ and appends one JSON line to <course>/history/log.jsonl:
 
 `grader history` lists the entries and `grader undo [ID]` restores one.
 exam_projects (`exam submit scores`) writes entries in the same format with tool "exam".
+
+A course with section folders has one history/, in the course folder (SPEC_section_folders.md F6): a change to a
+section's files is logged there, with paths like `sec51/data/…_homework.csv`. Every function here takes any folder
+of the course and works on that one history.
 """
 
 from __future__ import annotations
@@ -25,12 +29,21 @@ LOG = "log.jsonl"
 
 
 def course_dir_of(path) -> Path | None:
-    """The course folder (the one holding course_info/) that `path` lives in."""
+    """The course folder whose history/ records `path` (for a section's file: the course, not the section)."""
+    from src.course import history_root
+    root = history_root(path)
+    if root is not None:
+        return root
     p = Path(path).resolve()
     for d in [p] + list(p.parents)[:3]:
         if (d / "course_info").is_dir():
             return d
     return None
+
+
+def root_of(course_dir) -> Path:
+    """The folder holding the history/ for `course_dir` (a section folder → its course)."""
+    return course_dir_of(course_dir) or Path(course_dir).resolve()
 
 
 def _safe(word: str) -> str:
@@ -41,7 +54,7 @@ class Entry:
     """One history entry. Files are copied the first time they are captured."""
 
     def __init__(self, course_dir, tool: str, action: str, note: str = ""):
-        self.course = Path(course_dir).resolve()
+        self.course = root_of(course_dir)
         self.tool, self.action, self.note = tool, action, note
         self.files: list[str] = []
         self.dir: Path | None = None
@@ -89,6 +102,7 @@ def snapshot(course_dir, files, tool: str, action: str, note: str = "", cells: i
 
 def list_entries(course_dir) -> list[dict]:
     """Entries oldest first; only those whose snapshot folder still exists."""
+    course_dir = root_of(course_dir)
     log = Path(course_dir) / HISTORY / LOG
     if not log.exists():
         return []
@@ -140,7 +154,7 @@ def restore(course_dir, entry_id: str) -> list[str]:
     Puts back the files saved in `entry_id`. The current versions are saved
     first as a "grader undo" entry, so an undo can itself be undone.
     """
-    course = Path(course_dir).resolve()
+    course = root_of(course_dir)
     entry = next((e for e in list_entries(course) if e["id"] == entry_id), None)
     if entry is None:
         raise KeyError(f"no history entry {entry_id!r}")

@@ -166,7 +166,8 @@ def roster(course) -> dict | None:
 
 
 def baseline_path(course) -> Path:
-    return Path(course) / "history" / BASELINE
+    from src.course import state_file
+    return state_file(course, BASELINE)
 
 
 def load_baseline(course) -> dict | None:
@@ -182,7 +183,7 @@ def load_baseline(course) -> dict | None:
 
 def save_baseline(course, sessions: list, rows: dict, xlsx, csv) -> None:
     p = baseline_path(course)
-    p.parent.mkdir(exist_ok=True)
+    p.parent.mkdir(parents=True, exist_ok=True)
     data = {"ts": datetime.now().isoformat(timespec="seconds"), "sessions": sessions, "rows": rows,
             "xlsx": xlsx.name if xlsx else None, "sha": {"xlsx": sha(xlsx), "csv": sha(csv)}}
     atomic_write_bytes(p, json.dumps(data, ensure_ascii=False, indent=1).encode("utf-8"))

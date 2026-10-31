@@ -109,10 +109,23 @@ def _mac_cell(file: Path, header: str, sid: str, docs: dict) -> str | None:
     return row[ci].strip() if row is not None and ci is not None else None
 
 
+def data_dir_of(course: Path):
+    """f(student id) → the data/ folder holding that student's cells: their section folder's in a course with
+    section folders (SPEC_section_folders.md), None when they are in no section; the course's data/ otherwise."""
+    from src.course import at
+    from src.sections import roster_sections
+    c = at(course)
+    if c is None or not c.layout:
+        return lambda sid: Path(course) / "data"
+    secmap = roster_sections(course)
+    return lambda sid: (s.path / "data") if (s := c.section(secmap.get(sid, ""))) else None
+
+
 def classify(course: Path, changes: list[Change]) -> None:
     """Sets each change's result (and reason, Mac value, file)."""
     config = raw_config(course)
     docs = {}
+    data_of = data_dir_of(course)
     for c in changes:
         if c.is_config:
             c.mac = config.get(c.lines[0].get("part")) or {}
@@ -131,7 +144,11 @@ def classify(course: Path, changes: list[Change]) -> None:
         if is_total(c.column):
             c.result, c.reason = "skipped", "total column"
             continue
-        file, header, _ = tui_api._find_column_file(course / "data", c.column)
+        data = data_of(c.sid)
+        if data is None:
+            c.result, c.reason = "skipped", "student not in Mac files"
+            continue
+        file, header, _ = tui_api._find_column_file(data, c.column)
         if file is None:
             c.result, c.reason = "skipped", "column not in Mac files"
             continue
@@ -257,15 +274,15 @@ def archived_lines(lines: list[dict], changes: list[Change]) -> list[dict]:
 # ---- the pull ------------------------------------------------------------------------------------------------------
 def _check_attendance(course: Path, applies: list[Change]) -> None:
     """Refuses (S11.15) when attendance cells would be written while the xlsx is open or the pair needs a sync."""
-    if not any(c.file and c.file.name.endswith("attendance.csv") for c in applies):
-        return
-    xlsx, _ = attendance.files_of(course)
-    if xlsx is not None and attendance.locked(xlsx):
-        raise Refused(f"❌ Not applied: data/{xlsx.name} is open in Excel. Close it, then run grader web-pull --yes "
-                      "again. Nothing was written.")
-    if attendance.warnings(course):
-        raise Refused("❌ Not applied: the attendance xlsx and csv differ; run `grader sync` first, then grader "
-                      "web-pull --yes again. Nothing was written.")
+    folders = {c.file.parent.parent for c in applies if c.file and c.file.name.endswith("attendance.csv")}
+    for folder in sorted(folders):  # each section folder whose attendance is written (or the course)
+        xlsx, _ = attendance.files_of(folder)
+        if xlsx is not None and attendance.locked(xlsx):
+            raise Refused(f"❌ Not applied: {xlsx.relative_to(course).as_posix()} is open in Excel. Close it, then "
+                          "run grader web-pull --yes again. Nothing was written.")
+        if attendance.warnings(folder):
+            raise Refused("❌ Not applied: the attendance xlsx and csv differ; run `grader sync` first, then grader "
+                          "web-pull --yes again. Nothing was written.")
 
 
 def _stopped(e: history.Entry, what: str, error: str) -> int:
@@ -305,7 +322,11 @@ def copy_to_pull(root: Path, course: Path, semester: str | None = None) -> Path:
 
 def pull(course: Path, root: Path, yes: bool = False, semester: str | None = None) -> int:
     """Prints as it goes and returns the exit code. Raises Refused (nothing written) when it can't pull."""
+    from src.course import at
     course = Path(course).resolve()
+    c = at(course)
+    if c is not None and c.layout:
+        course = c.root  # run from a section folder: the whole course (SPEC_section_folders.md)
     mirror = copy_to_pull(root, course, semester)
     print(f"🔄 Web pull: {webdrive.shown(root, mirror)} → {course.name}")
     webdrive.check_readable(mirror, "Nothing was pulled.")  # Drive for Desktop not running (SPEC_drive_unreadable)

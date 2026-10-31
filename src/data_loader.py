@@ -37,10 +37,11 @@ def get_course_file_prefix(course_dir) -> str:
     info_dir = course_dir / "course_info"
     if not info_dir.is_dir():
         raise FileNotFoundError(f"course_info directory not found under {course_dir}")
-    config_files = [f for f in info_dir.iterdir() if f.is_file() and f.name.endswith("_config.yaml") and not f.name.endswith(".bak")]
-    if not config_files:
+    from src.course import prefix_for  # a section folder's files: <course prefix>_SEC_<N> (SPEC_section_folders.md)
+    prefix = prefix_for(course_dir)
+    if prefix is None:
         raise FileNotFoundError(f"No *_config.yaml file found in {info_dir}")
-    return config_files[0].name[:-len("_config.yaml")]
+    return prefix
 
 def parse_pts(col_name: str) -> tuple[str, float | None]:
     """
@@ -90,15 +91,18 @@ def load_config(course_path: str) -> dict:
     info_dir = path / "course_info"
     if not info_dir.is_dir():
         raise FileNotFoundError(f"course_info directory not found under {course_path}")
-        
-    config_files = [f for f in info_dir.iterdir() if f.is_file() and f.name.endswith("_config.yaml")]
-    if not config_files:
+
+    # A section folder reads its course's shared config, with its own sec_num and schedules (SPEC_section_folders.md)
+    from src.course import config_path, overlay, section_at
+    config_file = config_path(path)
+    if config_file is None:
         raise FileNotFoundError(f"No *_config.yaml file found in {info_dir}")
-        
-    config_file = config_files[0]
-    
+
     with open(config_file, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f) or {}
+    section = section_at(path)
+    if section:
+        config = overlay(config, section[1].num)
         
     # Auto-detect attendance columns if attendance is in weights but missing in data_mapping
     if 'weights' in config and 'attendance' in config['weights']:
@@ -169,8 +173,8 @@ def load_course_data(course_path: str) -> tuple[pd.DataFrame, dict]:
     
     # Load default max scores from config's data_mapping point annotations
     try:
-        cfg_dir = Path(course_path) / "course_info"
-        config_files = [f for f in cfg_dir.iterdir() if f.is_file() and f.name.endswith("_config.yaml")]
+        from src.course import config_path
+        config_files = [p for p in [config_path(course_path)] if p is not None]
         if config_files:
             with open(config_files[0], 'r', encoding='utf-8') as f:
                 raw_config = yaml.safe_load(f) or {}
@@ -328,3 +332,35 @@ def load_course_data(course_path: str) -> tuple[pd.DataFrame, dict]:
         merged_df.attrs['absences'] = [(sids[i], col) for i, col in absences]
         merged_df.attrs['invalid_cells'] = [(sids[i], col, text) for i, col, text in invalid]
     return merged_df, max_scores
+
+
+def load_course(course_path) -> tuple[dict, pd.DataFrame, dict]:
+    """
+    (config, raw_df, max_scores) of a course. A course with section folders (SPEC_section_folders.md) is every
+    section's rows together: one frame, by Student ID, with the absent/invalid cells of each. A flat course, or one
+    section folder, is load_config + load_course_data as before.
+    """
+    from src.course import at
+    path = Path(course_path).resolve()
+    c = at(path)
+    if c is None or not c.layout or path != c.root:
+        config = load_config(path)
+        raw_df, max_scores = load_course_data(path)
+        return config, raw_df, max_scores
+    config = load_config(c.sections[0].path)
+    frames, max_scores, absences, invalid = [], {}, [], []
+    for s in c.sections:
+        df, mx = load_course_data(s.path)
+        for col, pts in mx.items():
+            max_scores.setdefault(col, pts)
+        if df.empty:
+            continue
+        absences += df.attrs.get('absences', [])
+        invalid += df.attrs.get('invalid_cells', [])
+        frames.append(df)
+    if not frames:
+        return config, pd.DataFrame(), max_scores
+    raw_df = pd.concat(frames, ignore_index=True, sort=False)
+    raw_df = raw_df.sort_values(by='Student ID').reset_index(drop=True)
+    raw_df.attrs = {'absences': absences, 'invalid_cells': invalid}
+    return config, raw_df, max_scores

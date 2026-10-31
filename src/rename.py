@@ -1,5 +1,8 @@
 """
-Renaming a course folder to match its sections (SPEC_sections.md, Revision 2: R2-R4).
+Renaming a course folder (SPEC_sections.md, Revision 2), and the push offer after a roster change.
+
+`grader update -i` no longer offers a rename (SPEC_section_folders.md F10: a course with several sections is a
+folder per section); what stays is `grader undo` of a rename made before, the Drive helpers and `offer_push`.
 
 `2026_S2_Astro51_SEC_51` that now holds sec 51 and 52 becomes `2026_S2_Astro_SEC_51-52`. Everything named after the
 course moves with it: the folder, every `<prefix>_*` file (history snapshots and .bak files included), the paths in
@@ -203,31 +206,6 @@ def _ask(question: str, yes: bool, hint: str) -> bool:
         print(f"ℹ️  {hint}")
         return False
     return input(f"❓ {question} [y/N] ").strip().lower() in ("y", "yes")
-
-
-def offer(course: Path, sections, yes: bool, again: str, root=None) -> Path:
-    """
-    `update -i`: when the folder name doesn't match its sections, asks to rename it. Returns the course's path
-    (renamed or not). `again` is the command to suggest when there's no terminal to ask on.
-    """
-    course = Path(course).resolve()
-    new = target_name(course.name, sections)
-    if not new:
-        return course
-    if not _ask(f"Rename {course.name} → {new}?", yes, f"{course.name} could be named {new}: {again} -y renames it."):
-        return course
-    try:
-        dest = rename(course, new, root)
-    except Unreadable as e:  # the roster update before it needs no Drive, so it stands (SPEC_drive_unreadable U1)
-        print(warning(e))
-        print("   The roster was updated; only the rename waits.")
-        return course
-    except Refused as e:
-        print(e)
-        return course
-    for line in done_lines(course.name, new):
-        print(line)
-    return dest
 
 
 def offer_push(course: Path, yes: bool, reason: str, root=None, only_if_counts_differ: bool = False) -> None:

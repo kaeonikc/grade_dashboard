@@ -1,10 +1,12 @@
-"""Courses with several sections in one folder (SPEC_sections.md): `grader init -i a -i b`, `grader update -i` adding a
-section, the roster's Section column, config `sections:`, the attendance xlsx's Sec column, and the course ID parse.
+"""Courses with section folders (SPEC_section_folders.md): `grader init -i a_sec51 -i a_sec52`, `grader update -i`
+adding a section or moving a flat course into folders, the commands that run on every section, grade-tui's bridge
+(All merged, edits routed to each student's section), exports, grade_web's merged copy, and `grader mock`.
 The class lists are fake xlsx files built here; the repo's repclasslist.xls is never read."""
 
 import builtins
 import csv
 import io
+import json
 import sys
 from pathlib import Path
 
@@ -15,11 +17,12 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import grader  # noqa: E402
-from src import attendance  # noqa: E402
+from src import course as course_mod  # noqa: E402
 from src.sections import counts, course_sections, roster_sections, sort_sections, tagger  # noqa: E402
 
 SEC51 = [("69000001", "นาย ก  หนึ่ง"), ("69000003", "นาง ค  สาม")]
 SEC52 = [("69000002", "นาย ข  สอง"), ("69000004", "นาง ง  สี่"), ("69000006", "นาย ฉ  หก")]
+COURSE = "2026_S2_Astro"
 
 
 def class_list(path: Path, sec="51", students=None, course="SC 2202  ดาราศาสตร์และอวกาศ", term="2/2569",
@@ -67,8 +70,12 @@ def answer(monkeypatch, text: str):
     monkeypatch.setattr(builtins, "input", lambda *_: text)
 
 
-def roster(course: Path) -> list[dict]:
-    f = next((course / "course_info").glob("*_student_info.csv"))
+def sec_list(here, sec="51", **kw) -> Path:
+    return class_list(here / f"repclasslist_Astro_sec{sec}.xlsx", sec, **kw)
+
+
+def roster(folder: Path) -> list[dict]:
+    f = next((folder / "course_info").glob("*_student_info.csv"))
     return list(csv.DictReader(io.StringIO(f.read_text(encoding="utf-8"))))
 
 
@@ -76,17 +83,37 @@ def config(course: Path) -> dict:
     return yaml.safe_load(next((course / "course_info").glob("*_config.yaml")).read_text(encoding="utf-8"))
 
 
-def xlsx_rows(course: Path) -> list[list]:
-    ws = openpyxl.load_workbook(next((course / "data").glob("*_attendance.xlsx"))).active
-    return [[c.value for c in row] for row in ws.iter_rows()]
+def rows(path: Path) -> list[dict]:
+    return list(csv.DictReader(io.StringIO(path.read_text(encoding="utf-8-sig"))))
+
+
+def cell(row: dict, col: str) -> str:
+    """A row's value under the header `col` or `col (Npts)`."""
+    return next(v for k, v in row.items() if k == col or k.startswith(col + " ("))
+
+
+def two_sections(here) -> Path:
+    grader.init_course(None, None, None, [str(sec_list(here, "51")), str(sec_list(here, "52", time="13:30-17:30"))])
+    return here / COURSE
 
 
 def one_section_course(here) -> Path:
+    """A flat course from a class list without _sec in its name: 2026_S2_Astro51_SEC_51 (as before folders)."""
     grader.init_course(None, None, None, str(class_list(here / "repclasslist_Astro51.xlsx")))
     return here / "2026_S2_Astro51_SEC_51"
 
 
-TWO = "2026_S2_Astro_SEC_51-52"  # the one-section course's name once `update -i -y` has added sec 52 (R2)
+def set_score(path: Path, sid: str, col: str, value: str) -> None:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    head = lines[0].split(",")
+    i = next(k for k, h in enumerate(head) if h.split(" (")[0] == col)
+    out = [lines[0]]
+    for line in lines[1:]:
+        cells = line.split(",")
+        if cells[0] == sid:
+            cells[i] = value
+        out.append(",".join(cells))
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
 # ---- parsing ----------------------------------------------------------------------------------------------------
@@ -102,188 +129,213 @@ def test_course_id_parse(here, course, cid, name):
     assert (meta["course_id"], meta["course_name"], meta["sec_num"]) == (cid, name, "51")
 
 
-# ---- init -------------------------------------------------------------------------------------------------------
-def test_init_one_class_list_writes_section_and_sections(here):
-    c = one_section_course(here)
-    assert {r["Section"] for r in roster(c)} == {"51"}
+# ---- init --------------------------------------------------------------------------------------------------------
+def test_init_two_sec_files_make_section_folders(here, capsys):
+    c = two_sections(here)
+    assert "sec51 (2 students), sec52 (3 students)" in capsys.readouterr().out
     cfg = config(c)
-    assert str(cfg["course_id"]) == "SC 2202" and cfg["sec_num"] == "51"
-    assert list(cfg["sections"]) == ["51"]
-    assert xlsx_rows(c)[0][:3] == ["Student ID", "Name", "a1"]  # one section: no Sec column
-
-
-def test_init_two_class_lists_makes_one_course(here, capsys):
-    grader.init_course(None, None, None, [str(class_list(here / "repclasslist_Astro52.xlsx", "52", time="13:30-17:30")),
-                                          str(class_list(here / "repclasslist_Astro51.xlsx", "51"))])
-    c = here / "2026_S2_Astro_SEC_51-52"
-    assert c.is_dir()
-    assert (c / "course_info" / "2026_S2_Astro_SEC_51-52_config.yaml").exists()
-    rows = roster(c)
-    assert [r["Student ID"] for r in rows] == sorted(r["Student ID"] for r in rows)
-    assert {r["Student ID"]: r["Section"] for r in rows} == {**{s: "51" for s, _ in SEC51}, **{s: "52" for s, _ in SEC52}}
-    cfg = config(c)
-    assert cfg["sec_num"] == "51" and cfg["class_schedule"]["time"] == "08:30-12:30"
+    assert "sec_num" not in cfg and "class_schedule" not in cfg
+    assert {n: e["folder"] for n, e in cfg["sections"].items()} == {"51": "sec51", "52": "sec52"}
     assert cfg["sections"]["52"]["class_schedule"]["time"] == "13:30-17:30"
-    assert "&id" not in (c / "course_info" / "2026_S2_Astro_SEC_51-52_config.yaml").read_text(encoding="utf-8")
-    sheet = xlsx_rows(c)
-    assert sheet[0][:4] == ["Student ID", "Name", "Sec", "a1"]
-    assert {r[0]: r[2] for r in sheet[1:]}["69000002"] == "52"
-    assert sheet[1][-1].startswith("=COUNTIF(D2:R2")
-    att_csv = next((c / "data").glob("*_attendance.csv")).read_text(encoding="utf-8")
-    assert "Sec" not in att_csv.splitlines()[0]
-    out = capsys.readouterr().out
-    assert "abbreviation Astro from the file names" in out and "sec 51: 2 · sec 52: 3" in out
+    assert "&id" not in next((c / "course_info").glob("*_config.yaml")).read_text(encoding="utf-8")
+    for sec, people in (("51", SEC51), ("52", SEC52)):
+        unit = c / f"sec{sec}"
+        assert [r["Student ID"] for r in roster(unit)] == [sid for sid, _ in people]
+        assert list(roster(unit)[0]) == ["Student ID", "Name", "Class Group"]
+        names = sorted(p.name for p in (unit / "data").iterdir())
+        assert names == [f"{COURSE}_SEC_{sec}_{k}" for k in ("attendance.csv", "attendance.xlsx", "final.csv",
+                                                             "homework.csv", "midterm.csv")]
+        assert not (unit / "history").exists()
+        assert not list((unit / "course_info").glob("*_config.yaml"))
+    assert (c / "history").is_dir() and (c / "reports").is_dir()
 
 
-def test_init_refuses_class_lists_of_different_courses(here, capsys):
-    a = class_list(here / "repclasslist_A51.xlsx", "51")
-    b = class_list(here / "repclasslist_A52.xlsx", "52", course="PHYS1120  ฟิสิกส์")
+def test_init_one_sec_file_makes_its_folder(here):
+    grader.init_course(None, None, None, str(sec_list(here, "51")))
+    c = here / COURSE
+    assert list(config(c)["sections"]) == ["51"] and (c / "sec51" / "data").is_dir() and not (c / "sec52").exists()
+
+
+def test_init_refuses_a_name_that_disagrees_with_the_sheet(here, capsys):
+    bad = class_list(here / "repclasslist_Astro_sec52.xlsx", "51")
     with pytest.raises(SystemExit):
-        grader.init_course(None, None, None, [str(a), str(b)])
+        grader.init_course(None, None, None, str(bad))
+    assert "says sec52 in its name" in capsys.readouterr().out and not (here / COURSE).exists()
+
+
+def test_init_without_sec_in_the_name_is_flat(here):
+    c = one_section_course(here)
+    cfg = config(c)
+    assert cfg["sec_num"] == "51" and "sections" not in cfg and (c / "data").is_dir()
+
+
+def test_init_two_lists_without_sec_names_still_makes_folders(here):
+    grader.init_course(None, None, None, [str(class_list(here / "repclasslist_Astro51.xlsx", "51")),
+                                          str(class_list(here / "repclasslist_Astro52.xlsx", "52"))])
+    assert course_sections(here / COURSE) == ["51", "52"]
+
+
+def test_init_refuses_other_courses_and_twice_one_section(here, capsys):
+    other = class_list(here / "repclasslist_Astro_sec52.xlsx", "52", course="PHYS1120  ฟิสิกส์")
+    with pytest.raises(SystemExit):
+        grader.init_course(None, None, None, [str(sec_list(here, "51")), str(other)])
     assert "one course's sections only" in capsys.readouterr().out
-    assert not any(p.is_dir() for p in here.iterdir())
-
-
-def test_init_refuses_two_lists_of_the_same_section(here, capsys):
-    a = class_list(here / "repclasslist_A51.xlsx", "51")
-    b = class_list(here / "repclasslist_B51.xlsx", "51")
     with pytest.raises(SystemExit):
-        grader.init_course(None, None, None, [str(a), str(b)])
-    assert "Two class lists are section 51" in capsys.readouterr().out
+        grader.init_course(None, None, None, [str(sec_list(here, "51")),
+                                              str(class_list(here / "repclasslist_Astro_x.xlsx", "51"))])
+    assert "Two class lists are section 51" in capsys.readouterr().out and not (here / COURSE).exists()
 
 
-# ---- update -i adds a section ------------------------------------------------------------------------------------
-def test_update_adds_a_section_with_yes(here, capsys):
-    c = one_section_course(here)
-    capsys.readouterr()
-    grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52", time="13:30-17:30")),
-                         yes=True)
-    out = capsys.readouterr().out
-    c = here / TWO
-    assert course_sections(c) == ["51", "52"]
-    cfg = config(c)
-    assert cfg["sec_num"] == "51" and cfg["class_schedule"]["time"] == "08:30-12:30"
-    assert list(cfg["sections"]) == ["51", "52"]
-    assert cfg["sections"]["52"]["class_schedule"]["time"] == "13:30-17:30"
-    assert "Total students now: 5 (sec 51: 2 · sec 52: 3)" in out
-    assert f"Renamed 2026_S2_Astro51_SEC_51 → {TWO}" in out
-    assert not (here / "2026_S2_Astro51_SEC_51").exists()
-    assert (c / "course_info" / f"{TWO}_student_info.csv").exists()
+# ---- update -i ---------------------------------------------------------------------------------------------------
+def test_update_merges_into_a_known_section(here, monkeypatch):
+    c = two_sections(here)
+    grader.update_course(input_file=str(sec_list(here, "51", students=SEC51 + [("69000009", "นาย ฌ  เก้า")])))
+    assert [r["Student ID"] for r in roster(c / "sec51")][-1] == "69000009"
+    monkeypatch.chdir(c / "sec52")  # from inside a section folder too
+    grader.update_course(input_file=str(sec_list(here, "52", students=SEC52 + [("69000010", "นาง ญ  สิบ")])))
+    assert "69000010" in {r["Student ID"] for r in roster(c / "sec52")}
+    assert "69000010" not in {r["Student ID"] for r in roster(c / "sec51")}
+    assert not (c / "sec52" / "history").exists()
 
 
-def test_update_asks_before_adding_a_section(here, monkeypatch, capsys):
-    c = one_section_course(here)
+def test_update_adds_a_section_folder_after_asking(here, monkeypatch, capsys):
+    grader.init_course(None, None, None, str(sec_list(here, "51")))
+    c = here / COURSE
+    with pytest.raises(SystemExit):  # no terminal, no -y
+        grader.update_course(input_file=str(sec_list(here, "52")))
+    assert "-y" in capsys.readouterr().out and not (c / "sec52").exists()
     answer(monkeypatch, "n")
-    grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52")))
-    assert course_sections(c) == ["51"] and "Nothing changed." in capsys.readouterr().out
+    grader.update_course(input_file=str(sec_list(here, "52")))
+    assert not (c / "sec52").exists()
     answer(monkeypatch, "y")
-    grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52")))
-    assert course_sections(here / TWO) == ["51", "52"]
+    grader.update_course(input_file=str(sec_list(here, "52", time="13:30-17:30")))
+    assert course_sections(c) == ["51", "52"] and len(roster(c / "sec52")) == 3
+    sec52 = config(c)["sections"]["52"]
+    assert sec52["folder"] == "sec52" and sec52["class_schedule"]["time"] == "13:30-17:30"
+    assert (c / "sec52" / "data" / f"{COURSE}_SEC_52_homework.csv").exists()
 
 
-def test_update_without_a_terminal_refuses_a_new_section(here, capsys):
-    c = one_section_course(here)
-    before = roster(c)
-    with pytest.raises(SystemExit):
-        grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52")))
-    assert "-y" in capsys.readouterr().out and roster(c) == before
-
-
-def test_update_fills_an_old_roster_from_sec_num(here):
-    c = one_section_course(here)
-    f = next((c / "course_info").glob("*_student_info.csv"))
-    lines = f.read_text(encoding="utf-8").splitlines()
-    f.write_text("\n".join(",".join(l.split(",")[:3]) for l in lines) + "\n", encoding="utf-8")  # drop Section
-    cfg_path = next((c / "course_info").glob("*_config.yaml"))
-    cfg = config(c)
-    cfg.pop("sections")
-    cfg_path.write_text(yaml.dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52")), yes=True)
-    c = here / TWO
-    assert roster_sections(c) == {**{s: "51" for s, _ in SEC51}, **{s: "52" for s, _ in SEC52}}
-    assert list(config(c)["sections"]) == ["51", "52"]
-
-
-def test_reupdating_one_section_keeps_the_others(here):
-    c = one_section_course(here)
-    grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52", time="13:30-17:30")),
-                         yes=True)
-    grader.update_course(input_file=str(class_list(here / "repclasslist_Astro51.xlsx", "51", time="09:00-12:00",
-                                                   students=SEC51 + [("69000009", "นาย ฌ  เก้า")])))
-    c = here / TWO
-    cfg = config(c)
-    assert cfg["sections"]["52"]["class_schedule"]["time"] == "13:30-17:30"
-    assert cfg["sections"]["51"]["class_schedule"]["time"] == "09:00-12:00" == cfg["class_schedule"]["time"]
-    assert roster_sections(c)["69000009"] == "51"
-
-
-def test_a_student_in_another_sections_list_moves(here, capsys):
-    c = one_section_course(here)
-    grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52",
-                                                   students=SEC52 + [SEC51[0]])), yes=True)
-    assert roster_sections(here / TWO)[SEC51[0][0]] == "52"
-    assert f"{SEC51[0][0]} moves sec 51 → 52" in capsys.readouterr().out
-
-
-def test_update_inside_a_folder_refuses_another_course(here, monkeypatch, capsys):
-    c = one_section_course(here)
-    other = class_list(here / "repclasslist_X.xlsx", "52", course="PHYS1120  ฟิสิกส์")
-    monkeypatch.chdir(c)
-    before = roster(c)
-    with pytest.raises(SystemExit):
-        grader.update_course(input_file=str(other), yes=True)
-    assert "Nothing changed" in capsys.readouterr().out and roster(c) == before
-
-
-def test_update_finds_a_course_made_before_the_id_fix(here):
-    c = one_section_course(here)
-    cfg_path = next((c / "course_info").glob("*_config.yaml"))
-    cfg = config(c)
-    cfg["course_id"], cfg["course_name"] = "SC", "2202  ดาราศาสตร์และอวกาศ"  # the old parse
-    cfg_path.write_text(yaml.dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52")), yes=True)
-    c = here / TWO
-    cfg = config(c)
-    assert (str(cfg["course_id"]), cfg["course_name"]) == ("SC 2202", "ดาราศาสตร์และอวกาศ")
+def test_update_moves_a_flat_course_into_folders(here):
+    flat = one_section_course(here)
+    grader.update_course(config_file=str(next((flat / "course_info").glob("*_config.yaml"))), yes=True)
+    set_score(next((flat / "data").glob("*_homework.csv")), "69000003", "hw1", "7")
+    grader.update_course(input_file=str(sec_list(here, "52")), yes=True)
+    c = here / COURSE
     assert course_sections(c) == ["51", "52"]
+    hw = {r["Student ID"]: r for r in rows(c / "sec51" / "data" / f"{COURSE}_SEC_51_homework.csv")}
+    assert cell(hw["69000003"], "hw1") == "7"
+    assert (here / "2026_S2_Astro51_SEC_51_before_split").is_dir() and not flat.exists()
+    assert len(roster(c / "sec52")) == 3
 
 
-def test_adding_a_section_keeps_attendance_marks(here):
-    c = one_section_course(here)
-    xlsx = next((c / "data").glob("*_attendance.xlsx"))
+def test_update_refuses_a_course_with_a_section_column(here, capsys):
+    flat = one_section_course(here)
+    f = next((flat / "course_info").glob("*_student_info.csv"))
+    lines = f.read_text(encoding="utf-8").splitlines()
+    assert lines[0].endswith(",Section")
+    f.write_text("\n".join([lines[0], lines[1], lines[2].rsplit(",", 1)[0] + ",52"]) + "\n", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        grader.update_course(input_file=str(sec_list(here, "52")), yes=True)
+    assert "Run grader split first" in capsys.readouterr().out
+
+
+def test_a_student_moving_section_takes_scores_and_marks(here, capsys):
+    from src import attendance
+    c = two_sections(here)
+    mover = SEC51[0][0]
+    set_score(c / "sec51" / "data" / f"{COURSE}_SEC_51_homework.csv", mover, "hw1", "8")
+    xlsx = c / "sec51" / "data" / f"{COURSE}_SEC_51_attendance.xlsx"
     wb = openpyxl.load_workbook(xlsx)
     ws = wb.active
-    ws.cell(row=2, column=3).value = "P"   # 69000001, a1
-    ws.cell(row=3, column=4).value = "L"   # 69000003, a2
+    row = next(r for r in range(2, ws.max_row + 1) if str(ws.cell(row=r, column=1).value) == mover)
+    ws.cell(row=row, column=3).value = "P"
     wb.save(xlsx)
-    attendance.auto_sync(c)
-    grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52")), yes=True)
-    c = here / TWO
-    sheet = xlsx_rows(c)
-    head = sheet[0]
-    assert head[:4] == ["Student ID", "Name", "Sec", "a1"]
-    by_sid = {r[0]: dict(zip(head, r)) for r in sheet[1:]}
-    assert by_sid["69000001"]["a1"] == "P" and by_sid["69000003"]["a2"] == "L"
-    assert by_sid["69000004"]["Sec"] == "52"
-    xlsx = next((c / "data").glob("*_attendance.xlsx"))
-    X, C = attendance.read_xlsx_sheet(xlsx), attendance.read_csv_sheet(next((c / "data").glob("*_attendance.csv")))
-    assert X.sessions == C.sessions and X.rows == C.rows and "Sec" not in X.sessions
-    assert attendance.plan(c) is None or not attendance.plan(c).has_changes()
+    attendance.auto_sync(c / "sec51")
+    grader.update_course(input_file=str(sec_list(here, "52", students=SEC52 + [SEC51[0]])), yes=True)
+    assert f"{mover} moves sec 51 → 52" in capsys.readouterr().out
+    assert mover not in {r["Student ID"] for r in roster(c / "sec51")}
+    hw52 = {r["Student ID"]: r for r in rows(c / "sec52" / "data" / f"{COURSE}_SEC_52_homework.csv")}
+    assert cell(hw52[mover], "hw1") == "8"
+    assert mover not in {r["Student ID"] for r in rows(c / "sec51" / "data" / f"{COURSE}_SEC_51_homework.csv")}
+    att52 = {r["Student ID"]: r for r in rows(c / "sec52" / "data" / f"{COURSE}_SEC_52_attendance.csv")}
+    assert att52[mover]["a1"] == "P"
+    assert attendance.read_xlsx_sheet(c / "sec52" / "data" / f"{COURSE}_SEC_52_attendance.xlsx").rows[mover]["a1"] == "P"
+    assert mover not in attendance.read_xlsx_sheet(xlsx).rows
 
 
-def test_undo_restores_the_one_section_course(here, monkeypatch):
-    c = one_section_course(here)
-    before = roster(c)
-    grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52")), yes=True)
-    monkeypatch.chdir(here / TWO)
-    grader.undo_course(None, None, yes=True)   # the newest change: the rename
-    assert c.is_dir() and not (here / TWO).exists()
-    monkeypatch.chdir(c)
-    grader.undo_course(None, None, yes=True)   # then the roster update
-    assert roster(c) == before and course_sections(c) == ["51"]
+def test_update_refuses_a_name_that_disagrees_with_the_sheet(here, capsys):
+    two_sections(here)
+    with pytest.raises(SystemExit):
+        grader.update_course(input_file=str(class_list(here / "repclasslist_Astro_sec51.xlsx", "52")), yes=True)
+    assert "says sec51 in its name" in capsys.readouterr().out
 
 
-# ---- helpers ----------------------------------------------------------------------------------------------------
+# ---- every section at once -----------------------------------------------------------------------------------------
+def test_update_from_a_section_folder_covers_every_section(here, monkeypatch, capsys):
+    c = two_sections(here)
+    cfg_path = next((c / "course_info").glob("*_config.yaml"))
+    cfg = config(c)
+    cfg["data_mapping"]["homework"].append("hw3")
+    cfg_path.write_text(yaml.dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    monkeypatch.chdir(c / "sec51")
+    capsys.readouterr()
+    grader.update_course(yes=True)
+    out = capsys.readouterr().out
+    assert "── sec 51 (sec51/) ──" in out and "── sec 52 (sec52/) ──" in out
+    for sec in ("51", "52"):
+        head = (c / f"sec{sec}" / "data" / f"{COURSE}_SEC_{sec}_homework.csv").read_text(encoding="utf-8")
+        assert "hw3" in head.splitlines()[0]
+    assert not (c / "sec51" / "history").exists()
+
+
+def test_one_save_across_sections_is_one_undo(here, monkeypatch):
+    from src import tui_api
+    from src.history import list_entries
+    c = two_sections(here)
+    edits = [{"student_id": SEC51[0][0], "column": "hw1", "value": "5", "original": ""},
+             {"student_id": SEC52[1][0], "column": "hw1", "value": "6", "original": ""}]
+    r = tui_api.apply_edits(str(c), edits)
+    assert r["saved"] == 2 and len(r["files"]) == 2
+    e = list_entries(c)[-1]
+    assert e["action"] == "edit" and {f.split("/")[0] for f in e["files"]} == {"sec51", "sec52"}
+    monkeypatch.chdir(c / "sec52")
+    grader.undo_course(e["id"], None, yes=True)
+    for sec, sid in (("51", SEC51[0][0]), ("52", SEC52[1][0])):
+        hw = {r["Student ID"]: r for r in rows(c / f"sec{sec}" / "data" / f"{COURSE}_SEC_{sec}_homework.csv")}
+        assert cell(hw[sid], "hw1") == ""
+
+
+def test_sync_runs_for_each_section(here, capsys):
+    c = two_sections(here)
+    capsys.readouterr()
+    grader.sync_cmd(str(c), yes=True)
+    out = capsys.readouterr().out
+    assert f"Sync: {COURSE} · sec 51" in out and f"Sync: {COURSE} · sec 52" in out
+
+
+def test_history_from_a_section_folder_is_the_course_s(here, monkeypatch, capsys):
+    c = two_sections(here)
+    monkeypatch.chdir(c / "sec52")
+    capsys.readouterr()
+    grader.history_course()
+    assert f"History of {COURSE}" in capsys.readouterr().out
+
+
+# ---- the course model --------------------------------------------------------------------------------------------
+def test_course_at_any_path(here):
+    c = two_sections(here)
+    for p in (c, c / "sec52", c / "sec52" / "data", c / "sec52" / "data" / f"{COURSE}_SEC_52_homework.csv"):
+        got = course_mod.at(p)
+        assert got.root == c.resolve() and got.layout and [s.num for s in got.sections] == ["51", "52"]
+    assert course_mod.at(c).here is None and course_mod.at(c / "sec52").here.num == "52"
+    assert course_mod.prefix_for(c / "sec52") == f"{COURSE}_SEC_52" and course_mod.prefix_for(c) == COURSE
+    assert course_mod.config_for(c / "sec52")["sec_num"] == "52"
+    assert course_mod.history_root(c / "sec52" / "data") == c.resolve()
+    flat = one_section_course(here)
+    f = course_mod.at(flat)
+    assert not f.layout and f.sections[0].path == flat.resolve() and f.here.num == "51"
+
+
 def test_section_helpers():
     secmap = {"3": "52", "1": "51", "2": "8", "4": ""}
     assert sort_sections(secmap.values()) == ["8", "51", "52"]
@@ -293,37 +345,41 @@ def test_section_helpers():
     assert tagger({"1": "51"})("1") == ""
 
 
-# ---- grade-tui bridge -------------------------------------------------------------------------------------------
-def two_section_course(here) -> Path:
-    """A two-section course with its score files made by `grader update`, and a few scores."""
-    grader.init_course(None, None, None, [str(class_list(here / "repclasslist_Astro51.xlsx", "51")),
-                                          str(class_list(here / "repclasslist_Astro52.xlsx", "52"))])
-    c = here / "2026_S2_Astro_SEC_51-52"
-    grader.update_course(config_file=str(next((c / "course_info").glob("*_config.yaml"))), yes=True)
-    hw = next((c / "data").glob("*_homework.csv"))
-    lines = hw.read_text(encoding="utf-8").splitlines()
-    head = lines[0].split(",")
-    out = [lines[0]]
-    for i, line in enumerate(lines[1:]):
-        cells = line.split(",")
-        cells[head.index("hw1 (100pts)") if "hw1 (100pts)" in head else 2] = str(40 + 10 * i)
-        out.append(",".join(cells))
-    hw.write_text("\n".join(out) + "\n", encoding="utf-8")
+def test_group_order_and_blocks():
+    from src.sections import block_title, blocks, group_order
+    secmap = {"5": "52", "1": "51", "4": "", "2": "8", "3": "51"}
+    ids = sorted(secmap, key=group_order(secmap))
+    assert ids == ["2", "1", "3", "5", "4"]
+    assert blocks(ids, secmap) == [("8", ["2"]), ("51", ["1", "3"]), ("52", ["5"]), ("", ["4"])]
+    assert block_title("51", 28) == "Sec 51 · 28 students" and block_title("", 1) == "No section · 1 student"
+
+
+# ---- grade-tui's bridge ------------------------------------------------------------------------------------------
+def scored(here) -> Path:
+    c = two_sections(here)
+    for i, (sid, _) in enumerate(SEC51 + SEC52):
+        sec = "51" if i < len(SEC51) else "52"
+        set_score(c / f"sec{sec}" / "data" / f"{COURSE}_SEC_{sec}_homework.csv", sid, "hw1", str(4 + i))
     return c
 
 
-def test_course_data_carries_sections(here):
+def test_the_course_is_listed_once(here):
     from src import tui_api
-    c = two_section_course(here)
+    scored(here)
+    assert [x["name"] for x in tui_api.get_courses()["courses"]] == [f"{COURSE} · sec 51, 52"]
+
+
+def test_course_data_merges_the_sections(here):
+    from src import tui_api
+    c = scored(here)
     d = tui_api.get_course_data(str(c))
     assert d["status"] == "success", d.get("traceback")
-    assert d["sections"] == ["51", "52"]
+    assert d["sections"] == ["51", "52"] and len(d["student_grades"]) == 5
     secs = {r["Student ID"]: r["Section"] for r in d["student_grades"]}
     assert secs == {r["Student ID"]: r["Section"] for r in d["raw_scores"]} == roster_sections(c)
-    assert set(d["by_section"]) == {"51", "52"}
     n = {s: sum(v["count"] for v in d["by_section"][s]["grade_distribution"].values()) for s in ("51", "52")}
     assert n == {"51": 2, "52": 3}
-    assert d["by_section"]["52"]["analytics"]["overview"]["total_count"] == 3
+    assert float({r["Student ID"]: r["hw1"] for r in d["raw_scores"]}[SEC52[2][0]]) == 8
     for s in ("51", "52"):  # raw_index stays a whole-course row
         for r in d["by_section"][s]["analytics"]["at_risk"]:
             assert d["student_grades"][r["raw_index"]]["Student ID"] == r["student_id"]
@@ -337,62 +393,27 @@ def test_one_section_course_data_has_no_sections(here):
     assert d["sections"] == [] and d["by_section"] == {} and "Section" not in d["student_grades"][0]
 
 
-# ---- exports ----------------------------------------------------------------------------------------------------
-def test_export_writes_the_course_and_each_section(here):
+def test_an_edit_for_a_student_in_no_section_is_not_found(here):
     from src import tui_api
-    c = two_section_course(here)
+    c = two_sections(here)
+    r = tui_api.apply_edits(str(c), [{"student_id": "69999999", "column": "hw1", "value": "5", "original": ""}])
+    assert r["saved"] == 0 and r["conflicts"][0]["reason"] == "not found"
+
+
+# ---- exports -----------------------------------------------------------------------------------------------------
+def test_export_writes_the_course_and_each_section_folder(here):
+    from src import tui_api
+    c = scored(here)
     assert tui_api.run_export(str(c))["status"] == "success"
-    p = "2026_S2_Astro_SEC_51-52"
-    rep = c / "reports"
-    both = list(csv.DictReader(io.StringIO((rep / f"{p}_final_grades.csv").read_text(encoding="utf-8"))))
-    assert list(both[0])[:3] == ["Student ID", "Name", "Section"] and len(both) == 5
-    for sec, n in (("51", 2), ("52", 3)):
-        rows = list(csv.DictReader(io.StringIO((rep / f"{p}_final_grades_sec{sec}.csv").read_text(encoding="utf-8"))))
-        assert len(rows) == n and {r["Section"] for r in rows} == {sec}
-        copy = (rep / f"{p}_copy_friendly_scores_sec{sec}.csv").read_text(encoding="utf-8").splitlines()
-        assert len(copy) == n + 1
-
-
-def test_export_groups_the_combined_files_by_section(here):
-    from src import tui_api
-    c = two_section_course(here)
-    tui_api.run_export(str(c))
-    p = "2026_S2_Astro_SEC_51-52"
-    both = list(csv.DictReader(io.StringIO((c / "reports" / f"{p}_final_grades.csv").read_text(encoding="utf-8"))))
+    both = rows(c / "reports" / f"{COURSE}_final_grades.csv")
+    assert list(both[0])[:3] == ["Student ID", "Name", "Section"]
     assert [r["Student ID"] for r in both] == ["69000001", "69000003", "69000002", "69000004", "69000006"]
-    copy = (c / "reports" / f"{p}_copy_friendly_scores.csv").read_text(encoding="utf-8").splitlines()[1:]
-    assert [line.split(",")[0] for line in copy] == ["69000001", "69000003", "69000002", "69000004", "69000006"]
-
-
-def test_group_order_and_blocks():
-    from src.sections import block_title, blocks, group_order
-    secmap = {"5": "52", "1": "51", "4": "", "2": "8", "3": "51"}
-    ids = sorted(secmap, key=group_order(secmap))
-    assert ids == ["2", "1", "3", "5", "4"]
-    assert blocks(ids, secmap) == [("8", ["2"]), ("51", ["1", "3"]), ("52", ["5"]), ("", ["4"])]
-    assert block_title("51", 28) == "Sec 51 · 28 students" and block_title("", 1) == "No section · 1 student"
-
-
-def test_dashboard_all_view_prints_section_blocks(here, monkeypatch):
-    from rich.console import Console
-    from rich.prompt import Confirm
-    monkeypatch.setattr(Confirm, "ask", lambda *a, **k: False)
-    from src import dashboard
-    from src.calculators import calculate_final_grades
-    from src.data_loader import load_config, load_course_data
-    c = two_section_course(here)
-    config = load_config(c)
-    df, max_scores = load_course_data(c)
-    final_df = calculate_final_grades(df, config, max_scores)
-    rec = Console(record=True, width=250)
-    dashboard.console, old = rec, dashboard.console
-    try:
-        dashboard.show_student_table(final_df, max_scores, config, True, secmap=roster_sections(c))
-    finally:
-        dashboard.console = old
-    out = rec.export_text()
-    a, b = out.index("Sec 51 · 2 students"), out.index("Sec 52 · 3 students")
-    assert a < out.index("69000003") < b < out.index("69000002")
+    assert (c / "reports" / f"{COURSE}_copy_friendly_scores.csv").exists()
+    for sec, n in (("51", 2), ("52", 3)):
+        mine = rows(c / f"sec{sec}" / "reports" / f"{COURSE}_SEC_{sec}_final_grades.csv")
+        assert len(mine) == n and {r["Section"] for r in mine} == {sec}
+        copy = c / f"sec{sec}" / "reports" / f"{COURSE}_SEC_{sec}_copy_friendly_scores.csv"
+        assert len(copy.read_text(encoding="utf-8").splitlines()) == n + 1
 
 
 def test_export_of_a_one_section_course_is_as_before(here):
@@ -402,74 +423,80 @@ def test_export_of_a_one_section_course_is_as_before(here):
     assert tui_api.run_export(str(c))["status"] == "success"
     names = sorted(f.name for f in (c / "reports").iterdir())
     assert names == ["2026_S2_Astro51_SEC_51_copy_friendly_scores.csv", "2026_S2_Astro51_SEC_51_final_grades.csv"]
-    head = (c / "reports" / names[1]).read_text(encoding="utf-8").splitlines()[0]
-    assert "Section" not in head
+    assert "Section" not in (c / "reports" / names[1]).read_text(encoding="utf-8").splitlines()[0]
 
 
-# ---- CLI output names sections ----------------------------------------------------------------------------------
-def test_web_push_counts_students_per_section(here, drive_root, capsys):
+def test_dashboard_all_view_prints_section_blocks(here, monkeypatch):
+    from rich.console import Console
+    from rich.prompt import Confirm
+    from src import dashboard
+    from src.calculators import calculate_final_grades
+    from src.data_loader import load_course
+    monkeypatch.setattr(Confirm, "ask", lambda *a, **k: False)
+    c = scored(here)
+    config_, df, max_scores = load_course(c)
+    final_df = calculate_final_grades(df, config_, max_scores)
+    rec = Console(record=True, width=250)
+    dashboard.console, old = rec, dashboard.console
+    try:
+        dashboard.show_student_table(final_df, max_scores, config_, True, secmap=roster_sections(c))
+    finally:
+        dashboard.console = old
+    out = rec.export_text()
+    a, b = out.index("Sec 51 · 2 students"), out.index("Sec 52 · 3 students")
+    assert a < out.index("69000003") < b < out.index("69000002")
+
+
+# ---- grade_web ---------------------------------------------------------------------------------------------------
+def test_web_push_sends_one_merged_course(here, drive_root, capsys):
     from src import webpush
-    c = two_section_course(here)
+    c = scored(here)
     capsys.readouterr()
-    webpush.push(c, drive_root)
+    webpush.push(c / "sec52", drive_root)  # from a section folder: the whole course
     assert "5 students (sec 51: 2 · sec 52: 3)" in capsys.readouterr().out
+    m = drive_root / "grade_courses" / "term" / COURSE
+    cj = json.loads((m / "course.json").read_text(encoding="utf-8"))
+    assert cj["folder"] == COURSE and cj["roster"] == f"course_info/{COURSE}_student_info.csv"
+    assert set(cj["sections"]) == {"51", "52"}
+    assert {r["Student ID"]: r["Section"] for r in rows(m / cj["roster"])} == roster_sections(c)
+    hw = rows(m / "data" / f"{COURSE}_homework.csv")
+    assert sorted(cell(r, "hw1") for r in hw) == ["4", "5", "6", "7", "8"]
 
 
-def test_web_pull_accepts_a_push_made_before_the_id_fix(here, drive_root, capsys):
-    """Pushed as course_id "SC", then `update -i` repairs it to "SC 2202": the Drive copy is still this course."""
+def test_web_pull_puts_each_edit_in_its_section(here, drive_root, capsys):
     from src import webpull, webpush
-    c = one_section_course(here)
-    cfg_path = next((c / "course_info").glob("*_config.yaml"))
-    cfg = config(c)
-    cfg["course_id"], cfg["course_name"] = "SC", "2202  ดาราศาสตร์และอวกาศ"  # the old parse
-    cfg_path.write_text(yaml.dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    grader.update_course(config_file=str(cfg_path), yes=True)
+    from src.history import list_entries
+    c = scored(here)
     webpush.push(c, drive_root)
-    grader.update_course(input_file=str(class_list(here / "repclasslist_Astro52.xlsx", "52")), yes=True)
-    c = here / TWO
-    assert str(config(c)["course_id"]) == "SC 2202"
+    m = drive_root / "grade_courses" / "term" / COURSE
+    push_id = json.loads((m / "push.json").read_text(encoding="utf-8"))["push_id"]
+    s52 = SEC52[0][0]
+    line = {"batch": "b-1", "seq": 0, "ts": "2026-10-30T13:40:00+07:00", "kind": "cell", "push": push_id,
+            "file": f"data/{COURSE}_attendance.csv", "student_id": s52, "column": "a1", "value": "P", "original": ""}
+    (m / "web_edits.jsonl").write_text(json.dumps(line, ensure_ascii=False) + "\n", encoding="utf-8")
     capsys.readouterr()
-    assert webpull.pull(c, drive_root) == 0
-    assert "Nothing to pull" in capsys.readouterr().out
-    cfg = config(c)
-    cfg["course_id"] = "PHYS1120"
-    cfg_path = next((c / "course_info").glob("*_config.yaml"))
-    cfg_path.write_text(yaml.dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    with pytest.raises(webpull.Refused, match="another course"):
-        webpull.pull(c, drive_root)
+    assert webpull.pull(c, drive_root, yes=True) == 0
+    out = capsys.readouterr().out
+    assert f"[52] {s52} a1" in out and f"sec52/data/{COURSE}_SEC_52_attendance.csv" in out
+    assert {r["Student ID"]: r["a1"] for r in rows(c / "sec52" / "data" / f"{COURSE}_SEC_52_attendance.csv")}[s52] == "P"
+    assert all(r["a1"] == "" for r in rows(c / "sec51" / "data" / f"{COURSE}_SEC_51_attendance.csv"))
+    assert list_entries(c)[-1]["action"] == "web-pull"
 
 
 def test_web_pull_preview_tags_students_and_orders_by_section():
     from src.webpull import Change, preview
-    def cell(sid, col, mac, val):
-        c = Change([{"kind": "cell", "student_id": sid, "column": col, "original": mac, "value": val}])
-        c.result, c.mac = "apply", mac
-        return c
-    changes = [cell("3", "hw1", "1", "2"), cell("1", "hw1", "", "5"), cell("2", "hw1", "4", "6")]
-    out = preview(changes, {"1": "52", "2": "51", "3": "51"})
-    lines = [l for l in out if " hw1: " in l]
-    assert lines == ["  [51] 2 hw1: 4 → 6", "  [51] 3 hw1: 1 → 2", "  [52] 1 hw1: (blank) → 5"]
-    one = [l for l in preview(changes, {"1": "51", "2": "51", "3": "51"}) if " hw1: " in l]
-    assert one[0] == "  3 hw1: 1 → 2", "one section: no tags, journal order"
+    changes = [Change([{"kind": "cell", "student_id": sid, "column": "hw1", "original": "", "value": "5"}],
+                      result="apply", mac="") for sid in ("3", "2", "1")]
+    out = "\n".join(preview(changes, {"1": "52", "2": "51", "3": "52"}))
+    assert out.index("[51] 2 hw1") < out.index("[52] 1 hw1") < out.index("[52] 3 hw1")
 
 
-def test_sync_preview_tags_attendance_lines(here):
-    c = two_section_course(here)
-    csv_path = next((c / "data").glob("*_attendance.csv"))
-    text = csv_path.read_text(encoding="utf-8").splitlines()
-    head = text[0].split(",")
-    row = text[1].split(",")
-    row[head.index("a1")] = "P"
-    text[1] = ",".join(row)
-    csv_path.write_text("\n".join(text) + "\n", encoding="utf-8")
-    lines = attendance.describe(attendance.plan(c))
-    assert any(l.strip().startswith(f"[51] {row[0]} a1") for l in lines), lines
-
-
-def test_mock_course_has_two_sections(here):
+# ---- grader mock -------------------------------------------------------------------------------------------------
+def test_mock_course_has_two_section_folders(here):
     grader.mock_course()
     c = here / "courses" / "0_GenPhysMock"
     assert course_sections(c) == ["51", "52"]
-    assert counts(roster_sections(c)) == "sec 51: 16 · sec 52: 14"
-    assert list(config(c)["sections"]) == ["51", "52"]
-    assert xlsx_rows(c)[0][:3] == ["Student ID", "Name", "Sec"]
+    assert len(roster(c / "sec51")) == 16 and len(roster(c / "sec52")) == 14
+    assert not (c / "history" / "log.jsonl").exists()
+    assert not (here / "courses" / "0_GenPhysMock_flat").exists()
+    assert not (here / "courses" / "0_GenPhysMock_flat_before_split").exists()

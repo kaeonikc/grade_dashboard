@@ -73,12 +73,22 @@ def find_courses_fallback() -> dict:
                     
     return course_map
 
+def _course_label(name: str, path: Path) -> str:
+    """The course list's line: a course with section folders names them (`2026_S2_Astro · sec 51, 52`)."""
+    from src.course import at
+    c = at(path)
+    if c is not None and c.layout and Path(path).resolve() == c.root:
+        return f"{name} · sec {', '.join(s.num for s in c.sections)}"
+    return name
+
+
 def get_courses():
     try:
         courses = find_courses_fallback()
         return {
             "status": "success",
-            "courses": [{"name": name, "path": str(path.resolve())} for name, path in sorted(courses.items())]
+            "courses": [{"name": _course_label(name, path), "path": str(path.resolve())}
+                        for name, path in sorted(courses.items())]
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -417,11 +427,22 @@ def _class_groups(course_path) -> dict:
     return {}
 
 
+def _units(path) -> list[tuple[Path, str]]:
+    """[(folder, label)] whose files make up the course: each section folder ('sec 51') of a course with section
+    folders, else the folder itself ('')."""
+    from src.course import at
+    c = at(path)
+    if c is None or not c.layout or Path(path).resolve() != c.root:
+        return [(Path(path), "")]
+    return [(s.path, f"sec {s.num}") for s in c.sections]
+
+
 def get_course_data(course_path, use_weighted=True):
     try:
         path = Path(course_path)
-        config = load_config(path)
-        raw_df, max_scores = load_course_data(path)
+        from src.data_loader import load_course
+        config, raw_df, max_scores = load_course(path)
+        units = _units(path)
 
         if raw_df.empty:
             return {
@@ -435,15 +456,17 @@ def get_course_data(course_path, use_weighted=True):
         
         # Keep each score file's total column in step with its cells (src/sync.py), then report
         # anything only `grader sync` can settle: hand-added columns, points that disagree.
-        update_database_totals(path, final_df, config.get("data_mapping", {}), max_scores)
-        try:
-            from src.sync import find_changes, warnings_for
-            warnings = warnings + warnings_for(find_changes(path))
-        except Exception as e:
-            warnings.append(f"Could not check the score files: {e}")
-        # The attendance xlsx/csv were synced by load_config when that needed no question; the rest is reported.
+        from src.sync import find_changes, warnings_for
         from src.attendance import warnings as attendance_warnings
-        warnings = warnings + attendance_warnings(path)
+        for unit, label in units:  # each section folder's files (SPEC_section_folders.md)
+            tag = f"[{label}] " if label else ""
+            update_database_totals(unit, final_df, config.get("data_mapping", {}), max_scores)
+            try:
+                warnings = warnings + [tag + w for w in warnings_for(find_changes(unit))]
+            except Exception as e:
+                warnings.append(f"{tag}Could not check the score files: {e}")
+            # The attendance xlsx/csv were synced by load_config when that needed no question; the rest is reported.
+            warnings = warnings + [tag + w for w in attendance_warnings(unit)]
         
         # Prepare list of student grades (summary table)
         data_mapping = config.get("data_mapping", {})
@@ -482,7 +505,9 @@ def get_course_data(course_path, use_weighted=True):
         raw_cols_present = [c for c in final_df.columns if c in raw_assignment_cols]
         raw_display_cols = ["Student ID", "Name"] + raw_cols_present
         # Roster group per student, for Fill Column's group choice in grade-tui
-        groups = _class_groups(path)
+        groups = {}
+        for unit, _ in units:
+            groups.update(_class_groups(unit))
         absent_cells = {(sid, col) for sid, col in raw_df.attrs.get("absences", [])}
         invalid_cells = {(sid, col): text for sid, col, text in raw_df.attrs.get("invalid_cells", [])}
         # Cells as written in the files (raw_df, before blanks count as 0), in final_df's row order
@@ -628,6 +653,12 @@ def _sync_total(course_path, csv_path, entry=None) -> None:
 
 
 def update_student_score(course_path, student_id, col_name, value):
+    routed = _route(course_path, [{"student_id": student_id, "column": col_name}])
+    if routed is not None:  # the student's own section folder
+        unit = next(iter(routed))
+        if unit is None:
+            return {"status": "error", "message": f"Student {student_id} is in no section of this course"}
+        course_path = unit
     try:
         path = Path(course_path)
         data_dir = path / "data"
@@ -815,6 +846,48 @@ def _xlsx_cells(ws, col_name):
     return col_idx, rows
 
 
+def _route(course_path, edits) -> dict | None:
+    """{section folder: [its edits]} for a course with section folders (by each edit's student_id), the edits of
+    students in no section under None; None for a flat course or a section folder (edits stay where they are)."""
+    from src.sections import roster_sections
+    units = _units(course_path)
+    if len(units) == 1 and units[0][0] == Path(course_path):
+        return None
+    secmap = roster_sections(course_path)
+    folder = {num: unit for unit, num in ((u, label.removeprefix("sec ")) for u, label in units)}
+    out = {}
+    for e in edits:
+        out.setdefault(folder.get(secmap.get(str(e["student_id"]).strip())), []).append(e)
+    return out
+
+
+def _apply_routed(course_path, routed: dict, entry=None) -> dict:
+    """apply_edits over a course's section folders: one history entry for all of them, replies added together."""
+    from src.history import Entry
+    own = entry is None
+    entry = entry or Entry(course_path, "grade-tui", "edit")
+    saved, files, conflicts = 0, [], []
+    for unit, items in routed.items():
+        if unit is None:
+            conflicts += [{"student_id": str(e["student_id"]).strip(), "column": e["column"], "reason": "not found",
+                           "disk_value": None} for e in items]
+            continue
+        r = apply_edits(unit, items, entry)
+        if r.get("status") != "success":
+            return r
+        saved += r.get("saved", 0)
+        files += r.get("files", [])
+        conflicts += r.get("conflicts", [])
+    if own:
+        entry.note = f"{saved} cells"
+        entry.close(cells=saved)
+    if not files:
+        return {"status": "success", "saved": 0, "files": [], "conflicts": conflicts,
+                "message": "Nothing saved." if conflicts else "No changes to save."}
+    msg = f"Saved {saved} cell{'s' if saved != 1 else ''} ({len(files)} file{'s' if len(files) != 1 else ''})."
+    return {"status": "success", "saved": saved, "files": sorted(files), "conflicts": conflicts, "message": msg}
+
+
 def apply_edits(course_path, edits, entry=None):
     """
     Saves a batch of grade-tui edits, each {"student_id", "column", "value", "original"}.
@@ -825,6 +898,9 @@ def apply_edits(course_path, edits, entry=None):
     With `entry` (an open history.Entry, e.g. `grader web-pull`'s), everything written, the
     totals and the attendance baseline included, is captured into it and the caller closes it.
     """
+    routed = _route(course_path, edits)
+    if routed is not None:  # a course with section folders: each edit goes to its student's section
+        return _apply_routed(course_path, routed, entry)
     try:
         path = Path(course_path)
         data_dir = path / "data"
@@ -977,6 +1053,11 @@ def _update_xlsx_attendance_bulk(xlsx_path, target_col_orig_name, val_to_set):
     return True
 
 def update_column_score(course_path, col_name, value):
+    units = _units(course_path)
+    if len(units) > 1 or units[0][0] != Path(course_path):  # every section folder of the course
+        replies = [update_column_score(unit, col_name, value) for unit, _ in units]
+        bad = next((r for r in replies if r.get("status") != "success"), None)
+        return bad or {"status": "success", "message": " ".join(r.get("message", "") for r in replies).strip()}
     try:
         path = Path(course_path)
         data_dir = path / "data"
@@ -1146,13 +1227,14 @@ def update_course_config(course_path, weights_dict=None, boundaries_dict=None):
 def run_export(course_path, use_weighted=True):
     try:
         path = Path(course_path)
-        config = load_config(path)
-        raw_df, max_scores = load_course_data(path)
+        from src.data_loader import load_course
+        config, raw_df, max_scores = load_course(path)
         final_df = calculate_final_grades(raw_df, config, max_scores, use_weighted)
         export_reports(final_df, path, config, max_scores, use_weighted)
         from src.sections import course_sections
         secs = course_sections(path)
-        each = f" (all students, and one file per section: {', '.join(secs)})" if len(secs) >= 2 else ""
+        each = (f" (all students; each section's in " + ", ".join(f"sec{s}/reports/" for s in secs) + ")"
+                if len(secs) >= 2 else "")
         return {"status": "success", "message": f"Reports successfully exported to {path}/reports/{each}"}
     except Exception as e:
         return {"status": "error", "message": str(e)}

@@ -36,7 +36,8 @@ BASE = "config_sync.json"
 
 
 def base_path(course) -> Path:
-    return Path(course) / "history" / BASE
+    from src.course import state_file
+    return state_file(course, BASE)
 
 
 def load_base(course) -> dict | None:
@@ -66,8 +67,10 @@ def remembered(course) -> tuple[dict, dict, bool]:
     if b is not None:
         return b["mapping"], {c: set(v) for c, v in (b.get("kept") or {}).items()}, True
     seen: dict = {}
-    olds = sorted((course / "history").glob("*/course_info/*_config.yaml")) if (course / "history").is_dir() else []
-    olds += sorted((course / "course_info").glob("*_config.yaml.bak"))
+    from src.course import history_root
+    root = history_root(course) or course  # the shared config's snapshots are in the course's history/
+    olds = sorted((root / "history").glob("*/course_info/*_config.yaml")) if (root / "history").is_dir() else []
+    olds += sorted((root / "course_info").glob("*_config.yaml.bak"))
     for f in olds:
         for cat, cols in _mapping_of(f.read_text(encoding="utf-8")).items():
             for name in cols:
@@ -91,7 +94,7 @@ def save_base(course, kept: dict | None = None) -> None:
             for c, v in keep.items()}
     keep = {c: v for c, v in keep.items() if v}
     p = base_path(course)
-    p.parent.mkdir(exist_ok=True)
+    p.parent.mkdir(parents=True, exist_ok=True)
     data = {"ts": datetime.now().isoformat(timespec="seconds"), "mapping": cur, "kept": keep}
     atomic_write_bytes(p, json.dumps(data, ensure_ascii=False, indent=1).encode("utf-8"))
 

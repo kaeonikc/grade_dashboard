@@ -1,9 +1,9 @@
 """
-Courses with several sections in one folder (SPEC_sections.md).
+Courses with several sections (SPEC_section_folders.md): one sub-folder per section, each with its own roster.
 
-The roster course_info/<prefix>_student_info.csv is the source of truth: its `Section` column says which section each
-student is in. A roster without that column is a course without sections, and everything behaves as before. A course
-"has sections" (selector, per-section exports, [51] tags) only when its roster names two or more.
+A student's section is the section folder whose roster lists them (src/course.py says where the folders are). A course
+"has sections" (selector, per-section exports, [51] tags) only when it has two or more. The roster `Section` column of
+the older one-folder layout (SPEC_sections.md) is read only by `grader split`, which turns such a course into folders.
 """
 
 import csv
@@ -45,8 +45,42 @@ def roster_file(course) -> Path | None:
     return files[0] if files else None
 
 
+def _roster_ids(path: Path) -> list[str]:
+    try:
+        rows = list(csv.reader(io.StringIO(path.read_bytes().decode("utf-8-sig"), newline="")))
+    except (OSError, UnicodeDecodeError):
+        return []
+    header = [h.strip() for h in rows[0]] if rows else []
+    if "Student ID" not in header:
+        return []
+    i = header.index("Student ID")
+    return [r[i].strip() for r in rows[1:] if i < len(r) and r[i].strip()]
+
+
 def roster_sections(course) -> dict[str, str]:
-    """{student id: section} from the roster ("" for a blank cell); {} when there's no roster or no Section column."""
+    """
+    {student id: section} of a course with section folders, from each section's roster, in section order; given one
+    section folder, its own students. {} for a flat course.
+    """
+    from src.course import at
+    c = at(course)
+    if c is None or not c.layout:
+        return {}
+    here = Path(course).resolve()
+    shown = [c.here] if c.here is not None and c.here.path == here else c.sections
+    out = {}
+    for s in shown:
+        r = roster_file(s.path)
+        for sid in _roster_ids(r) if r else []:
+            out.setdefault(sid, s.num)
+    return out
+
+
+def section_column(course) -> dict[str, str]:
+    """
+    {student id: section} from a one-folder roster's `Section` column ("" for a blank cell); {} when there's no
+    roster or no such column (the layout before SPEC_section_folders.md; `grader split` reads it).
+    """
     path = roster_file(course)
     if path is None:
         return {}

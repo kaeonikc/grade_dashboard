@@ -31,11 +31,12 @@ SENTINELS = {"max", "max score", "full score", "full"}
 
 # ---- config ---------------------------------------------------------------------------------------------------
 def config_file(course) -> Path:
-    info = Path(course) / "course_info"
-    files = sorted(f for f in info.glob("*_config.yaml") if not f.name.startswith("."))
-    if not files:
-        raise FileNotFoundError(f"No *_config.yaml in {info}")
-    return files[0]
+    """The course's config; a section folder's is its course's shared one (SPEC_section_folders.md)."""
+    from src.course import config_path
+    path = config_path(course)
+    if path is None:
+        raise FileNotFoundError(f"No *_config.yaml in {Path(course) / 'course_info'}")
+    return path
 
 
 def raw_config(course) -> dict:
@@ -43,7 +44,12 @@ def raw_config(course) -> dict:
 
 
 def prefix_of(course) -> str:
-    return config_file(course).name[: -len("_config.yaml")]
+    """The prefix of the files in this folder (a section folder's: <course prefix>_SEC_<N>)."""
+    from src.course import prefix_for
+    prefix = prefix_for(course)
+    if prefix is None:
+        raise FileNotFoundError(f"No *_config.yaml in {Path(course) / 'course_info'}")
+    return prefix
 
 
 def parse_pts(col: str):

@@ -43,6 +43,7 @@ VALUES = {
     ("undo", "entry"): "undo-id",
     ("undo", "course"): "course",
     ("sync", "course"): "course",
+    ("split", "course"): "course",
     ("history", "course"): "course",
     ("history", "n"): "text",
     ("web-push", "course"): "course",

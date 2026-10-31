@@ -308,8 +308,19 @@ def export_reports(final_df: pd.DataFrame, course_path: Path, config: dict, max_
         at = list(display_df.columns).index("Name") + 1 if "Name" in display_df.columns else 1
         display_df.insert(at, "Section", sec_of.values)
     display_df.to_csv(report_dir / f"{prefix}_final_grades.csv", index=False)
+
+    def each_file(sec: str, kind: str) -> Path:
+        """A section's own file: in its folder's reports/ (SPEC_section_folders.md), else `<prefix>_<kind>_sec<N>`."""
+        from src.course import at
+        c = at(course_path)
+        s = c.section(sec) if c is not None and c.layout else None
+        if s is None:
+            return report_dir / f"{prefix}_{kind}_sec{sec}.csv"
+        (s.path / "reports").mkdir(parents=True, exist_ok=True)
+        return s.path / "reports" / f"{s.prefix}_{kind}.csv"
+
     for sec in sections:
-        display_df[(sec_of == sec).values].to_csv(report_dir / f"{prefix}_final_grades_sec{sec}.csv", index=False)
+        display_df[(sec_of == sec).values].to_csv(each_file(sec, "final_grades"), index=False)
 
     # Mirrors rust_tui's "For Submission" tab (tab [1]): Cumulative Scores / Midterm / Final
     # blocks in that fixed order, each with its own ID column, separated by a blank spacer.
@@ -333,8 +344,7 @@ def export_reports(final_df: pd.DataFrame, course_path: Path, config: dict, max_
         copy_df = pd.concat(copy_parts, axis=1)
         copy_df.to_csv(report_dir / f"{prefix}_copy_friendly_scores.csv", index=False)
         for sec in sections:
-            copy_df[(sec_of == sec).values].to_csv(report_dir / f"{prefix}_copy_friendly_scores_sec{sec}.csv",
-                                                   index=False)
+            copy_df[(sec_of == sec).values].to_csv(each_file(sec, "copy_friendly_scores"), index=False)
 
     return report_dir
 
@@ -362,14 +372,14 @@ def run() -> None:
         course_name, course_path = select_course(course_map)
 
         try:
-            config = load_config(course_path)
+            from src.data_loader import load_course
+            config, raw_df, max_scores = load_course(course_path)  # every section folder's rows, if it has them
         except Exception as e:
             console.print(f"[red]Failed to load config: {e}[/red]")
             if not Confirm.ask("Try another course?", default=True):
                 break
             continue
 
-        raw_df, max_scores = load_course_data(course_path)
         if raw_df.empty:
             console.print(f"[yellow]No student data found in {course_path / 'data'}[/yellow]")
         else:
@@ -378,7 +388,9 @@ def run() -> None:
             final_df = calculate_final_grades(raw_df, config, max_scores, use_weighted)
             
             # Automatically calculate and write totals back to the raw CSV database files
-            update_database_totals(course_path, final_df, config.get("data_mapping", {}), max_scores)
+            from src.course import units
+            for unit in units(course_path):
+                update_database_totals(unit, final_df, config.get("data_mapping", {}), max_scores)
 
             # Several sections (SPEC_sections.md): show all of them or one; the export always writes every file
             from src.sections import counts, roster_sections, sections_of

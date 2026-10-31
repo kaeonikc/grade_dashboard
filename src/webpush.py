@@ -6,7 +6,9 @@ nothing anywhere. grade-tui's loaders sync attendance and totals as a side effec
 staging copy of the pushed files in a temporary folder, never from the course itself.
 
 Pushed: course.json (the resolved config, docs/adr/003), push.json, the roster and every data/*.csv, byte for
-byte. The journal web_edits.jsonl is only created when missing (docs/adr/002); archive/ is never touched except to
+byte. A course with section folders (SPEC_section_folders.md) is pushed as one course: a roster of every section
+with a `Section` column, and one file per category holding every section's rows (`merged_copy`), so grade_web shows
+it with its All / 51 / 52 chips; `grader web-pull` puts each edit back into its student's section folder. The journal web_edits.jsonl is only created when missing (docs/adr/002); archive/ is never touched except to
 add the `_discarded` file of `--force`.
 """
 
@@ -22,7 +24,7 @@ from pathlib import Path
 import yaml
 
 from src import attendance, webdrive
-from src.csvio import atomic_write_bytes, fmt_value, read_csv_text
+from src.csvio import CsvText, atomic_write_bytes, fmt_value, read_csv_text, write_csv_text
 from src.data_loader import load_config, load_course_data, parse_pts
 from src.sync import SENTINELS, config_file, is_total, prefix_of
 from src.webdrive import Refused, fmt_time, pad, width
@@ -63,8 +65,9 @@ def data_csvs(course: Path) -> list[Path]:
     return sorted(p for p in data.glob("*.csv") if not p.name.startswith(".")) if data.is_dir() else []
 
 
-def check_course(course: Path) -> tuple[list[str], list[str]]:
-    """(roster IDs, warnings), or Refused. Reads only."""
+def check_course(course: Path, folders: list | None = None) -> tuple[list[str], list[str]]:
+    """(roster IDs, warnings), or Refused. Reads only. `folders`: where the attendance sheets and any score xlsx are
+    (each section folder of a course pushed as a merged copy); the course itself by default."""
     stem = course.name.removesuffix("_grading")
     try:
         cfg_path = config_file(course)
@@ -100,18 +103,84 @@ def check_course(course: Path) -> tuple[list[str], list[str]]:
                 warnings.append(f"⚠️  {rel}: Student ID {sid} is on {n} rows. The web shows it once and a save sets "
                                 f"{rows}.")
 
-    xlsx = sorted(f"data/{p.name}" for p in (course / "data").glob("*.xlsx")
+    xlsx = sorted(f"data/{p.name}" for folder in (folders or [course]) for p in (Path(folder) / "data").glob("*.xlsx")
                   if not p.name.endswith("attendance.xlsx") and not p.name.startswith(("~$", ".")))
     if xlsx:
         files = f" {xlsx[0]}. " if len(xlsx) == 1 else "".join(f"\n     {f}" for f in xlsx) + "\n   "
         raise Refused(f"❌ grade_web reads score files as CSV only:{files}Keep those scores in a .csv file, then "
                       "push again. Nothing on Drive was changed.")
 
-    plan = attendance.plan(course)
-    if plan is not None and plan.has_changes():
-        raise Refused("\n".join(["❌ The attendance xlsx and csv differ: run `grader sync` first, then grader "
-                                 "web-push again. Nothing on Drive was changed."] + attendance.describe(plan)))
+    for folder in folders or [course]:
+        plan = attendance.plan(folder)
+        if plan is not None and plan.has_changes():
+            raise Refused("\n".join(["❌ The attendance xlsx and csv differ: run `grader sync` first, then grader "
+                                     "web-push again. Nothing on Drive was changed."] + attendance.describe(plan)))
     return list(dict.fromkeys(ids)), warnings
+
+
+# ---- a course with section folders, as one course --------------------------------------------------------------
+def _merge_docs(docs: list) -> CsvText:
+    """Rows of several sections' files of one category in one table: the headers of all (new ones before the total
+    column), each row under its own headers; a Max/Full Score row only from the first file."""
+    header = list(docs[0].header)
+    names = [h.strip() for h in header]
+    for d in docs[1:]:
+        for h in d.header:
+            if h.strip() not in names:
+                at = next((i for i, n in enumerate(names) if is_total(n)), len(names))
+                header.insert(at, h)
+                names.insert(at, h.strip())
+    rows = []
+    for n, d in enumerate(docs):
+        where = [names.index(h.strip()) for h in d.header]
+        si = d.col("Student ID")
+        for r in d.rows:
+            sid = r[si].strip().lower() if si is not None else ""
+            if n and sid in SENTINELS:
+                continue
+            out = [""] * len(header)
+            for j, v in enumerate(r):
+                if j < len(where):
+                    out[where[j]] = v
+            rows.append(out)
+    return CsvText(header, rows, docs[0].bom, docs[0].eol)
+
+
+def merged_copy(course: Path, into: Path) -> Path:
+    """
+    A course with section folders as one flat course under `into`: the shared config (its sections without their
+    folders, so the copy is flat), a roster of every section with a `Section` column, and data/<prefix>_<category>.csv
+    holding every section's rows. Returns the copy's folder.
+    """
+    from src.course import at
+    from src.sections import roster_file
+    from src.split import suffix_of
+    c = at(course)
+    stage = Path(into) / c.root.name
+    (stage / "course_info").mkdir(parents=True)
+    (stage / "data").mkdir()
+    config = c.config()
+    config["sections"] = {num: {k: v for k, v in (e or {}).items() if k != "folder"}
+                          for num, e in (config.get("sections") or {}).items()}
+    from src.split import dump_yaml
+    dump_yaml(stage / "course_info" / c.config_path.name, config)
+    rosters = []
+    for s in c.sections:
+        r = roster_file(s.path)
+        if r is not None:
+            doc = read_csv_text(r)
+            keep = [i for i, h in enumerate(doc.header) if h.strip() != "Section"]
+            rosters.append(CsvText([doc.header[i] for i in keep] + ["Section"],
+                                   [[row[i] for i in keep] + [s.num] for row in doc.rows], doc.bom, doc.eol))
+    if rosters:
+        write_csv_text(stage / "course_info" / f"{c.prefix}_student_info.csv", _merge_docs(rosters))
+    groups = {}
+    for s in c.sections:
+        for p in data_csvs(s.path):
+            groups.setdefault(suffix_of(p.name, s.prefix), []).append(read_csv_text(p))
+    for suffix, docs in groups.items():
+        write_csv_text(stage / "data" / f"{c.prefix}_{suffix}", _merge_docs(docs))
+    return stage
 
 
 # ---- course.json ---------------------------------------------------------------------------------------------------
@@ -217,13 +286,23 @@ def _unpulled_lines(lines: list[dict]) -> list[str]:
 
 def push(course: Path, root: Path, force: bool = False, semester: str | None = None) -> None:
     """Prints as it goes. Raises Refused (nothing written) when the course or the Drive copy isn't ready."""
+    from src.course import at
     course = Path(course).resolve()
+    c = at(course)
+    if c is None or not c.layout:
+        return _push(course, course, root, force, semester, None)
+    with tempfile.TemporaryDirectory() as tmp:  # every section, as one course (from the course or a section folder)
+        return _push(c.root, merged_copy(c.root, Path(tmp)), root, force, semester, [s.path for s in c.sections])
+
+
+def _push(course: Path, src: Path, root: Path, force: bool, semester: str | None, folders: list | None) -> None:
+    """The push of `course`, its files read from `src` (the course, or its merged copy)."""
     mirror, old = webdrive.place_of(root, course, semester)
     old = webdrive.old_copy(mirror, old)
     print(f"🔄 Web push: {course.name} → {webdrive.shown(root, mirror)}")
     for copy in (mirror, old) if old else (mirror,):  # Drive for Desktop not running (SPEC_drive_unreadable.md)
         webdrive.check_readable(copy)
-    ids, warnings = check_course(course)
+    ids, warnings = check_course(src, folders)
     for w in warnings:
         print(w)
 
@@ -257,9 +336,9 @@ def push(course: Path, root: Path, force: bool = False, semester: str | None = N
         except (OSError, ValueError):
             earlier = None
 
-    roster = roster_of(course)
-    data = data_csvs(course)
-    course_json = _staged_course_json(course, roster, data)
+    roster = roster_of(src)
+    data = data_csvs(src)
+    course_json = _staged_course_json(src, roster, data)
     from src.rename import renamed_from
     before = renamed_from(course)
     if before:  # the names it had, so grade_web carries drafts and choices over (SPEC_sections.md R2)
@@ -281,11 +360,11 @@ def push(course: Path, root: Path, force: bool = False, semester: str | None = N
     if earlier and earlier.get("pushed_at"):
         print(f"   Replacing the copy pushed {fmt_time(earlier['pushed_at'])}.")
 
-    pushed = [roster.relative_to(course).as_posix()] + [f"data/{p.name}" for p in data]
+    pushed = [roster.relative_to(src).as_posix()] + [f"data/{p.name}" for p in data]
     for rel in pushed:
         target = mirror / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_bytes(target, (course / rel).read_bytes())
+        atomic_write_bytes(target, (src / rel).read_bytes())
     atomic_write_bytes(mirror / "course.json", _jtext(course_json))
     journal = mirror / webdrive.JOURNAL
     new_journal = not journal.exists()

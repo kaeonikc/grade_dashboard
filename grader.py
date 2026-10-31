@@ -29,6 +29,14 @@ def sanitize_for_path(name: str) -> str:
 
 _ABBR = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]{0,29}$')
 _CLASSLIST_ABBR = re.compile(r'^repclasslist_(.+)\.(xls|xlsx|csv)$', re.IGNORECASE)
+# repclasslist_<abbr>_sec<N>.xls: one section's class list of a course with section folders (SPEC_section_folders.md)
+_CLASSLIST_SEC = re.compile(r'^repclasslist_(.+?)[_-]sec(\d+)\.(xls|xlsx|csv)$', re.IGNORECASE)
+
+
+def _name_section(path) -> str | None:
+    """The section number in a class list's file name (`repclasslist_Astro_sec51.xls` → '51'), or None."""
+    m = _CLASSLIST_SEC.match(Path(path).name)
+    return m.group(2) if m else None
 
 def _resolve_abbr(abbr, input_file, course_id, course_name, sec_num) -> tuple[str, str]:
     """
@@ -42,7 +50,10 @@ def _resolve_abbr(abbr, input_file, course_id, course_name, sec_num) -> tuple[st
     for one in inputs:
         name = Path(one).name
         m = _CLASSLIST_ABBR.match(name)
-        if m and _ABBR.match(m.group(1)):
+        sec = _CLASSLIST_SEC.match(name)
+        if sec and _ABBR.match(sec.group(1)):
+            found.append(sec.group(1))  # repclasslist_Astro_sec51.xls → Astro
+        elif m and _ABBR.match(m.group(1)):
             found.append(m.group(1))
         elif m:
             print(f"⚠️ '{name}': '{m.group(1)}' can't be an abbreviation (ASCII letters, digits, _ and - only); ignoring it.")
@@ -550,9 +561,13 @@ def create_empty_category_csv(category: str, columns: list, student_registry: pd
 
 def init_course(course_name: str, term_name: str, course_id: str, input_file=None, abbr: str = None):
     if isinstance(input_file, (list, tuple)):
-        if len(input_file) > 1:
-            return _init_sections(course_name, term_name, course_id, list(input_file), abbr)
-        input_file = input_file[0] if input_file else None
+        files = list(input_file)
+        # several class lists, or one named repclasslist_<abbr>_sec<N>: a course with section folders
+        if len(files) > 1 or (files and _name_section(files[0])):
+            return _init_sections(course_name, term_name, course_id, files, abbr)
+        input_file = files[0] if files else None
+    elif input_file and _name_section(input_file):
+        return _init_sections(course_name, term_name, course_id, [input_file], abbr)
     if input_file:
         input_path = Path(input_file)
         if not input_path.exists():
@@ -608,7 +623,6 @@ def init_course(course_name: str, term_name: str, course_id: str, input_file=Non
         metadata, clean_df = convert_excel_to_csv_and_yaml(input_path, csv_path=csv_path, yaml_path=temp_yaml_path)
 
         create_merged_config(metadata, config_path)
-        _write_sections_config(config_path, [metadata])
         if temp_yaml_path.exists():
             temp_yaml_path.unlink()
 
@@ -656,22 +670,14 @@ grade_boundaries:
         print(f"✅ Successfully created course structure at: {base_dir}")
         print(f"Modify the '{config_path}' file to set up your rules!")
 
-def _write_sections_config(config_path: Path, metas: list[dict]) -> dict:
-    """Adds each class list's section (and schedule) to config.yaml's `sections:` (SPEC_sections.md)."""
-    from src.sections import sort_sections
-    cfg = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-    secs = sort_sections(m.get('sec_num') for m in metas if not str(m.get('sec_num', '')).startswith('Unknown_'))
-    if not secs:
-        return cfg
-    for m in metas:
-        cfg = _merge_sections_config(cfg, m, secs)
-    with open(config_path, 'w', encoding='utf-8') as f:
-        yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-    return cfg
-
 def _init_sections(course_name, term_name, course_id, input_files: list[str], abbr: str = None):
-    """`grader init -i a.xls -i b.xls`: one course folder <term>_<abbr>_SEC_51-52 for every section's class list."""
-    from src.sections import norm_id, sort_sections, counts
+    """
+    `grader init -i a_sec51.xls -i a_sec52.xls`: one course folder <term>_<abbr>/ with the shared config, and a
+    sub-folder sec<N>/ per class list holding that section's roster, score files and attendance sheet
+    (SPEC_section_folders.md).
+    """
+    from src.sections import norm_id, sort_sections
+    from src.split import layout_config
     lists = [_read_class_list(f) for f in input_files]
     first_path, first, _ = lists[0]
     for path, meta, _ in lists[1:]:
@@ -680,92 +686,108 @@ def _init_sections(course_name, term_name, course_id, input_files: list[str], ab
                   f"{first.get('course_id')} ({first.get('term')}): one course's sections only. Nothing was created.")
             sys.exit(1)
     secs = [str(meta.get('sec_num')) for _, meta, _ in lists]
-    if any(s.startswith('Unknown_') for s in secs):
-        bad = next(path.name for path, meta, _ in lists if str(meta.get('sec_num')).startswith('Unknown_'))
-        print(f"❌ {bad}: no section number (Sec NN) found. Nothing was created.")
-        sys.exit(1)
+    for path, meta, _ in lists:
+        sec = str(meta.get('sec_num'))
+        if sec.startswith('Unknown_'):
+            print(f"❌ {path.name}: no section number (Sec NN) found. Nothing was created.")
+            sys.exit(1)
+        named = _name_section(path)
+        if named is not None and named != sec:
+            print(f"❌ {path.name} says sec{named} in its name, but the class list inside is Sec {sec}. Rename the "
+                  "file or check you have the right one. Nothing was created.")
+            sys.exit(1)
     if len(set(secs)) < len(secs):
         dup = next(s for s in secs if secs.count(s) > 1)
         print(f"❌ Two class lists are section {dup}. Nothing was created.")
         sys.exit(1)
 
-    ordered = sorted(lists, key=lambda t: sort_sections(secs).index(str(t[1].get('sec_num'))))
-    metas = [meta for _, meta, _ in ordered]
-    head = metas[0]
+    sections = sort_sections(secs)
+    ordered = sorted(lists, key=lambda t: sections.index(str(t[1].get('sec_num'))))
+    head = ordered[0][1]
     term_name = term_name or head.get('term')
     course_id = course_id or head.get('course_id')
     course_name = course_name or head.get('course_name')
-    sections = sort_sections(secs)
     abbr, source = _resolve_abbr(abbr, input_files, course_id, course_name, ", ".join(sections))
-    prefix = f"{term_name}_{abbr}_SEC_{'-'.join(sections)}"
+    prefix = f"{term_name}_{abbr}"
     base_dir = Path(prefix)
     if base_dir.exists():
         print(f"❌ Directory '{base_dir}' already exists. Use 'grader update -i <class list>' to update it.")
         sys.exit(1)
 
-    course_info_dir = base_dir / "course_info"
-    for d in (course_info_dir, base_dir / "data", base_dir / "reports"):
-        d.mkdir(parents=True)
-
-    roster = []
-    for _, meta, students in ordered:
-        students = students.copy()
-        students['Section'] = str(meta.get('sec_num'))
-        roster.append(students)
-    roster = pd.concat(roster, ignore_index=True).drop_duplicates('Student ID', keep='last')
-    roster = roster[['Student ID', 'Name', 'Class Group', 'Section']].sort_values('Student ID').reset_index(drop=True)
-    csv_path = course_info_dir / f"{prefix}_student_info.csv"
-    roster.to_csv(csv_path, index=False)
-
-    config_path = course_info_dir / f"{prefix}_config.yaml"
+    for d in ("course_info", "history", "reports"):
+        (base_dir / d).mkdir(parents=True)
+    config_path = base_dir / "course_info" / f"{prefix}_config.yaml"
     create_merged_config({**head, 'term': term_name, 'course_id': course_id, 'course_name': course_name}, config_path)
-    _write_sections_config(config_path, metas)
+    flat = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    flat['sections'] = {str(m.get('sec_num')): {k: copy.deepcopy(m.get(k)) for k in ('class_schedule', 'exam_schedule')}
+                        for _, m, _ in ordered}
+    from src.split import dump_yaml
+    dump_yaml(config_path, layout_config(flat, sections))
 
-    att_path = base_dir / "data" / f"{prefix}_attendance.xlsx"
-    save_attendance_excel(att_path, roster, calculate_class_dates('', '', ''))
-    _attendance_csv(base_dir)
+    made = []
+    for _, meta, students in ordered:
+        sec = str(meta.get('sec_num'))
+        n = _make_section(base_dir, sec, students)
+        made.append(f"sec{sec} ({n} students)")
 
     note = f"   (abbreviation {abbr} from the file names)" if source == "file name" else ""
-    print(f"✅ Successfully created course structure at: {base_dir}{note}")
-    print(f"✅ Generated student list at: {csv_path} ({len(roster)} students: {counts(dict(zip(roster['Student ID'], roster['Section'])))})")
-    print(f"✅ Generated config at: {config_path} (sections: {', '.join(sections)})")
-    print(f"✅ Generated initial attendance sheet at: {att_path}")
+    print(f"✅ {base_dir}/: {', '.join(made)}{note}")
+    print(f"✅ Shared config: {config_path}")
+
+
+def _make_section(root: Path, sec: str, students: pd.DataFrame, entry=None) -> int:
+    """
+    A section's folder in a course with section folders: its roster, empty score files from the shared config, and
+    an attendance sheet with dates from its own schedule. The config must list the section already. Returns the
+    number of students.
+    """
+    from src.course import at, config_for
+    section = at(root).section(sec)
+    unit, sp = section.path, section.prefix
+    for d in ("course_info", "data", "reports"):
+        (unit / d).mkdir(parents=True, exist_ok=True)
+    roster = students.copy()
+    roster['Student ID'] = roster['Student ID'].astype(str).str.strip()
+    for col in ('Name', 'Class Group'):
+        if col not in roster.columns:
+            roster[col] = ''
+    roster = roster[['Student ID', 'Name', 'Class Group']].drop_duplicates('Student ID', keep='last')
+    roster = roster.sort_values('Student ID').reset_index(drop=True)
+    roster.to_csv(unit / "course_info" / f"{sp}_student_info.csv", index=False)
+    _mkdb_unit(unit, quiet=True)
+    cfg = config_for(unit)
+    sch = cfg.get('class_schedule') if isinstance(cfg.get('class_schedule'), dict) else {}
+    class_cols = calculate_class_dates(cfg.get('term_start_date', '') or '', sch.get('day', ''), cfg.get('exam_schedule', '') or '')
+    att_path = unit / "data" / f"{sp}_attendance.xlsx"
+    save_attendance_excel(att_path, roster, class_cols)
+    _attendance_csv(unit, entry)
+    return len(roster)
 
 def mkdb_course(config_file: str = None, input_alias: str = None):
-    cfg_path = None
-    if config_file:
-        cfg_path = Path(config_file)
-    elif input_alias:
-        cfg_path = Path(input_alias)
-    else:
-        # Auto-detect if inside course folder
-        info_dir = Path("course_info")
-        if info_dir.is_dir():
-            config_files = [f for f in info_dir.iterdir() if f.is_file() and f.name.endswith("_config.yaml") and not f.name.endswith(".bak")]
-            if config_files:
-                cfg_path = config_files[0]
-                print(f"🔍 Auto-detected configuration file: {cfg_path}")
-                
+    cfg_path = _config_here(config_file or input_alias)
     if not cfg_path or not cfg_path.exists():
         print("❌ Error: Configuration file not specified or not found.")
         print("Please provide the path to the config file or run the command from inside the course directory.")
         sys.exit(1)
-        
-    course_dir = cfg_path.resolve().parent.parent
+    from src.course import at
+    course = at(cfg_path)
+    for section in course.sections:  # every section folder (SPEC_section_folders.md), or the flat course
+        if course.layout:
+            print(f"── sec {section.num} ({section.path.name}/) ──")
+        _mkdb_unit(section.path)
+
+
+def _mkdb_unit(course_dir: Path, quiet: bool = False):
+    """`grader mkdb` for one folder of rosters and data/: the config's score files that don't exist yet."""
+    say = (lambda *a, **k: None) if quiet else print
+    course_dir = Path(course_dir).resolve()
     info_dir = course_dir / "course_info"
     data_dir = course_dir / "data"
-    
-    # Load config yaml
-    try:
-        with open(cfg_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f) or {}
-    except Exception as e:
-        print(f"❌ Error loading config YAML: {e}")
-        sys.exit(1)
-        
+    from src.course import config_for
+    config = config_for(course_dir)
     data_mapping = config.get("data_mapping", {})
     if not data_mapping:
-        print(f"⚠️ Warning: 'data_mapping' not found or empty in {cfg_path.name}.")
+        say("⚠️ Warning: 'data_mapping' not found or empty in the config.")
         return
         
     # Locate student info CSV
@@ -806,9 +828,9 @@ def mkdb_course(config_file: str = None, input_alias: str = None):
             # grade-tui, so never blindly overwrite it with a blank template.
             # Realigning an existing database to config changes is `update`'s
             # job, not mkdb's.
-            print(f"⏭️  {csv_path.name} already exists; leaving it as-is (use `grader update` to realign it with config changes).")
+            say(f"⏭️  {csv_path.name} already exists; leaving it as-is (use `grader update` to realign it with config changes).")
             continue
-        print(f"🛠️ Creating empty score database: {csv_path.name}...")
+        say(f"🛠️ Creating empty score database: {csv_path.name}...")
 
         # Calculate target_total based on category weight or manual total_pts
         weights = config.get("weights", {})
@@ -843,52 +865,14 @@ def mkdb_course(config_file: str = None, input_alias: str = None):
         
         try:
             create_empty_category_csv(category, columns, student_registry, csv_path, default_max, default)
-            print(f"✅ Created {csv_path.name} successfully with default max score {default_max}.")
+            say(f"✅ Created {csv_path.name} successfully with default max score {default_max}.")
         except Exception as e:
             print(f"❌ Error writing {csv_path.name}: {e}")
             
     from src.columns import save_base
     save_base(course_dir)
     _refresh_totals(course_dir, "mkdb")
-    print("🚀 All databases created successfully!")
-
-def _merge_sections_config(config: dict, metadata: dict, sections: list[str]) -> dict:
-    """
-    config.yaml for a class list of section metadata['sec_num'] (SPEC_sections.md): course-wide keys are copied,
-    the section's schedule goes into `sections[<sec>]`, and into the top-level keys (sec_num, class_schedule,
-    exam_schedule: attendance dates come from them) only when it is the first section. Other sections' entries stay.
-    """
-    from src.sections import sort_sections
-    sec = str(metadata.get('sec_num', ''))
-    old = config.get('sections') or {}
-    by_sec = {str(k): v for k, v in old.items()}
-    if config.get('sec_num') not in (None, '') and str(config['sec_num']) not in by_sec:
-        # an older config: its top-level schedule is its own section's
-        by_sec[str(config['sec_num'])] = {k: config.get(k) for k in ('class_schedule', 'exam_schedule')}
-    by_sec[sec] = {k: metadata.get(k) for k in ('class_schedule', 'exam_schedule')}
-    order = sort_sections(set(by_sec) | set(sections))
-    first = order[0] if order else sec
-
-    out = {}
-    for key, val in config.items():
-        out[key] = val
-    for key in ('course_id', 'course_name', 'term', 'teacher', 'credits', 'university', 'campus', 'program'):
-        if key in metadata:
-            out[key] = metadata[key]
-    out['sec_num'] = first
-    for key in ('class_schedule', 'exam_schedule'):
-        out[key] = copy.deepcopy(by_sec[first].get(key))  # a copy: yaml would write a shared dict as &id001
-    secs = {s: by_sec[s] for s in order if s in by_sec}
-    if 'sections' in out:
-        out['sections'] = secs
-        return out
-    placed = {}
-    for key, val in out.items():  # a new `sections:` goes right after the schedules it extends
-        placed[key] = val
-        if key == 'exam_schedule':
-            placed['sections'] = secs
-    placed.setdefault('sections', secs)
-    return placed
+    say("🚀 All databases created successfully!")
 
 def _read_class_list(input_file: str):
     """(path, metadata, students) of a class list, or exit with the reason."""
@@ -922,26 +906,14 @@ def _read_course_config(course_dir: Path) -> dict:
             return {}
     return {}
 
-def _old_roster(csv_path: Path, sec_num) -> pd.DataFrame:
-    """The roster as it is, with a Section column (an older roster's students are in the config's sec_num)."""
-    cols = ['Student ID', 'Name', 'Class Group', 'Section']
-    if not csv_path.exists():
-        return pd.DataFrame(columns=cols)
-    try:
-        df = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
-        df.columns = df.columns.astype(str).str.strip()
-    except Exception as e:
-        print(f"⚠️ Warning: Could not read old student CSV, overwriting instead: {e}")
-        return pd.DataFrame(columns=cols)
-    for c in cols:
-        if c not in df.columns:
-            df[c] = str(sec_num or '') if c == 'Section' else ''
-    df['Student ID'] = df['Student ID'].astype(str).str.strip()
-    return df[cols]
-
 def _update_roster(input_file: str, yes: bool = False):
-    """`grader update -i <class list>`: merge one section's class list into its course (SPEC_sections.md)."""
-    from src.sections import counts, sort_sections
+    """
+    `grader update -i <class list>`: merge one section's class list into its course. A course with section folders
+    gets it in that section's folder (a new section: a new folder, after asking); a flat course merges it as before,
+    or, for another section, moves into section folders first (SPEC_section_folders.md).
+    """
+    from src.course import at
+    from src.sections import section_column, sections_of
     input_path, metadata, new_df = _read_class_list(input_file)
     term_name = metadata.get('term')
     course_id = metadata.get('course_id')
@@ -952,168 +924,234 @@ def _update_roster(input_file: str, yes: bool = False):
         print("❌ Error: Could not parse required metadata (term, course_id, sec_num) from input file.")
         sys.exit(1)
     sec_num = str(sec_num)
+    named = _name_section(input_path)
+    if named is not None and named != sec_num:
+        print(f"❌ {input_path.name} says sec{named} in its name, but the class list inside is Sec {sec_num}. "
+              "Nothing changed.")
+        sys.exit(1)
 
-    # Automatic detection of target folder
+    # The course: the one we're in (a section folder counts), else found by term + course ID
     if Path("course_info").is_dir():
-        target_dir = Path(".")
+        course = at(Path("."))
         print("🔍 Detected running from inside a course grading directory.")
-        cfg_here = _read_course_config(target_dir)
+        cfg_here = course.config() if course else {}
         if cfg_here and not _same_course(cfg_here, term_name, course_id, course_name):
             print(f"❌ {input_path.name} is {course_id} {course_name} ({term_name}), but this folder is "
                   f"{cfg_here.get('course_id')} {cfg_here.get('course_name')} ({cfg_here.get('term')}). Nothing changed.")
             print("   Run grader update -i from the course folder it belongs to (or from its term folder).")
             sys.exit(1)
     else:
-        target_dir = find_course_dir(term_name, course_id, sec_num, course_name)
-
-    if not target_dir or not target_dir.exists():
+        found = find_course_dir(term_name, course_id, sec_num, course_name)
+        course = at(found) if found else None
+    if course is None:
         print(f"❌ Target grading directory for term={term_name}, course_id={course_id}, sec_num={sec_num} does not exist.")
         print(f"Please run 'grader init -i {input_file}' first to initialize the course.")
         sys.exit(1)
 
-    info_dir = target_dir / "course_info"
-    if not info_dir.is_dir():
-        print(f"❌ '{info_dir}' is not a directory.")
+    if course.layout:
+        return _update_section_roster(course, input_path, metadata, new_df, sec_num, input_file, yes)
+
+    # A flat course
+    column = section_column(course.root)
+    if len(sections_of(column)) >= 2:
+        print(f"❌ {course.root.name} keeps several sections in one folder (its roster's Section column). "
+              "Run grader split first, then grader update -i again. Nothing changed.")
         sys.exit(1)
-
-    name_for_path = sanitize_for_path(course_name) or sanitize_for_path(course_id)
-    config_files = [f for f in info_dir.iterdir() if f.is_file() and f.name.endswith("_config.yaml") and not f.name.endswith(".bak")]
-    if config_files:
-        config_path = config_files[0]
-        # The course's own prefix (from its config file name), so a course named after its abbreviation
-        # (or an older Thai name) never gets a second, differently named roster.
-        csv_path = info_dir / f"{get_course_file_prefix(target_dir)}_student_info.csv"
-    else:
-        config_path = info_dir / f"{term_name}_{name_for_path}_SEC_{sec_num}_config.yaml"
-        csv_path = info_dir / f"{term_name}_{name_for_path}_SEC_{sec_num}_student_info.csv"
-
-    existing_config = {}
-    if config_path.exists():
+    flat_sec = str(course.config().get('sec_num') or '').strip()
+    if flat_sec and flat_sec != sec_num:
+        from src.split import layout_name
+        new_name = layout_name(course.root.name, [flat_sec, sec_num]) or "<term>_<abbr>"
+        print(f"🔍 {course.root.name} is {course_id} {course_name}, section {flat_sec}")
+        print(f"   Adding section {sec_num} moves it into section folders: {new_name}/sec{flat_sec}/ and sec{sec_num}/")
+        if not _confirm_add(f"Add section {sec_num} ({len(new_df)} students) to this course?", yes, sec_num,
+                            course.root.name, input_file):
+            return
+        from src import split
+        roster_ids = set(pd.read_csv(next((course.root / "course_info").glob("*_student_info.csv")), dtype=str,
+                                     keep_default_na=False)['Student ID'].astype(str).str.strip())
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                existing_config = yaml.safe_load(f) or {}
-        except Exception as e:
-            print(f"⚠️ Error reading existing config, starting fresh: {e}")
+            new_root = split.split(course.root, secmap={sid: flat_sec for sid in roster_ids if sid})
+        except split.Refused as e:
+            print(e)
+            sys.exit(1)
+        print(f"📁 {course.root.name} → {new_root.name}/sec{flat_sec}/ (the old folder is {course.root.name}{split.BEFORE})")
+        print(f"   Your shell is still in the old path: cd {new_root}")
+        return _update_section_roster(at(new_root), input_path, metadata, new_df, sec_num, input_file, yes=True)
+    return _update_flat_roster(course.root, input_path, metadata, new_df, sec_num)
 
-    old_df = _old_roster(csv_path, existing_config.get('sec_num'))
-    known = set(sort_sections(old_df['Section'])) | _config_sections(existing_config)
-    folder = target_dir.resolve().name
-    added = bool(known) and sec_num not in known
-    if added:
-        print(f"🔍 {folder} is {course_id} {course_name}, sections: {', '.join(sort_sections(known))}")
-        question = f"❓ Add section {sec_num} ({len(new_df)} students) to this course?"
-        if not yes:
-            if not sys.stdin.isatty():
-                print(f"❌ Section {sec_num} isn't in {folder} yet, and there's no terminal to ask on. Nothing changed.")
-                print(f"   To add it: grader update -i {input_file} -y")
-                sys.exit(1)
-            if input(f"{question} [y/N] ").strip().lower() not in ("y", "yes"):
-                print("Nothing changed.")
-                return
 
-    # Back up existing files (one history/ entry for `grader undo`, the attendance sync's writes included, plus
-    # the old .bak copies)
+def _confirm_add(question: str, yes: bool, sec_num: str, folder: str, input_file: str) -> bool:
+    if yes:
+        return True
+    if not sys.stdin.isatty():
+        print(f"❌ Section {sec_num} isn't in {folder} yet, and there's no terminal to ask on. Nothing changed.")
+        print(f"   To add it: grader update -i {input_file} -y")
+        sys.exit(1)
+    if input(f"❓ {question} [y/N] ").strip().lower() not in ("y", "yes"):
+        print("Nothing changed.")
+        return False
+    return True
+
+
+COURSE_KEYS = ('course_id', 'course_name', 'term', 'teacher', 'credits', 'university', 'campus', 'program')
+
+
+def _merge_roster(old_csv: Path, new_df: pd.DataFrame, cols: list[str]) -> tuple[pd.DataFrame, int]:
+    """The roster at old_csv with new_df's students merged in (nobody removed; the class list wins); (roster, old size)."""
+    if old_csv.exists():
+        old_df = pd.read_csv(old_csv, dtype=str, keep_default_na=False)
+        old_df.columns = old_df.columns.astype(str).str.strip()
+    else:
+        old_df = pd.DataFrame(columns=cols)
+    for c in cols:
+        if c not in old_df.columns:
+            old_df[c] = ''
+        if c not in new_df.columns:
+            new_df[c] = ''
+    old_df['Student ID'] = old_df['Student ID'].astype(str).str.strip()
+    merged = pd.merge(old_df[cols], new_df[cols], on='Student ID', how='outer', suffixes=('_old', '_new'))
+    for c in cols[1:]:
+        merged[c] = merged[f'{c}_new'].fillna(merged[f'{c}_old']).fillna('')
+    merged = merged[cols].sort_values(by='Student ID').reset_index(drop=True)
+    return merged, len(old_df)
+
+
+def _update_section_roster(course, input_path: Path, metadata: dict, new_df: pd.DataFrame, sec_num: str,
+                           input_file: str, yes: bool = False):
+    """`update -i` into a course with section folders: that section's roster, or a new section folder."""
+    from src.course import at, config_for
     from src.history import Entry
+    from src.sections import counts, roster_sections
+    from src.split import dump_yaml, move_students
+    root = course.root
+    section = course.section(sec_num)
+    added = section is None
+    if added:
+        print(f"🔍 {root.name} is {metadata.get('course_id')} {metadata.get('course_name')}, sections: "
+              f"{', '.join(s.num for s in course.sections)}")
+        if not _confirm_add(f"Add section {sec_num} ({len(new_df)} students) to {root.name}?", yes, sec_num,
+                            root.name, input_file):
+            return
+
+    entry = Entry(root, "grader", "update-roster", note=str(input_path.name))
+    entry.capture(course.config_path)
+    cfg = course.config()
+    for key in COURSE_KEYS:
+        if key in metadata:
+            cfg[key] = metadata[key]
+    secs = {str(k): v for k, v in (cfg.get('sections') or {}).items()}
+    mine = dict(secs.get(sec_num) or {})
+    mine.setdefault('folder', f"sec{sec_num}")
+    for key in ('class_schedule', 'exam_schedule'):
+        if metadata.get(key) is not None:
+            mine[key] = copy.deepcopy(metadata[key])
+    secs[sec_num] = mine
+    from src.sections import sort_sections
+    cfg['sections'] = {s: secs[s] for s in sort_sections(secs)}
+    dump_yaml(course.config_path, cfg)
+
+    # Students found in another section's roster move here, with their scores and marks (the class list wins)
+    before = roster_sections(root)
+    new_ids = set(new_df['Student ID'].astype(str).str.strip())
+    movers = {}
+    for sid in sorted(new_ids):
+        if before.get(sid) and before[sid] != sec_num:
+            movers.setdefault(before[sid], []).append(sid)
+
+    course = at(root)
+    unit = course.section(sec_num)
+    if added and not (unit.path / "course_info").is_dir():
+        n = _make_section(root, sec_num, new_df, entry)
+        print(f"✅ Created {unit.path.name}/: {n} students, score files and an attendance sheet")
+    else:
+        csv_path = unit.path / "course_info" / f"{unit.prefix}_student_info.csv"
+        att_files = sorted((unit.path / "data").glob("*attendance.*")) if (unit.path / "data").is_dir() else []
+        for f in [csv_path, *att_files]:
+            entry.capture(f)
+        merged, old_n = _merge_roster(csv_path, new_df.copy(), ['Student ID', 'Name', 'Class Group'])
+        merged.to_csv(csv_path, index=False)
+        print(f"✅ Merged sec {sec_num} roster: {len(merged)} students (added {len(merged) - old_n})")
+        cfg_unit = config_for(unit.path)
+        sch = cfg_unit.get('class_schedule') if isinstance(cfg_unit.get('class_schedule'), dict) else {}
+        class_cols = calculate_class_dates(cfg_unit.get('term_start_date', '') or '', sch.get('day', ''),
+                                           cfg_unit.get('exam_schedule', '') or '')
+        att_path = unit.path / "data" / f"{unit.prefix}_attendance.xlsx"
+        try:
+            _attendance_rows(unit.path, att_path, merged, class_cols, entry)
+        except Exception as e:
+            print(f"⚠️ Warning: Could not update attendance spreadsheet: {e}")
+    for old_sec, sids in movers.items():
+        src_unit = course.section(old_sec)
+        moved = move_students(src_unit.path, unit.path, sids, entry)
+        for sid in sids:
+            print(f"⚠️ {sid} moves sec {old_sec} → {sec_num} ({input_path.name}; {moved.get(sid, 0)} score/mark cells moved)")
+    entry.close()
+    print(f"✅ Roster: {sum(1 for _ in roster_sections(root))} students ({counts(roster_sections(root))})")
+    if added:
+        print(f"✅ config.yaml sections: {', '.join(s.num for s in at(root).sections)}")
+    print("🚀 Course update completed successfully!")
+    from src import rename
+    if not all(_score_files_complete(s.path) for s in at(root).sections):
+        print("ℹ️  Run grader update (no -i) to add the new students' rows to the score files"
+              " (it then offers to push to the web copy).")
+    elif added or movers:
+        rename.offer_push(root, yes, f"section {sec_num} added" if added else "students moved")
+
+
+def _update_flat_roster(target_dir: Path, input_path: Path, metadata: dict, new_df: pd.DataFrame, sec_num: str):
+    """`update -i` into a flat one-section course: its roster merged, as before section folders."""
+    from src.history import Entry
+    info_dir = target_dir / "course_info"
+    config_path = next(f for f in sorted(info_dir.glob("*_config.yaml")))
+    csv_path = info_dir / f"{get_course_file_prefix(target_dir)}_student_info.csv"
     entry = Entry(target_dir, "grader", "update-roster", note=str(input_path.name))
     attendance_files = sorted((target_dir / "data").glob("*attendance.*")) if (target_dir / "data").is_dir() else []
     for f in [config_path, csv_path, *attendance_files]:
         entry.capture(f)
-    if config_path.exists():
-        shutil.copy2(config_path, config_path.with_suffix(".yaml.bak"))
-        print(f"📦 Backed up configuration to: {config_path.with_suffix('.yaml.bak').name}")
+    shutil.copy2(config_path, config_path.with_suffix(".yaml.bak"))
+    print(f"📦 Backed up configuration to: {config_path.with_suffix('.yaml.bak').name}")
+    cols = ['Student ID', 'Name', 'Class Group']
     if csv_path.exists():
         shutil.copy2(csv_path, csv_path.with_suffix(".csv.bak"))
         print(f"📦 Backed up student info to: {csv_path.with_suffix('.csv.bak').name}")
-
-    # Merge student info CSV: this class list's students are in its section (a student found in another
-    # section's list moves: the file wins)
-    new_df['Section'] = sec_num
-    before = dict(zip(old_df['Student ID'], old_df['Section']))
-    merged_df = pd.merge(old_df, new_df, on='Student ID', how='outer', suffixes=('_old', '_new'))
-    for col in ('Name', 'Class Group', 'Section'):
-        merged_df[col] = merged_df[f'{col}_new'].fillna(merged_df[f'{col}_old']).fillna('')
-    merged_df = merged_df[['Student ID', 'Name', 'Class Group', 'Section']]
-    merged_df = merged_df.sort_values(by='Student ID').reset_index(drop=True)
-    for sid in new_df['Student ID']:
-        if before.get(sid) and before[sid] != sec_num:
-            print(f"⚠️ {sid} moves sec {before[sid]} → {sec_num} ({input_path.name})")
-
+        head = pd.read_csv(csv_path, nrows=0).columns.astype(str).str.strip()
+        if 'Section' in head:  # a roster written with a Section column keeps it (one value)
+            cols.append('Section')
+            new_df['Section'] = sec_num
+    merged_df, old_n = _merge_roster(csv_path, new_df, cols)
     merged_df.to_csv(csv_path, index=False)
-    secmap = dict(zip(merged_df['Student ID'], merged_df['Section']))
-    sections = sort_sections(secmap.values())
-    blank = sum(1 for v in secmap.values() if not v)
-    if len(sections) >= 2 and blank:
-        print(f"⚠️ {blank} student(s) in the roster have no section: they show only under All. "
-              f"Fill their Section in {csv_path.name}.")
-    by_sec = f" ({counts(secmap)})" if len(sections) >= 2 else ""
-    print(f"✅ Merged student list. Total students now: {len(merged_df)}{by_sec} "
-          f"(Added {len(merged_df) - len(old_df)} new students)")
+    print(f"✅ Merged student list. Total students now: {len(merged_df)} (Added {len(merged_df) - old_n} new students)")
 
-    # Merge config metadata
-    if config_path.exists():
-        existing_config = _merge_sections_config(existing_config, metadata, sections)
-        if 'term_start_date' not in existing_config:
-            existing_config['term_start_date'] = ''
-
-        if 'weights' not in existing_config:
-            existing_config['weights'] = {'attendance': 0.10, 'homework': 0.20, 'midterm': 0.30, 'final': 0.40}
-        else:
-            if 'attendance' not in existing_config['weights']:
-                existing_config['weights']['attendance'] = 0.10
-                if 'final' in existing_config['weights']:
-                    existing_config['weights']['final'] = round(existing_config['weights']['final'] - 0.10, 2)
-
-        if 'data_mapping' not in existing_config:
-            existing_config['data_mapping'] = {'homework': ['hw1', 'hw2'], 'midterm': ['midterm_score'], 'final': ['final_exam']}
-        if 'grade_boundaries' not in existing_config:
-            existing_config['grade_boundaries'] = {'A': 80, 'B+': 75, 'B': 70, 'C+': 65, 'C': 60, 'D+': 55, 'D': 50}
-
-        with open(config_path, 'w', encoding='utf-8') as f:
-            yaml.dump(existing_config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-        print(f"✅ Merged metadata into configuration at: {config_path.name}")
-
-        # Update attendance spreadsheet
-        try:
-            att_filename = f"{get_course_file_prefix(target_dir)}_attendance.xlsx"
-            att_path = target_dir / "data" / att_filename
-
-            sch = existing_config.get('class_schedule', {})
-            weekday = sch.get('day', '') if isinstance(sch, dict) else ''
-            exam_sch = existing_config.get('exam_schedule', '')
-            term_start = existing_config.get('term_start_date', '')
-
-            class_cols = calculate_class_dates(term_start, weekday, exam_sch)
-            _attendance_rows(target_dir, att_path, merged_df, class_cols, entry)
-        except Exception as e:
-            print(f"⚠️ Warning: Could not update attendance spreadsheet: {e}")
-    else:
-        create_merged_config(metadata, config_path)
-        _write_sections_config(config_path, [metadata])
-        print(f"✅ Created configuration at: {config_path.name}")
-
-        # Create fresh attendance spreadsheet with placeholders
-        try:
-            att_filename = f"{get_course_file_prefix(target_dir)}_attendance.xlsx"
-            att_path = target_dir / "data" / att_filename
-            class_cols = calculate_class_dates('', '', '')
-            _attendance_rows(target_dir, att_path, merged_df, class_cols, entry)
-        except Exception as e:
-            print(f"⚠️ Warning: Could not create attendance spreadsheet: {e}")
+    existing_config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    for key in COURSE_KEYS + ('sec_num', 'class_schedule', 'exam_schedule'):
+        if key in metadata and metadata[key] is not None:
+            existing_config[key] = metadata[key]
+    existing_config.pop('sections', None)  # a one-section course has no sections: list
+    existing_config.setdefault('term_start_date', '')
+    if 'weights' not in existing_config:
+        existing_config['weights'] = {'attendance': 0.10, 'homework': 0.20, 'midterm': 0.30, 'final': 0.40}
+    elif 'attendance' not in existing_config['weights']:
+        existing_config['weights']['attendance'] = 0.10
+        if 'final' in existing_config['weights']:
+            existing_config['weights']['final'] = round(existing_config['weights']['final'] - 0.10, 2)
+    existing_config.setdefault('data_mapping', {'homework': ['hw1', 'hw2'], 'midterm': ['midterm_score'], 'final': ['final_exam']})
+    existing_config.setdefault('grade_boundaries', {'A': 80, 'B+': 75, 'B': 70, 'C+': 65, 'C': 60, 'D+': 55, 'D': 50})
+    with open(config_path, 'w', encoding='utf-8') as f:
+        yaml.dump(existing_config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    print(f"✅ Merged metadata into configuration at: {config_path.name}")
+    try:
+        att_path = target_dir / "data" / f"{get_course_file_prefix(target_dir)}_attendance.xlsx"
+        sch = existing_config.get('class_schedule', {})
+        weekday = sch.get('day', '') if isinstance(sch, dict) else ''
+        class_cols = calculate_class_dates(existing_config.get('term_start_date', ''), weekday,
+                                           existing_config.get('exam_schedule', ''))
+        _attendance_rows(target_dir, att_path, merged_df, class_cols, entry)
+    except Exception as e:
+        print(f"⚠️ Warning: Could not update attendance spreadsheet: {e}")
     entry.close()
-
-    if added:
-        print(f"✅ config.yaml sections: {', '.join(sections)}")
+    if len(merged_df) > old_n and any((target_dir / "data").glob("*.csv")):
+        print("ℹ️  Run grader update (no -i) to add the new students' rows to the score files.")
     print(f"🚀 Course update completed successfully!")
-
-    # The folder named after its sections, then the web copy brought up to date (SPEC_sections.md R2-R4)
-    from src import rename
-    course_dir = rename.offer(target_dir, sections, yes, f"grader update -i {input_file}")
-    renamed = course_dir.name != folder
-    if not _score_files_complete(course_dir):
-        print("ℹ️  Run grader update (no -i) to add the new students' rows to the score files"
-              " (it then offers to push to the web copy).")
-    elif added or renamed:
-        rename.offer_push(course_dir, yes, "renamed" if renamed else f"section {sec_num} added")
 
 
 def _score_files_complete(course_dir: Path) -> bool:
@@ -1137,24 +1175,40 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
         return
 
     # 2. Configuration file update mode (if config_file is supplied or auto-detected)
-    cfg_path = None
-    if config_file:
-        cfg_path = Path(config_file)
-    else:
-        # Auto-detect if inside course folder
-        info_dir = Path("course_info")
-        if info_dir.is_dir():
-            config_files = [f for f in info_dir.iterdir() if f.is_file() and f.name.endswith("_config.yaml") and not f.name.endswith(".bak")]
-            if config_files:
-                cfg_path = config_files[0]
-                print(f"🔍 Auto-detected configuration file: {cfg_path}")
-                
+    cfg_path = _config_here(config_file)
     if not cfg_path or not cfg_path.exists():
         print("❌ Error: Configuration file not specified or not found.")
         print("Please provide the path to the config file or run update from inside a course grading directory.")
         sys.exit(1)
-        
-    course_dir = cfg_path.resolve().parent.parent
+
+    # Every section of a course with section folders, each like a flat course (SPEC_section_folders.md)
+    from src.course import at
+    course = at(cfg_path)
+    for section in course.sections:
+        if course.layout:
+            print(f"── sec {section.num} ({section.path.name}/) ──")
+        if _update_unit(section.path, purge_empty_orphans, yes) is False:
+            return
+    if course.layout:
+        print(f"🚀 All {len(course.sections)} sections updated.")
+    from src import rename
+    rename.offer_push(course.root, yes, "new students", only_if_counts_differ=True)
+
+
+def _config_here(config_file: str = None) -> Path | None:
+    """config_file, else the config of the course we're in (a section folder's is its course's)."""
+    if config_file:
+        return Path(config_file)
+    from src.course import config_path
+    found = config_path(Path(".")) if Path("course_info").is_dir() else None
+    if found is not None:
+        print(f"🔍 Auto-detected configuration file: {found}")
+    return found
+
+
+def _update_unit(course_dir: Path, purge_empty_orphans: bool = False, yes: bool = False):
+    """`grader update` for one folder of rosters and data/ (a flat course, or one section folder)."""
+    course_dir = Path(course_dir).resolve()
     info_dir = course_dir / "course_info"
     data_dir = course_dir / "data"
 
@@ -1166,19 +1220,20 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
     if pts_entry.close():
         print(f"  (undo with: grader undo {pts_entry.id})")
     
-    # Load config yaml
+    # Load config yaml (a section folder's: the shared one with its own schedules)
+    from src.course import config_path, config_for
+    cfg_path = config_path(course_dir)
     try:
-        with open(cfg_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f) or {}
+        config = config_for(course_dir) if cfg_path else {}
     except Exception as e:
         print(f"❌ Error loading config YAML: {e}")
         sys.exit(1)
-        
+
     data_mapping = config.get("data_mapping", {})
     if not data_mapping:
-        print(f"⚠️ Warning: 'data_mapping' not found or empty in {cfg_path.name}.")
-        return
-        
+        print(f"⚠️ Warning: 'data_mapping' not found or empty in {cfg_path.name if cfg_path else 'config.yaml'}.")
+        return False
+
     # Locate student info CSV
     student_info_files = [f for f in info_dir.iterdir() if f.is_file() and f.name.endswith("_student_info.csv") and not f.name.endswith(".bak")]
     if not student_info_files:
@@ -1496,8 +1551,6 @@ def update_course(input_file: str = None, config_file: str = None, purge_empty_o
     save_base(course_dir, kept=settled.kept)
     _refresh_totals(course_dir, "update")
     print("🚀 All databases updated successfully!")
-    from src import rename
-    rename.offer_push(course_dir, yes, "new students", only_if_counts_differ=True)
 
 def _find_bak_files(course_dir: Path) -> list[Path]:
     """
@@ -1530,9 +1583,11 @@ def _resolve_course_for_history(course: str = None) -> Path | None:
         if not (d / "course_info").is_dir():
             print(f"❌ {d} is not a course folder (no course_info/).")
             sys.exit(1)
-        return d
+        from src.history import root_of
+        return root_of(d)
     if Path("course_info").is_dir():
-        return Path(".")
+        from src.history import root_of
+        return root_of(Path("."))  # a section folder's history is its course's (SPEC_section_folders.md F6)
     best = []
     for d in _course_dirs_here():
         stamps = [f.stat().st_mtime for f in _find_bak_files(d)]
@@ -1588,11 +1643,25 @@ def sync_cmd(course: str = None, yes: bool = False):
     if not target_dir:
         print("❌ No course folder here (use --course DIR).")
         sys.exit(1)
-    target_dir = target_dir.resolve()
+    from src.course import at
+    found = at(target_dir)
+    for section in found.sections:  # each section folder in turn (SPEC_section_folders.md), or the flat course
+        _sync_unit(section.path, yes, f"{found.root.name} · sec {section.num}" if found.layout else None)
+
+
+def _sync_unit(target_dir: Path, yes: bool = False, title: str | None = None):
+    """`grader sync` for one folder of rosters and data/ (a flat course, or one section folder)."""
+    from src.csvio import read_csv_text, write_csv_text
+    from src.history import Entry
+    from src.sync import (_fmt_pts, category_items, config_file, data_files, find_changes, parse_item, parse_pts,
+                          raw_config, set_category, sync_course)
+    from src.points import at_default, defaults
+    from src.csvio import atomic_write_bytes
+    target_dir = Path(target_dir).resolve()
     from src import attendance
     from src.columns import save_base, settle_default_changes, settle_removed
     entry = Entry(target_dir, "grader", "sync")
-    print(f"🔄 Sync: {target_dir.name}")
+    print(f"🔄 Sync: {title or target_dir.name}")
     # You changed pts_each while bare-header columns hold scores: ask first (it can put the old value back).
     settle_default_changes(target_dir, _ask, entry, yes=yes)
     ch = find_changes(target_dir)
@@ -1786,6 +1855,47 @@ def _att_lines(att):
     return describe(att)
 
 
+def split_cmd(course: str = None, yes: bool = False):
+    """`grader split` (src/split.py, SPEC_section_folders.md F9)."""
+    from src import split, webpush
+    from src.webdrive import Refused
+    folder = Path(course) if course else Path(".")
+    try:
+        p = split.plan(folder)
+    except Refused as e:
+        print(e)
+        sys.exit(1)
+    from src.sections import counts
+    print(f"🔀 {p.course.name}: {len(p.secmap)} students ({counts(p.secmap)})")
+    print(f"   → {p.target.name}/ with " + ", ".join(f"sec{s}/" for s in p.sections) +
+          f"; the old folder is kept as {p.course.name}{split.BEFORE}")
+    if not yes:
+        if not sys.stdin.isatty():
+            print("❌ No terminal to ask on. Nothing changed. To split: grader split -y")
+            sys.exit(1)
+        if input("❓ Split it? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("Nothing changed.")
+            return
+    try:
+        new = split.apply(p)
+    except Refused as e:
+        print(e)
+        sys.exit(1)
+    print(f"✅ Split into {new}")
+    print(f"   Your shell is still in the old path: cd {new}")
+    print(f"   Delete {p.course.name}{split.BEFORE} once you're happy (grader undo puts it back until then).")
+    if p.drive:
+        root, mirror = p.drive
+        print(f"   The old web copy {mirror.name} is no longer updated: delete it in Drive.")
+        ask = yes or (sys.stdin.isatty() and input("❓ Push the new course to the web copy? [y/N] ").strip().lower()
+                      in ("y", "yes"))
+        if ask:
+            try:
+                webpush.push(new, root)
+            except Refused as e:
+                print(e)
+
+
 def history_course(course: str = None, limit: int = 20):
     from src.history import list_entries
     target_dir = _resolve_course_for_history(course)
@@ -1835,6 +1945,17 @@ def undo_course(entry_id: str = None, course: str = None, yes: bool = False):
         print(f"🔄 Course: {target_dir.resolve().name}")
         print(f"   Restore: {_describe_entry(entry)}")
         from src import rename
+        if entry.get("action") == "split":
+            from src import split
+            if not _confirm(f"Undo the split: remove {entry['to']}/ and give {entry['before']} its old name back?", yes):
+                return
+            try:
+                old = split.undo(target_dir, entry)
+            except split.Refused as e:
+                print(e)
+                sys.exit(1)
+            print(f"✅ Back to {old.name}. Your shell is still in the removed folder: cd {old}")
+            return
         if rename.is_rename(entry):
             if not _confirm(f"Rename the course back to {entry['from']}?", yes):
                 return
@@ -1889,9 +2010,13 @@ def mock_course():
     mock_term = "0"
     name_for_path = "GenPhysMock"  # the abbreviation, as `grader init` names courses; course_name stays Thai
 
-    base_dir = Path("courses") / f"{mock_term}_{name_for_path}"
-    if base_dir.exists():
-        shutil.rmtree(base_dir)
+    # Made as one folder with a Section column, then split into section folders, as `grader split` does
+    # (SPEC_section_folders.md): courses/0_GenPhysMock/sec51/, sec52/
+    final_dir = Path("courses") / f"{mock_term}_{name_for_path}"
+    base_dir = Path("courses") / f"{mock_term}_{name_for_path}_flat"
+    for d in (final_dir, base_dir, base_dir.with_name(base_dir.name + "_before_split")):
+        if d.exists():
+            shutil.rmtree(d)
 
     course_info_dir = base_dir / "course_info"
     data_dir = base_dir / "data"
@@ -2071,8 +2196,17 @@ grade_boundaries:
     pd.DataFrame(att_rows).to_excel(att_path, index=False)
     save_attendance_excel(att_path, student_registry, class_cols)
     _attendance_csv(base_dir)
+    from src import split
+    split.split(base_dir, say=lambda *_: None, name=final_dir.name)
+    shutil.rmtree(base_dir.with_name(base_dir.name + split.BEFORE))
+    base_dir = final_dir
+    log = base_dir / "history" / "log.jsonl"  # a mock starts with no history (nothing to undo)
+    for d in (base_dir / "history").glob("*_grader_split*"):
+        shutil.rmtree(d)
+    if log.exists():
+        log.unlink()
 
-    print(f"✅ Successfully generated mock course at: {base_dir}")
+    print(f"✅ Successfully generated mock course at: {base_dir} (sec51/: 16 students, sec52/: 14)")
     print(f"✅ {num_students} students, {num_sessions} attendance sessions.")
     print("✅ Seeded edge cases: over-max scores, missing scores, invalid attendance codes, at-risk students.")
 
@@ -2176,6 +2310,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser_sync.add_argument("-y", "--yes", action="store_true", help="Add every new column and copy one-sided "
                                         "attendance changes without asking (conflicts, removing a session with "
                                         "marks and empty sessions are left alone)")
+    parser_split = subparsers.add_parser("split", help="Turn a one-folder course with several sections (a Section "
+                                         "column in its roster) into one sub-folder per section")
+    parser_split.add_argument("course", nargs="?", metavar="COURSE",
+                              help="The course folder (default: the one you're in)")
+    parser_split.add_argument("-y", "--yes", action="store_true", help="Don't ask (also pushes when it has a web copy)")
     parser_history = subparsers.add_parser("history", help="List the saved versions in a course's history/")
     parser_history.add_argument("--course", help="Course folder (default: the one you're in, or the most recently changed)")
     parser_history.add_argument("-n", type=int, default=20, help="How many entries to show (default 20)")
@@ -2269,6 +2408,8 @@ if __name__ == "__main__":
         undo_course(args.entry, args.course, args.yes)
     elif args.command == "sync":
         sync_cmd(args.course, args.yes)
+    elif args.command == "split":
+        split_cmd(args.course, args.yes)
     elif args.command == "history":
         history_course(args.course, args.n)
     elif args.command == "mock":
