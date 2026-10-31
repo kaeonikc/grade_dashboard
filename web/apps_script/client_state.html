@@ -463,6 +463,26 @@ function sectionSlot(row) {
   return i < 0 ? 0 : (i % 4) + 1;
 }
 
+// The colour slot (1-4) of the one section shown, for the whole grid; 0 in All (each row has its own) and for a
+// course without sections (the app blue).
+function tableSlot() {
+  const i = state.sectionList.indexOf(state.section);
+  return i < 0 ? 0 : (i % 4) + 1;
+}
+
+// The student IDs of the grid rows to stripe (SPEC_name_stripes.md N3): every second row `shown` keeps, in `rows`
+// order, counted afresh under each section heading in All.
+function stripes(rows, shown) {
+  const starts = new Set(sectionBlocks(rows).map((b) => b.start));
+  const out = new Set();
+  let n = 0;
+  rows.forEach((row, i) => {
+    if (starts.has(i)) n = 0;
+    if (shown(row) && n++ % 2 === 1) out.add(row.student_id);
+  });
+  return out;
+}
+
 // Back to the course list: the unsaved edits stay only in the draft; the course stays in memory as it now shows
 // (saved values, journal, weights), still dated by its last load.
 function closeCourse() {

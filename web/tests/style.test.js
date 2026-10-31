@@ -106,3 +106,57 @@ for (const [mode, from] of [['light', 0], ['dark', css.indexOf('prefers-color-sc
     }
   });
 }
+
+// SPEC_name_stripes.md: full names in the grids (N1, N2) and striped rows that stay readable (N3).
+// The declarations of the rule whose selector is exactly `selector`.
+function rule(selector) {
+  const m = new RegExp('(?:^|[}\\n])\\s*' + selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{([^}]*)\\}').exec(css);
+  assert.ok(m, 'style.html has a rule for ' + selector);
+  return m[1];
+}
+
+test('phone grid: the name wraps in a 10.5rem column, never cut', () => {
+  const r = rule('.att-grid.compact .c-name');
+  assert.match(r, /white-space:\s*normal/);
+  assert.match(r, /\bwidth:\s*10\.5rem/);
+  assert.match(r, /min-width:\s*10\.5rem/);
+  assert.match(r, /max-width:\s*10\.5rem/);
+  assert.doesNotMatch(r, /ellipsis/);
+});
+
+test('wide table: the name column fits the longest name on one line', () => {
+  const r = rule('.tb .c-name');
+  assert.match(r, /min-width:\s*13rem/);
+  assert.match(r, /max-width:\s*none/);
+  assert.doesNotMatch(r, /ellipsis|overflow:\s*hidden/);
+});
+
+// `hex` washed at `p` over `bg`, as color-mix(in srgb, hex p, transparent) painted over bg.
+function wash(hex, bg, p) {
+  const ch = (h, i) => parseInt(h.slice(i, i + 2), 16);
+  return '#' + [1, 3, 5].map((i) => Math.round(ch(hex, i) * p + ch(bg, i) * (1 - p)).toString(16).padStart(2, '0'))
+    .join('');
+}
+
+for (const [mode, from] of [['light', 0], ['dark', css.indexOf('prefers-color-scheme: dark')]]) {
+  test('text on a striped row reaches 4.5:1 in ' + mode, () => {
+    // --stripe over plain cells (--bg), the lighter --stripe-grey over computed ones (--bg2)
+    const pct = (name) => {
+      const m = new RegExp('--' + name + ':\\s*color-mix\\(in srgb, var\\(--sec, var\\(--accent\\)\\) (\\d+)%, transparent\\)').exec(css);
+      assert.ok(m, 'style.html defines --' + name);
+      return +m[1] / 100;
+    };
+    const p = { bg: pct('stripe'), bg2: pct('stripe-grey') };
+    const t = tokens(from);
+    const inks = ['text', 'muted', 'danger'].concat(LETTERS.map((g) => 'grade-' + g));
+    for (const hue of ['sec-1', 'sec-2', 'sec-3', 'sec-4', 'accent']) {
+      for (const bg of ['bg', 'bg2']) {
+        const under = wash(t[hue], t[bg], p[bg]);
+        for (const ink of inks.concat(hue.startsWith('sec') ? [hue] : [])) {
+          const r = contrast(t[ink], under);
+          assert.ok(r >= 4.5, mode + ' --' + ink + ' on a --' + hue + ' stripe over --' + bg + ': ' + r.toFixed(2));
+        }
+      }
+    }
+  });
+}

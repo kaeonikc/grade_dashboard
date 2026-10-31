@@ -421,7 +421,10 @@
     border-top: 2px solid var(--line);
   }
   .att-foot td.c-id, .att-foot td.c-name { z-index: 3; text-align: left; }
-  .att-grid.compact .c-name { left: 0; width: 9rem; min-width: 9rem; max-width: 9rem; }
+  /* The whole name, wrapped under its first line (SPEC_name_stripes.md N1) */
+  .att-grid.compact .c-name { left: 0; width: 10.5rem; min-width: 10.5rem; max-width: 10.5rem; padding: 0.25rem 0.5rem;
+    white-space: normal; overflow-wrap: anywhere; line-height: 1.25; }
+  .att-grid.compact .c-name .np { display: inline-block; max-width: 100%; }
   .att-grid .c-name .sub { display: block; margin-top: -0.125rem; font-size: 0.8125rem; line-height: 1.1; }
 
   /* 7. Wide table: view switch, frozen ID and Name, sticky header row, computed columns on grey */
@@ -448,10 +451,12 @@
     vertical-align: bottom; white-space: normal; overflow-wrap: break-word; text-align: center; background: var(--bg2);
   }
   .tb .c-id { position: sticky; left: 0; z-index: 1; width: 7.5rem; min-width: 7.5rem; max-width: 7.5rem; text-align: left; }
+  /* As wide as the longest name, on one line (SPEC_name_stripes.md N2) */
   .tb .c-name {
-    position: sticky; left: 7.5rem; z-index: 1; min-width: 13rem; max-width: 13rem; overflow: hidden;
-    text-overflow: ellipsis; text-align: left; border-right: 2px solid var(--line); cursor: pointer;
+    position: sticky; left: 7.5rem; z-index: 1; min-width: 13rem; max-width: none; text-align: left;
+    border-right: 2px solid var(--line); cursor: pointer;
   }
+  .tb.sum-table .c-name { max-width: 13rem; overflow: hidden; text-overflow: ellipsis; }  /* Summary stays as it was */
   .tb thead .c-id, .tb thead .c-name { z-index: 3; }
   .tb td.c-name:hover { text-decoration: underline; }
   .tb td.c-calc { background: var(--bg2); }
@@ -518,4 +523,14 @@
   .tb tr.sec-head th { text-align: left; padding: 0.5rem 0.25rem 0.25rem; background: var(--bg);
     border-bottom: 2px solid var(--sec, var(--line)); }
   .tb tr.sec-head th span { position: sticky; left: 0.25rem; }
+  /* SPEC_name_stripes.md N3: every second shown row washed in its section's colour (the app blue without sections),
+     over each cell's own background, so grey computed cells stay grey and the frozen cells stay opaque. */
+  .tb tr.stripe { --stripe: color-mix(in srgb, var(--sec, var(--accent)) 8%, transparent);
+    --stripe-grey: color-mix(in srgb, var(--sec, var(--accent)) 5%, transparent); }
+  .tb tr.stripe td { background-image: linear-gradient(var(--stripe), var(--stripe)); }
+  /* lighter over grey, so grade text there keeps 4.5:1 */
+  .tb tr.stripe td.c-calc, .tb tr.stripe td.c-att {
+    background-image: linear-gradient(var(--stripe-grey), var(--stripe-grey));
+  }
+  .tb tr.stripe td.unsaved { background-image: none; }
 </style>

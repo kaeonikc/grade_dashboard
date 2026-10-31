@@ -1131,7 +1131,8 @@ function buildTable() {
   const body = el('tbody', {}, ...withSectionHeads(rows, rows.map(tableRow), 'tr', specs.length));
   tb.none = el('tr', { hidden: '' }, el('td', { class: 'tb-none', colspan: String(specs.length) }));
   body.append(tb.none);
-  const cls = 'tb' + (grid ? ' att-grid' : '') + (grid && !WIDE.matches ? ' compact' : '');
+  const cls = 'tb' + (grid ? ' att-grid' : '') + (grid && !WIDE.matches ? ' compact' : '') +
+    (tableSlot() ? ' s' + tableSlot() : '');
   const table = el('table', { class: cls, role: 'grid', 'aria-label': grid ? 'Attendance' : 'Course table',
     'aria-rowcount': String(state.rows.length + 1), 'aria-colcount': String(specs.length) }, el('thead', {}, head), body);
   if (grid) table.append(attFoot());
@@ -1333,7 +1334,7 @@ function paintCell(rec, s, td, g) {
   if (s.kind === 'id') {
     td.textContent = row.student_id;
   } else if (s.kind === 'name') {
-    td.textContent = row.name;
+    td.replaceChildren(...nameParts(row.name));
     if (THAI.test(row.name)) td.lang = 'th';
     if (tb.grid && !WIDE.matches) td.append(el('span', { class: 'sub', lang: 'en' }, row.student_id));
   } else if (s.kind === 'att') {
@@ -1355,6 +1356,13 @@ function paintCell(rec, s, td, g) {
   }
 }
 
+// A name as its space-separated parts, each kept whole: the phone grid wraps only between first name and surname,
+// where Thai word breaking would split a surname (SPEC_name_stripes.md N1).
+function nameParts(name) {
+  return String(name).split(/\s+/).filter(Boolean)
+    .flatMap((part, i) => (i ? [' '] : []).concat(el('span', { class: 'np' }, part)));
+}
+
 function searchTable() {
   let shown = 0;
   const riskOnly = tb.grid && state.attRisk;
@@ -1364,6 +1372,8 @@ function searchTable() {
     if (!rec.tr.hidden) shown += 1;
   }
   tb.none.hidden = shown > 0;
+  const striped = stripes(tb.recs.map((rec) => rec.row), (row) => !tb.byId.get(row.student_id).tr.hidden);
+  for (const rec of tb.recs) rec.tr.classList.toggle('stripe', striped.has(rec.row.student_id));
   refreshSectionHeads(tb.none.parentNode);
   tb.none.firstChild.replaceChildren(state.search.trim() === '' && riskOnly ? 'Nobody is under 80% so far.'
     : data('span', {}, 'No students match "' + state.search.trim() + '"'));
