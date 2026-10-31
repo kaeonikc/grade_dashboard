@@ -168,3 +168,9 @@ test('phone student lists are striped like the grids, inset from the edges (SPEC
   assert.match(r, /padding-right:\s*0\.5rem/);
   assert.match(rule('.stripe'), /--stripe:/, 'the wash is defined on any striped row, not only table rows');
 });
+
+test('the status lines are compact (SPEC_status_line.md)', () => {
+  const r = rule('.head-line');
+  assert.match(r, /font-size:\s*0\.875rem/);
+  assert.match(r, /line-height:\s*1\.25/);
+});

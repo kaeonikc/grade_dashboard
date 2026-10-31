@@ -817,8 +817,17 @@ function rememberMenu(open) {
 }
 
 // The attendance grid's numbers: per student and per session over the sessions held so far, unsaved edits included.
+// In All, each student is counted over their own section's sessions: a session only sec 51 has held isn't an absence
+// for sec 52 (SPEC_status_line.md).
 function attStats() {
-  return Grades.attendanceStats(state.rows, sessions(), cellValue, today());
+  const stats = (rows) => Grades.attendanceStats(rows, sessions(), cellValue, today());
+  const shown = stats(state.rows);
+  if (state.section !== 'all') return shown;
+  for (const sec of state.sectionList) {
+    const own = stats(state.rows.filter((row) => state.sections.get(row.student_id) === sec));
+    for (const [id, st] of own.students) shown.students.set(id, st);
+  }
+  return shown;
 }
 
 // grade-tui's Analytics › Overview and the grade distribution over the grades shown (unsaved edits included).
@@ -837,6 +846,26 @@ function today() { return serverNow().slice(0, 10); }
 function todaySession() {
   const s = sessions().find((c) => Grades.sessionDate(c.header) === today());
   return s ? s.name : null;
+}
+
+// The line under the course name (SPEC_status_line.md): the class time of the one section shown, students under 80%
+// attendance among those shown, edits not pulled, and how old the push is. Only what applies; Pushed always, last.
+function headSummary() {
+  const { course, journal, push } = state.open;
+  const when = (course.sections || {})[state.section];
+  const risk = Array.from(attStats().students.values()).filter((st) => st.atRisk).length;
+  const fmt = Journal.fmt;
+  return [when && when.time ? [when.day, when.time].filter(Boolean).join(' ') : null,
+    risk ? risk + ' at risk' : null,
+    journal.unpulled ? fmt.plural(journal.unpulled, 'edit') + ' not pulled' : null,
+    'Pushed ' + fmt.fmtAgo(push.pushed_at, state.now)].filter(Boolean).join(' · ');
+}
+
+// The line under the title on the course list: `3 courses · 62 edits not pulled`.
+function listSummary(courses) {
+  const pulled = courses.reduce((n, c) => n + (c.unpulled || 0), 0);
+  return Journal.fmt.plural(courses.length, 'course') +
+    (pulled ? ' · ' + Journal.fmt.plural(pulled, 'edit') + ' not pulled' : '');
 }
 
 // ---- Cells and unsaved edits ----

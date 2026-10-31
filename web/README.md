@@ -103,7 +103,7 @@ primary Google Account email address". Those are the only two scopes, and the we
 The manifest also turns on the Advanced Drive service (v3), which lists folders faster. It uses the same Drive scope.
 If the Workspace admin blocks advanced services, the page shows a Google error on opening: stop and note the message.
 
-**Timing:** add `?timing=1` to the web app URL to show a grey line under the header with each step's time (page,
+**Timing:** add `?timing=1` to the web app URL to show a grey line at the bottom of a course's ⋯ menu with each step's time (page,
 list, load, save) and its Drive work (queries, downloads, cache hits). It shows times and counts only.
 
 ## Deploy by paste-in (when clasp or the Apps Script API is blocked)
@@ -134,7 +134,7 @@ deployment** would make a second URL.)
 1. `clasp open-web-app`, then pick the `grade_web` deployment (not `@HEAD`). With paste-in, use the copied URL. It
    looks like `https://script.google.com/a/macros/<domain>/s/<deployment ID>/exec`.
 2. Send the URL to the iPhone (AirDrop or Notes) and open it in Safari, signed in to the CMRU account.
-3. Expected: `grade_web`, `Courses on Drive`, and one card per pushed course with its name, `course ID · term`,
+3. Expected: `grade_web`, `N courses` (with `N edits not pulled` when there are any), and one card per pushed course with its name, `course ID · term`,
    `Pushed {time}`, and `N edits not pulled · last saved {time}` (or `No edits waiting to be pulled`). Before any
    `grader web-push`: `No pushed courses yet.`
 

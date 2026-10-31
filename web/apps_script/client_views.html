@@ -70,9 +70,10 @@ function notice(title, body, ...buttons) {
 }
 
 // ---- 2. Course list (S2.1, S2.3) ----
-function listHeader() {
+// `courses`: the list when it is known; until then the header is only the title.
+function listHeader(courses) {
   return el('header', { class: 'page-head' }, el('h1', {}, 'grade_web'),
-    el('p', { class: 'muted' }, 'Courses on Drive'), timingLine);
+    courses && courses.length ? el('p', { class: 'muted head-line' }, listSummary(courses)) : null);
 }
 
 // The list this device saw last shows at once (D6) and Drive's list replaces it; then the course opened last is
@@ -80,7 +81,8 @@ function listHeader() {
 function showCourses() {
   const cached = courseListCache();
   const status = el('p', { class: 'muted' });
-  let head = listHeader();
+  let known = cached ? cached.courses : null;
+  let head = listHeader(known);
   if (cached) {
     // until Drive answers, the device clock stands in for the server's (state.now)
     if (!state.now) {
@@ -102,13 +104,14 @@ function showCourses() {
   const here = () => head.isConnected;
   const replace = (...nodes) => {
     const y = window.scrollY;
-    head = listHeader();
+    head = listHeader(known);
     show(head, ...nodes);
     if (cached) window.scrollTo(0, y);
   };
   loadCourses().then((reply) => {
     if (!here()) return;
     const groups = reply.ok ? reply.groups || [] : [];
+    if (reply.ok) known = reply.courses;
     if (reply.ok && (reply.courses.length || groups.length)) {
       const left = strandedList(reply.courses);
       replace(...courseList(reply.courses, groups), ...(left ? [left] : []));
@@ -286,7 +289,7 @@ function courseView(draft) {
   const o = state.open;
   cm = { items: [], current: null, statusTimer: null, working: null };
   cm.badge = el('button', { type: 'button', class: 'badge unsaved', hidden: '', onclick: openSaveSheet });
-  cm.headLine = el('p', { class: 'muted' });
+  cm.headLine = el('p', { class: 'muted head-line' });
   cm.strip = storageStrip();
   cm.menuBtn = el('button', { type: 'button', class: 'icon menu-btn', 'aria-label': 'Categories',
     'aria-controls': 'cat-menu', 'aria-expanded': 'false', onclick: () => toggleMenu() }, '☰');
@@ -296,7 +299,7 @@ function courseView(draft) {
       data('h1', { class: 'course-name' }, o.course.course_name), cm.badge,
       el('button', { type: 'button', class: 'icon', 'aria-label': 'More', 'aria-haspopup': 'dialog', onclick: openMore },
         '⋯')),
-    cm.headLine, cm.strip, timingLine);
+    cm.headLine, cm.strip);
 
   cm.select = el('select', { id: 'col', class: 'col-select' });
   cm.select.addEventListener('change', () => choose(cm.select.value));
@@ -864,7 +867,6 @@ function codeCounts(column) {
 function refreshChrome() {
   const n = state.edits.size;
   const j = state.open.journal;
-  const pushed = state.open.push.pushed_at;
   for (const badge of [cm.badge, det && det.badge]) {
     if (!badge) continue;
     badge.hidden = n === 0;
@@ -876,9 +878,7 @@ function refreshChrome() {
   cm.discardBtn.hidden = n === 0;
   cm.discardBtn.disabled = locked();
   cm.saveBtn.textContent = state.saving && cm.working ? cm.working : 'Save ' + n;
-  cm.headLine.textContent = state.saving && cm.working ? cm.working : state.checking ? 'Checking Drive…' :
-    'Pushed ' + F.fmtTime(pushed, state.now) +
-    ' (' + F.fmtAgo(pushed, state.now) + ')' + (j.unpulled ? ' · ' + F.plural(j.unpulled, 'edit') + ' not pulled' : '');
+  cm.headLine.textContent = state.saving && cm.working ? cm.working : state.checking ? 'Checking Drive…' : headSummary();
   cm.strip.hidden = !state.storageOff;
   const col = currentColumn();
   cm.fill.disabled = locked() || !col;
@@ -2126,17 +2126,17 @@ function openMore() {
   const undoSub = n ? 'Save or discard your ' + F.plural(n, 'unsaved edit') + ' first'
     : j.undo ? F.fmtTime(j.undo.ts, state.now) + ' · ' + F.plural(j.undo.cells, 'cell')
       : String(j.undo_note).replace(/`/g, '');
-  const title = j.unpulled
-    ? el('span', {}, 'Drive: ' + F.plural(j.unpulled, 'edit') + ' not pulled', el('br'),
-      el('span', { class: 'muted' }, 'last saved ' + F.fmtTime(j.last_saved, state.now)))
-    : 'Drive: no edits waiting to be pulled';
+  const title = el('span', {}, j.unpulled ? 'Drive: ' + F.plural(j.unpulled, 'edit') + ' not pulled'
+    : 'Drive: no edits waiting to be pulled', el('br'),
+  el('span', { class: 'muted' }, 'Pushed ' + F.fmtTime(state.open.push.pushed_at, state.now) +
+    (j.unpulled ? ' · last saved ' + F.fmtTime(j.last_saved, state.now) : '')));
   const d = dialog(title,
     item('Undo last save', undoSub, () => { d.close(); openUndo(); }, !!n || !j.undo || locked()),
     item(n ? 'Discard all unsaved edits (' + n + ')' : 'Discard all unsaved edits', n ? null : 'No unsaved edits',
       () => { d.close(); openDiscard(); }, !n || locked()),
     item('Reload from Drive', null, () => { d.close(); reload(); }, locked()),
     item('Switch course', null, () => { d.close(); leave(showCourses); }, state.saving),
-    el('div', { class: 'sheet-actions' }, autofocused(button('Close', () => d.close(), 'btn outline'))));
+    el('div', { class: 'sheet-actions' }, autofocused(button('Close', () => d.close(), 'btn outline'))), timingLine);
 }
 
 // Reload from Drive: unsaved edits stay on top (they are conflict-checked on Save).
