@@ -67,22 +67,19 @@ const seen = (p, sel) => p.evaluate((sel) => {
   const r = td.getBoundingClientRect();
   const box = document.querySelector('.tb-picker');
   const b = box && box.getBoundingClientRect();
-  const dock = document.querySelector('.dock').getBoundingClientRect();
-  const wrap = document.querySelector('.table-wrap').getBoundingClientRect();
-  const head = document.querySelector('thead .c-name').getBoundingClientRect();  // sticky, unlike thead itself
+  const name = document.querySelector('thead .c-name').getBoundingClientRect();
   const foot = document.querySelector('.att-foot td');
   const present = foot && foot.getBoundingClientRect();
-  const nameCol = document.querySelector('thead .c-name').getBoundingClientRect();
-  const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+  const wrap = document.querySelector('.table-wrap').getBoundingClientRect();
+  const hit = document.elementFromPoint(Math.min(r.left + r.width / 2, innerWidth - 1), r.top + r.height / 2);
   return {
-    box: !!box, bar: !!box && box.classList.contains('picker-bar'),
-    barTop: b && b.top, barBottom: b && b.bottom, barLeft: b && b.left, barRight: b && b.right, barHeight: b && b.height,
-    buttons: box ? [...box.querySelectorAll('button')].map((n) => n.getBoundingClientRect().height) : [],
-    dockTop: dock.top, width: innerWidth, height: innerHeight, sideScroll: document.documentElement.scrollWidth > innerWidth,
-    top: r.top, bottom: r.bottom, left: r.left, right: r.right, cy: (r.top + r.bottom) / 2,
-    middle: (head.bottom + Math.min(wrap.bottom, present ? present.top : wrap.bottom)) / 2,
-    rowsTop: head.bottom, rowsBottom: Math.min(wrap.bottom, present ? present.top : wrap.bottom), nameRight: nameCol.right,
-    presentSeen: !!present && present.bottom <= (b ? b.top : innerHeight) + 1 && present.top >= 0,
+    box: !!box, grid: !!box && box.classList.contains('picker-grid'),
+    x: b && b.left, right: b && b.right, y: b && b.top, end: b && b.bottom, w: b && b.width, h: b && b.height,
+    buttons: box ? [...box.querySelectorAll('button')].map((n) => [n.getBoundingClientRect().width, n.getBoundingClientRect().height]) : [],
+    width: innerWidth, height: innerHeight, sideScroll: document.documentElement.scrollWidth > innerWidth,
+    wrapTop: wrap.top, wrapBottom: wrap.bottom, rowsTop: name.bottom, rowsBottom: present ? present.top : wrap.bottom, nameRight: name.right,
+    top: r.top, bottom: r.bottom, left: r.left, cellRight: r.right,
+    clear: !b || !(b.left < r.right && r.left < b.right && b.top < r.bottom && r.top < b.bottom),
     onTop: !!hit && td.contains(hit),
     picked: document.querySelectorAll('td.picked').length,
     cellPicked: td.classList.contains('picked'),
@@ -91,6 +88,14 @@ const seen = (p, sel) => p.evaluate((sel) => {
     active: document.activeElement.tagName,
   };
 }, sel);
+
+// Where every row and the grid's scroll stand: unchanged means nothing moved under the finger.
+const rowsAt = (p) => p.evaluate(() => JSON.stringify({
+  y: [...document.querySelectorAll('.tb tbody tr')].map((n) => n.getBoundingClientRect().top),
+  x: document.querySelector('.tb tbody td.c-code').getBoundingClientRect().left,
+  top: document.querySelector('.table-wrap').scrollTop,
+  page: [scrollY, document.querySelector('main').scrollTop],
+}));
 
 const clean = (p) => p.evaluate(() => ({
   box: !!document.querySelector('.tb-picker'),
@@ -121,30 +126,95 @@ async function onlyCloses(p, what, sel, n) {
 (async () => {
   const b = await chromium.launch({ executablePath: process.env.CHROME || undefined });
 
-  // ---- Phone: the bar and the mark ----
+  // ---- Phone: the grid and the mark ----
   let p = await page(b, PHONE, 'All', 'attendance');
   let at = await tapCell(p, 8, 1);
   let s = await seen(p, at.sel);
-  await p.screenshot({ path: path.join(OUT, '1_bar.png') });
+  await p.screenshot({ path: path.join(OUT, '1_grid.png') });
   console.log(JSON.stringify(s));
-  check(s.bar, 'phone: P/L/A/X is the bar');
-  check(s.barLeft === 0 && s.barRight === s.width, 'bar is full width');
-  check(Math.abs(s.barBottom - s.dockTop) <= 1, 'bar sits on the tabs');
-  check(s.buttons.length === 5 && s.buttons.every((h) => h >= 44), 'five buttons, at least 44 px: ' + s.buttons);
+  check(s.grid, 'phone: P/L/A/X is the floating grid');
+  check(s.buttons.length === 5 && s.buttons.slice(0, 4).every(([w, h]) => w >= 36 && h >= 36), 'P/L/A/X are 36 px: ' + s.buttons);
+  check(s.w <= 80 && s.h <= 108, 'the grid is small: ' + s.w + '×' + s.h);
   check(s.cellPicked && s.picked === 1, 'the cell is marked');
   check(s.ring, 'the cell has its outline');
   check(s.lines.length === 2 && s.lines.some((l) => l.startsWith('TH')) && s.lines.some((l) => l.includes('c-name')),
     'name and head are marked: ' + s.lines);
-  check(s.active === 'BUTTON', 'focus is on the bar');
-  check(s.onTop, 'nothing covers the cell');
-  check(s.bottom <= s.barTop && s.presentSeen, 'cell above the bar, Present still shows');
-  check(Math.abs(s.cy - s.middle) < 40, 'cell is in the middle of the rows: ' + s.cy + ' vs ' + s.middle);
+  check(s.active === 'BUTTON', 'focus is on the grid');
+  check(s.onTop && s.clear, 'nothing covers the cell');
+  check(s.x >= s.nameRight, 'the grid leaves the names alone');
+  check(Math.abs(s.x - s.cellRight) <= 8 || Math.abs(s.right - s.left) <= 8, 'the grid is beside the cell');
+
+  // The rows don't move: from a fully shown cell, cells cut off at each edge, on open, pick and close
+  const still = async (what, setup, act) => {
+    const q = await setup();
+    const before = await rowsAt(p);
+    await act(q);
+    check(await rowsAt(p) === before, what + ': the rows stay put');
+  };
+  await tapAt(p, 'thead .c-name');
+  // Puts a cell with `edge` of it cut off by the head, the Present line or the right side, and returns its selector.
+  const cutOff = (edge) => async () => {
+    const sel = await p.evaluate(([cells, edge]) => {
+      const w = document.querySelector('.table-wrap');
+      const head = document.querySelector('thead .c-name').getBoundingClientRect();
+      const foot = document.querySelector('.att-foot td').getBoundingClientRect();
+      const pos = (n) => n.getBoundingClientRect();
+      w.scrollLeft = 0;
+      const all = [...document.querySelectorAll(cells)];
+      const perRow = all.filter((n) => n.parentElement === all[0].parentElement).length;
+      const td = all[20 * perRow + (edge === 'right' ? 4 : 2)];  // a session with nothing marked yet
+      if (edge === 'top') w.scrollBy(0, pos(td).top - head.bottom + 12);
+      if (edge === 'bottom') w.scrollBy(0, pos(td).bottom - foot.top - 12);
+      if (edge === 'right') w.scrollBy(pos(td).right - w.getBoundingClientRect().right - 16, pos(td).top - 350);
+      return `td[data-r="${td.dataset.r}"][data-c="${td.dataset.c}"]`;
+    }, [CELLS, edge]);
+    await wait(p, 100);
+    return sel;
+  };
+  const tapPart = (edge) => async (sel) => {
+    const r = await p.locator(sel).boundingBox();
+    const px = { top: [r.x + r.width / 2, r.y + r.height - 5], bottom: [r.x + r.width / 2, r.y + 5], right: [r.x + 5, r.y + r.height / 2] }[edge];
+    await p.touchscreen.tap(px[0], px[1]);
+    await wait(p);
+  };
+  for (const edge of ['top', 'bottom', 'right']) {
+    await still('cell cut off at the ' + edge + ', open', cutOff(edge), tapPart(edge));
+    check(await p.locator('.tb-picker').count() === 1, 'cell cut off at the ' + edge + ': the grid opens');
+    await still('cell cut off at the ' + edge + ', P', async () => {}, () => tapAt(p, '.picker-grid .code-P'));
+    await still('cell cut off at the ' + edge + ', Clear', async () => {
+      const sel = await cutOff(edge)();
+      await tapPart(edge)(sel);
+    }, () => tapAt(p, '.picker-grid .btn.outline'));
+    await still('cell cut off at the ' + edge + ', tap outside', async () => {
+      const sel = await cutOff(edge)();
+      await tapPart(edge)(sel);
+    }, () => tapAt(p, 'thead .c-name'));
+    await wait(p, 800);
+  }
+  await p.context().close();
+  p = await page(b, PHONE, 'All', 'attendance');
+  at = await tapCell(p, 8, 1);
+
+  // Every session and row: on screen, off the cell, off the names
+  await tapAt(p, 'thead .c-name');
+  await wait(p, 800);
+  for (const [name, r, col] of [['first row', 0, 1], ['second-last session', 2, 12], ['last session', 4, 13], ['middle', 10, 5], ['last row', 54, 1], ['last row, last session', 54, 13]]) {
+    at = await tapCell(p, r, col);
+    s = await seen(p, at.sel);
+    check(s.box && s.clear && s.x >= s.nameRight - 1 && s.right <= s.width && s.y >= s.wrapTop && s.end <= s.wrapBottom,
+      name + ': the grid is on screen, off the cell and the names');
+    if (r === 54) await p.screenshot({ path: path.join(OUT, '2_last_row.png') });
+    if (col === 13 && r === 4) await p.screenshot({ path: path.join(OUT, '3_last_session.png') });
+    await tapAt(p, 'thead .c-name');
+    await wait(p, 800);
+  }
 
   // Scrolling isn't a tap
+  at = await tapCell(p, 8, 1);
   const wrap = await p.locator('.table-wrap').boundingBox();
   await p.evaluate(() => document.querySelector('.table-wrap').scrollBy(0, 120));
   await wait(p, 150);
-  check((await clean(p)).box, 'scrolling leaves the bar open');
+  check((await clean(p)).box, 'scrolling leaves the grid open');
   await p.context().close();
 
   // Drag with a real touch: dispatch through CDP, as a finger would
@@ -160,27 +230,10 @@ async function onlyCloses(p, what, sel, n) {
   await wait(p);
   const scrollAfter = await p.evaluate(() => document.querySelector('.table-wrap').scrollTop);
   const dragged = await clean(p);
-  check(scrollAfter !== scrollBefore && dragged.box && dragged.marks === 3, 'a finger drag scrolls and the bar stays');
+  check(scrollAfter !== scrollBefore && dragged.box && dragged.marks === 3, 'a finger drag scrolls and the grid stays');
   await p.context().close();
 
-  // First row, last row, last session
   p = await page(b, PHONE, 'All', 'attendance');
-  at = await tapCell(p, 0, 1);
-  s = await seen(p, at.sel);
-  check(s.onTop && s.top >= s.rowsTop - 1 && s.bottom <= s.barTop, 'first row: cell in full view');
-  await tapAt(p, 'thead .c-name');
-  at = await cellOf(p, 0, 1);
-  at = await tapCell(p, at.last, 1);
-  s = await seen(p, at.sel);
-  await p.screenshot({ path: path.join(OUT, '2_last_row.png') });
-  check(s.onTop && s.bottom <= s.rowsBottom + 1 && s.presentSeen, 'last row: cell in full view above Present');
-  await tapAt(p, 'thead .c-name');
-  at = await cellOf(p, 0, 0);
-  at = await tapCell(p, 4, at.perRow - 1);
-  s = await seen(p, at.sel);
-  await p.screenshot({ path: path.join(OUT, '3_last_session.png') });
-  check(s.onTop && s.right <= s.width && s.left >= s.nameRight - 1, 'last session: cell in full view, clear of the names');
-  await tapAt(p, 'thead .c-name');
 
   // ---- Phone: a tap outside only closes ----
   await onlyCloses(p, 'another cell', 'td[data-r="1"][data-c]', 1);
@@ -221,25 +274,25 @@ async function onlyCloses(p, what, sel, n) {
   await events(['pointerdown', 'pointerup', 'click'], 30);
   await wait(p);
   c = await clean(p);
-  check(c.box && !c.detail, 'a drag that still clicks: the bar stays, nothing opens');
+  check(c.box && !c.detail, 'a drag that still clicks: the grid stays, nothing opens');
   await tapAt(p, 'thead .c-name');
   await tapCell(p, 3, 1);
   await events(['pointerdown', 'pointercancel', 'click'], 0);
   await wait(p);
   c = await clean(p);
-  check(c.box && !c.detail, 'a cancelled press that still clicks: the bar stays, nothing opens');
+  check(c.box && !c.detail, 'a cancelled press that still clicks: the grid stays, nothing opens');
   await tapAt(p, 'thead .c-name');
   await wait(p, 800);
 
   // Picking
   at = await tapCell(p, 5, 1);
-  await tapAt(p, '.picker-bar .code-P');
+  await tapAt(p, '.picker-grid .code-P');
   c = await clean(p);
-  check(!c.box && c.marks === 0 && c.rings === 0, 'P: bar closes, no mark or ring');
+  check(!c.box && c.marks === 0 && c.rings === 0, 'P: the grid closes, no mark or ring');
   check(c.unsaved === 1 && /^P/.test((await p.locator(at.sel).innerText()).trim()), 'P: the cell holds P, unsaved');
   at = await tapCell(p, 5, 1);
-  check(await p.locator('.picker-bar .code-P').getAttribute('aria-pressed') === 'true', 'the bar shows the cell\'s code');
-  await tapAt(p, '.picker-bar .btn.outline');
+  check(await p.locator('.picker-grid .code-P').getAttribute('aria-pressed') === 'true', 'the grid shows the cell\'s code');
+  await tapAt(p, '.picker-grid .btn.outline');
   c = await clean(p);
   check(!c.box && c.unsaved === 0, 'Clear: the cell is back to empty');
 
@@ -248,7 +301,7 @@ async function onlyCloses(p, what, sel, n) {
   await p.evaluate(() => { renderTable(); });
   await wait(p);
   c = await clean(p);
-  check(!c.box && c.marks === 0, 'a new table takes the bar and the mark away');
+  check(!c.box && c.marks === 0, 'a new table takes the grid and the mark away');
   await p.setViewportSize({ width: 1100, height: 800 });
   await wait(p);
   await p.setViewportSize({ width: 375, height: 665 });
@@ -256,7 +309,7 @@ async function onlyCloses(p, what, sel, n) {
   await tapCell(p, 3, 1);
   await p.setViewportSize({ width: 1100, height: 800 });
   await wait(p);
-  check(!(await clean(p)).box, 'crossing 960 px closes the bar');
+  check(!(await clean(p)).box, 'crossing 960 px closes the grid');
   await p.context().close();
 
   // ---- Phone: typing a score ----
@@ -279,8 +332,16 @@ async function onlyCloses(p, what, sel, n) {
   at = await tapCell(p, 6, 1);
   s = await seen(p, at.sel);
   await p.screenshot({ path: path.join(OUT, '5_320.png') });
-  check(s.barRight <= 320 && !s.sideScroll && s.onTop, '320 px: the bar fits and the cell shows');
-  const clear = await p.locator('.picker-bar .btn.outline').evaluate((n) => n.scrollWidth <= n.clientWidth);
+  console.log(JSON.stringify(s));
+  check(s.right <= 320 && !s.sideScroll && s.clear, '320 px: the grid fits and the cell shows');
+  for (const [r, col] of [[9, 2], [10, 3], [11, 1]]) {
+    await tapAt(p, 'thead .c-name');
+    await wait(p, 800);
+    at = await tapCell(p, r, col);
+    s = await seen(p, at.sel);
+    check(s.box && s.clear && s.x >= s.nameRight - 1 && s.right <= 320 && s.y >= s.wrapTop && s.end <= s.wrapBottom, '320 px, column ' + col + ': the grid is clear');
+  }
+  const clear = await p.locator('.picker-grid .btn.outline').evaluate((n) => n.scrollWidth <= n.clientWidth);
   check(clear, '320 px: Clear fits its button');
   await p.context().close();
 
@@ -289,8 +350,8 @@ async function onlyCloses(p, what, sel, n) {
   s = await seen(p, at.sel);
   await p.screenshot({ path: path.join(OUT, '6_landscape.png') });
   console.log(JSON.stringify(s));
-  check(s.bar && s.barBottom <= s.height + 1 && s.barTop >= 0, 'landscape: the bar is on screen');
-  check(s.onTop && s.bottom <= s.barTop && s.top >= 0, 'landscape: the cell shows above the bar');
+  check(s.grid && s.end <= s.height + 1 && s.y >= 0, 'landscape: the grid is on screen');
+  check(s.clear && s.x >= s.nameRight - 1, 'landscape: the grid is off the cell and the names');
   await p.context().close();
 
   // ---- Computer ----
@@ -299,8 +360,8 @@ async function onlyCloses(p, what, sel, n) {
   await wait(p);
   s = await seen(p, 'td.picked');
   await p.screenshot({ path: path.join(OUT, '7_wide.png') });
-  check(s.box && !s.bar, 'computer: the pop-up floats');
-  check(s.barTop >= s.bottom - 1 && s.barTop <= s.bottom + 1, 'computer: under its cell');
+  check(s.box && !s.grid, 'computer: the pop-up is the row of buttons');
+  check(s.y >= s.bottom - 1 && s.y <= s.bottom + 1, 'computer: under its cell');
   check(s.cellPicked && s.lines.length === 2, 'computer: marked');
   await p.keyboard.press('Escape');
   await wait(p);

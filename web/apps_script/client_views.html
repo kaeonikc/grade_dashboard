@@ -496,10 +496,7 @@ function renderView() {
   for (const b of [...cm.views.children, ...cm.tabs.children]) {
     b.setAttribute('aria-pressed', String(b.dataset.tab === state.tab));
   }
-  if (v !== 'table') {
-    closePicker();
-    tb = null;
-  }
+  if (v !== 'table') tb = null;
   if (v !== 'table' && !wideSummary) cm.wrap.replaceChildren();
   if (v !== 'grading') {
     cfg = null;
@@ -1144,7 +1141,6 @@ const editable = (s) => s.kind === 'score' || s.kind === 'code';
 
 // A large course shows `Building the table…` until its first paint.
 function renderTable() {
-  closePicker();  // a phone's bar sits outside the table, so a new table doesn't take it away
   tb = null;
   if (state.rows.length * state.open.course.columns.length <= BIG_TABLE) return buildTable();
   cm.wrap.replaceChildren(el('p', { class: 'muted empty' }, 'Building the table…'));
@@ -1450,12 +1446,12 @@ function clearMark() {
 }
 
 // Roving focus: the focused cell is the table's one tab stop.
-function focusCell(r, c) {
+function focusCell(r, c, still = false) {
   if (tb.cur) tb.recs[tb.cur.r].tds[tb.cur.c].tabIndex = -1;
   tb.cur = { r, c };
   const td = tb.recs[r].tds[c];
   td.tabIndex = 0;
-  td.focus();
+  td.focus({ preventScroll: still });
 }
 
 // Moves to the next shown row (dr) or the next name or editable column (dc); stays at the edges.
@@ -1475,7 +1471,7 @@ function tableClick(e) {
   if (!td || (tb.edit && tb.edit.td === td)) return;
   const r = +td.dataset.r;
   const c = +td.dataset.c;
-  focusCell(r, c);
+  focusCell(r, c, !WIDE.matches);  // a tap on a phone leaves the rows where they are, under the finger
   if (tb.specs[c].kind === 'name') openDetail(tb.recs[r].row);
   else if (tb.specs[c].kind === 'code') openPicker(r, c);
   else if (!WIDE.matches && tb.specs[c].kind === 'score' && !busy()) editCell(r, c);
@@ -1681,8 +1677,23 @@ function place(node, td) {
   node.style.left = b.left - w.left + cm.wrap.scrollLeft + 'px';
 }
 
-// The attendance picker `P L A X Clear`: under a session cell, or on a phone a bar above the tabs that takes its height
-// from the grid, so nothing covers the cell, the rows next to it or the grid's bottom line (SPEC_picker_bar.md D2).
+// Puts a phone's grid where pickerSpot says. Inside the table's scroll area, so it moves with its cell on a drag.
+function placeGrid(box, td) {
+  const w = cm.wrap.getBoundingClientRect();
+  const head = cm.wrap.querySelector('thead .c-name').getBoundingClientRect();  // sticky, so it's where the rows start
+  const foot = cm.wrap.querySelector('.att-foot td');
+  const low = Math.min(w.bottom, window.innerHeight);
+  const top = Math.max(w.top, 0);
+  const rows = { left: head.right, right: w.right, top: Math.max(head.bottom, 0),
+    bottom: Math.min(low, foot ? foot.getBoundingClientRect().top : low) };
+  const b = box.getBoundingClientRect();
+  const at = pickerSpot(td.getBoundingClientRect(), b, rows, { top, bottom: low });
+  box.style.left = at.x - w.left - cm.wrap.clientLeft + cm.wrap.scrollLeft + 'px';
+  box.style.top = at.y - w.top - cm.wrap.clientTop + cm.wrap.scrollTop + 'px';
+}
+
+// The attendance picker `P L A X Clear`: under a session cell, or on a phone a small square floating beside it, because
+// the rows must stay exactly where they were tapped (SPEC_picker_bar.md D2).
 function openPicker(r, c) {
   if (busy()) return;
   closePicker();
@@ -1692,7 +1703,7 @@ function openPicker(r, c) {
   const pick = (code) => {
     closePicker();
     keySet(r, c, code, false);
-    focusCell(r, c);
+    focusCell(r, c, !WIDE.matches);
   };
   const box = el('div', { class: 'tb-picker', role: 'group' }, ...CODES.map(([code, label]) => {
     const b = button(code, () => pick(code), 'btn code-btn code-' + code);
@@ -1715,15 +1726,11 @@ function openPicker(r, c) {
   tb.picker = box;
   markCell(r, c);
   const phone = !WIDE.matches;
+  cm.wrap.append(box);
   if (phone) {
-    box.classList.add('picker-bar');
-    cm.announce.before(box);
-    // Phone landscape: the page scrolls and the bar sticks to the screen, so bring the grid's bottom up to it.
-    const under = cm.wrap.getBoundingClientRect().bottom - box.getBoundingClientRect().top;
-    if (under > 0) window.scrollBy(0, under);
-    revealCell(rec.tds[c]);
+    box.classList.add('picker-grid');
+    placeGrid(box, rec.tds[c]);
   } else {
-    cm.wrap.append(box);
     place(box, rec.tds[c]);
     // Keep it on screen near the right edge.
     const over = box.getBoundingClientRect().right - cm.wrap.getBoundingClientRect().right;

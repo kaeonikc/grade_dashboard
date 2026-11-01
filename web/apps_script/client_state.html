@@ -1023,4 +1023,21 @@ function matches(row, query) {
   const q = query.trim().toLowerCase();
   return q === '' || row.student_id.toLowerCase().includes(q) || row.name.toLowerCase().includes(q);
 }
+
+// Where a phone's P/L/A/X grid goes, in screen pixels (SPEC_picker_bar.md D2). The grid doesn't move for it, so the box
+// finds room: beside the cell over other sessions, else above or below it, where it may also cover the frozen head or
+// Present. It stays off the cell and the names. `rows` is the part of the grid that shows between the frozen lines;
+// `wrap` adds them back.
+function pickerSpot(cell, size, rows, wrap) {
+  const GAP = 4;
+  const fit = (v, low, high) => Math.max(low, Math.min(v, high));
+  const y = fit(cell.top, rows.top + GAP, rows.bottom - size.height - GAP);
+  if (cell.right + GAP + size.width <= rows.right) return { x: cell.right + GAP, y };
+  if (cell.left - GAP - size.width >= rows.left) return { x: cell.left - GAP - size.width, y };
+  const x = fit(cell.left + (cell.right - cell.left - size.width) / 2, rows.left + GAP, rows.right - size.width - GAP);
+  const below = wrap.bottom - cell.bottom;
+  const above = cell.top - wrap.top;
+  // On a screen too short for either, staying on screen wins over a few pixels of the cell.
+  return { x, y: fit(below >= above ? cell.bottom + GAP : cell.top - GAP - size.height, wrap.top, wrap.bottom - size.height) };
+}
 </script>

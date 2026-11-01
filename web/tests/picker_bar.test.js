@@ -1,5 +1,5 @@
 'use strict';
-// The marked cell and a phone's P/L/A/X bar (SPEC_picker_bar.md). client_views.html needs a browser, so here its shape
+// The marked cell and a phone's P/L/A/X grid (SPEC_picker_bar.md). client_views.html needs a browser, so here its shape
 // is checked from the source and the colours are computed; browser/picker_bar.js drives the real page.
 const test = require('node:test');
 const assert = require('node:assert');
@@ -33,29 +33,56 @@ test('D1: the mark is solid and beats a stripe', () => {
   assert.ok(rule.index > css.indexOf('.tb tr.stripe td.unsaved'), 'after the stripes and the unsaved amber');
 });
 
-test('D2: a phone gets the bar beside the page, a computer the pop-up under its cell', () => {
+test('D2: a phone floats a grid beside the cell, a computer the pop-up under it', () => {
   const open = fn('openPicker');
-  assert.match(open, /if \(phone\) \{\n\s+box\.classList\.add\('picker-bar'\);\n\s+cm\.announce\.before\(box\);/);
-  assert.match(open, /revealCell\(rec\.tds\[c\]\)/);
-  assert.match(open, /\} else \{\n\s+cm\.wrap\.append\(box\);\n\s+place\(box, rec\.tds\[c\]\);/);
+  assert.match(open, /cm\.wrap\.append\(box\);\n\s+if \(phone\) \{\n\s+box\.classList\.add\('picker-grid'\);\n\s+placeGrid\(box, rec\.tds\[c\]\);/);
+  assert.match(open, /\} else \{\n\s+place\(box, rec\.tds\[c\]\);/);
   assert.match(open, /focus\(\{ preventScroll: phone \}\)/);
 });
 
-test('D2: the bar is in the column, as wide as the screen, with 44 px buttons', () => {
-  const bar = css.match(/\.tb-picker\.picker-bar \{([^}]+)\}/)[1];
-  assert.match(bar, /position: static/);
-  assert.match(bar, /margin: 0 -1rem/);
-  const btn = css.match(/\.picker-bar \.btn \{([^}]+)\}/)[1];
-  assert.match(btn, /flex: 1 1 0/);
-  assert.match(btn, /min-width: 0/);
-  assert.match(btn, /min-height: 2\.75rem/);
+test('D2: nothing moves the rows on a phone', () => {
+  assert.doesNotMatch(fn('openPicker'), /revealCell|scrollBy|scrollTo\(|scrollIntoView/);
+  assert.doesNotMatch(fn('placeGrid'), /scrollBy|scrollTo\(|scrollIntoView/);
+  assert.match(fn('focusCell'), /td\.focus\(\{ preventScroll: still \}\)/);
+  assert.match(fn('tableClick'), /focusCell\(r, c, !WIDE\.matches\)/);
+  assert.match(fn('openPicker'), /keySet\(r, c, code, false\);\n\s+focusCell\(r, c, !WIDE\.matches\);/);
 });
 
-test('D2: a landscape phone keeps the bar on screen and the grid clear of it', () => {
-  const short = css.slice(css.indexOf('@media (max-height: 500px)'), css.indexOf('/* 16. Sections'));
-  assert.match(short, /\.tb-picker\.picker-bar \{ position: sticky; bottom: 0;/);
-  assert.match(short, /\.view-table:has\(\.picker-bar\) \.table-wrap \{/);
-  assert.match(fn('openPicker'), /window\.scrollBy\(0, under\)/);
+test('D2: the grid is small, with 36 px buttons', () => {
+  assert.match(css, /\.tb-picker\.picker-grid \{ display: grid; grid-template-columns: repeat\(2, 2\.25rem\);/);
+  const btn = css.match(/\.picker-grid \.btn \{([^}]+)\}/)[1];
+  assert.match(btn, /min-height: 2\.25rem/);
+  assert.match(btn, /min-width: 0/);
+});
+
+// pickerSpot from client_state.html, on its own: it reads nothing but its arguments.
+const STATE = fs.readFileSync(path.join(H.APPS, 'client_state.html'), 'utf8');
+const pickerSpot = new Function('return ' + STATE.slice(STATE.indexOf('function pickerSpot('), STATE.indexOf('</script>', STATE.indexOf('function pickerSpot('))))();
+const SIZE = { width: 80, height: 108 };
+const CELL = { width: 56, height: 40 };
+const clash = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+
+// Every place a cell can show at a screen size, a pixel step apart.
+function everyCell(w, wrap, rows) {
+  for (let top = rows.top - CELL.height + 1; top < rows.bottom; top += 3) {
+    for (let left = rows.left - CELL.width + 1; left < rows.right; left += 3) {
+      const cell = { left, top, right: left + CELL.width, bottom: top + CELL.height };
+      const at = pickerSpot(cell, SIZE, rows, wrap);
+      const box = { left: at.x, top: at.y, right: at.x + SIZE.width, bottom: at.y + SIZE.height };
+      const where = JSON.stringify({ cell, box });
+      assert.ok(!clash(box, cell), 'over the cell: ' + where);
+      assert.ok(box.left >= rows.left, 'over the names: ' + where);
+      assert.ok(box.right <= w, 'off the right: ' + where);
+      assert.ok(box.top >= wrap.top && box.bottom <= wrap.bottom, 'off the grid: ' + where);
+    }
+  }
+}
+
+test('D2: at every cell position the grid is on screen, off the cell and off the names', () => {
+  everyCell(375, { top: 188, bottom: 599 }, { left: 152, right: 375, top: 238, bottom: 559 });  // 375×665
+  everyCell(320, { top: 188.5, bottom: 502 }, { left: 152, right: 320, top: 239.5, bottom: 462 });  // 320×568
+  everyCell(844, { top: 0, bottom: 390 }, { left: 152, right: 844, top: 50, bottom: 350 });     // landscape, page scrolled
+  everyCell(844, { top: 188, bottom: 390 }, { left: 152, right: 844, top: 238, bottom: 390 });  // landscape, page at the top
 });
 
 test('D3: a touch leaves no ring on a phone, a keyboard still does', () => {
@@ -64,10 +91,8 @@ test('D3: a touch leaves no ring on a phone, a keyboard still does', () => {
   assert.match(css, /\.tb td:focus, \.tb td:focus-visible \{ outline: 3px solid/);
 });
 
-test('D3 and redraws: closing takes the mark, and no new table leaves a bar behind', () => {
+test('D3: closing takes the mark', () => {
   assert.match(fn('closePicker'), /box\.remove\(\);\n\s+clearMark\(\);/);
-  assert.match(fn('renderTable'), /^function renderTable\(\) \{\n\s+closePicker\(\);/);
-  assert.match(VIEWS, /if \(v !== 'table'\) \{\n\s+closePicker\(\);\n\s+tb = null;/);
 });
 
 test('D4: only a phone marks a score cell, and the mark moves with Next', () => {
