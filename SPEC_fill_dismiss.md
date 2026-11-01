@@ -1,6 +1,6 @@
 # grade_web: Fill on the attendance grid, and tapping outside only closes
 
-Status: built and committed on `section-folders`, not deployed yet. Date: 2026-11-01.
+Status: built, and deployed as version 25 on 2026-11-01. The real iPhone check is still to do. Date: 2026-11-01.
 
 ## Why
 

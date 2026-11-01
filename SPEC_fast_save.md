@@ -1,6 +1,6 @@
 # grade_web: Save in the background, with fewer Drive reads
 
-Status: built and committed on `section-folders`, not deployed yet. Date: 2026-11-01.
+Status: built, and deployed as version 25 on 2026-11-01. The real iPhone check is still to do. Date: 2026-11-01.
 
 ## Why
 
