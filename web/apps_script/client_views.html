@@ -496,7 +496,10 @@ function renderView() {
   for (const b of [...cm.views.children, ...cm.tabs.children]) {
     b.setAttribute('aria-pressed', String(b.dataset.tab === state.tab));
   }
-  if (v !== 'table') tb = null;
+  if (v !== 'table') {
+    closePicker();
+    tb = null;
+  }
   if (v !== 'table' && !wideSummary) cm.wrap.replaceChildren();
   if (v !== 'grading') {
     cfg = null;
@@ -1141,6 +1144,7 @@ const editable = (s) => s.kind === 'score' || s.kind === 'code';
 
 // A large course shows `Building the table…` until its first paint.
 function renderTable() {
+  closePicker();  // a phone's bar sits outside the table, so a new table doesn't take it away
   tb = null;
   if (state.rows.length * state.open.course.columns.length <= BIG_TABLE) return buildTable();
   cm.wrap.replaceChildren(el('p', { class: 'muted empty' }, 'Building the table…'));
@@ -1154,9 +1158,11 @@ function buildTable() {
   }
   const specs = tableColumns(WIDE.matches);
   const grid = state.category === 'attendance';
-  tb = { specs, recs: [], byId: new Map(), cur: null, edit: null, picker: null, grid, heads: [], counted: [], att: null };
+  tb = { specs, recs: [], byId: new Map(), cur: null, edit: null, picker: null, grid, heads: [], counted: [], att: null,
+    marked: [] };
   if (grid) setAtt();
   const head = el('tr', { role: 'row', 'aria-rowindex': '1' }, ...specs.map(headCell));
+  tb.headRow = head;
   const rows = grid && state.attSort ? byAttendance(state.rows) : state.rows;
   const body = el('tbody', {}, ...withSectionHeads(rows, rows.map(tableRow), 'tr', specs.length));
   tb.none = el('tr', { hidden: '' }, el('td', { class: 'tb-none', colspan: String(specs.length) }));
@@ -1425,6 +1431,24 @@ function searchTable() {
     : data('span', {}, 'No students match "' + state.search.trim() + '"'));
 }
 
+// The cell being answered: focus has left it for the buttons or its input, so it says which it is with its student's
+// name and its column too (SPEC_picker_bar.md D1). A class, not aria-pressed: that head means the column Fill acts on.
+function markCell(r, c) {
+  clearMark();
+  const rec = tb.recs[r];
+  rec.tds[c].classList.add('picked');
+  const lines = [tb.headRow.children[c]];
+  const name = tb.specs.findIndex((s) => s.kind === 'name');
+  if (name >= 0) lines.push(rec.tds[name]);
+  for (const node of lines) node.classList.add('pick-line');
+  tb.marked = [rec.tds[c], ...lines];
+}
+
+function clearMark() {
+  for (const node of tb.marked) node.classList.remove('picked', 'pick-line');
+  tb.marked = [];
+}
+
 // Roving focus: the focused cell is the table's one tab stop.
 function focusCell(r, c) {
   if (tb.cur) tb.recs[tb.cur.r].tds[tb.cur.c].tabIndex = -1;
@@ -1568,6 +1592,7 @@ function startEdit(r, c, initial) {
   tb.edit = { r, c, td, input };
   td.replaceChildren(input);
   if (phone) {
+    markCell(r, c);
     keypad(true);
     placeBar();
     cm.nextBtn.textContent = shownFrom(r, 1) === null ? 'Done' : 'Next ↓';
@@ -1635,7 +1660,10 @@ function commitEdit(thenOpen) {
 
 function closeEditor(ed = tb.edit) {
   const { r, c, td } = ed;
-  if (tb.edit === ed) tb.edit = null;
+  if (tb.edit === ed) {  // not when the next editor has already opened (Next ↓): the mark has moved to it
+    tb.edit = null;
+    clearMark();
+  }
   paintCell(tb.recs[r], tb.specs[c], td, gradeOf(tb.recs[r].row));
 }
 
@@ -1653,7 +1681,8 @@ function place(node, td) {
   node.style.left = b.left - w.left + cm.wrap.scrollLeft + 'px';
 }
 
-// The attendance picker `P L A X Clear` under a session cell.
+// The attendance picker `P L A X Clear`: under a session cell, or on a phone a bar above the tabs that takes its height
+// from the grid, so nothing covers the cell, the rows next to it or the grid's bottom line (SPEC_picker_bar.md D2).
 function openPicker(r, c) {
   if (busy()) return;
   closePicker();
@@ -1684,12 +1713,23 @@ function openPicker(r, c) {
   box.addEventListener('mousedown', (e) => e.preventDefault());
   box.addEventListener('focusout', (e) => { if (!box.contains(e.relatedTarget)) closePicker(); });
   tb.picker = box;
-  cm.wrap.append(box);
-  place(box, rec.tds[c]);
-  // Keep it on screen near the right edge (phones: the grid's last sessions).
-  const over = box.getBoundingClientRect().right - cm.wrap.getBoundingClientRect().right;
-  if (over > 0) box.style.left = Math.max(cm.wrap.scrollLeft, parseFloat(box.style.left) - over - 4) + 'px';
-  box.querySelector('button').focus();
+  markCell(r, c);
+  const phone = !WIDE.matches;
+  if (phone) {
+    box.classList.add('picker-bar');
+    cm.announce.before(box);
+    // Phone landscape: the page scrolls and the bar sticks to the screen, so bring the grid's bottom up to it.
+    const under = cm.wrap.getBoundingClientRect().bottom - box.getBoundingClientRect().top;
+    if (under > 0) window.scrollBy(0, under);
+    revealCell(rec.tds[c]);
+  } else {
+    cm.wrap.append(box);
+    place(box, rec.tds[c]);
+    // Keep it on screen near the right edge.
+    const over = box.getBoundingClientRect().right - cm.wrap.getBoundingClientRect().right;
+    if (over > 0) box.style.left = Math.max(cm.wrap.scrollLeft, parseFloat(box.style.left) - over - 4) + 'px';
+  }
+  box.querySelector('button').focus({ preventScroll: phone });
 }
 
 function closePicker() {
@@ -1697,6 +1737,7 @@ function closePicker() {
   const box = tb.picker;
   tb.picker = null;
   box.remove();
+  clearMark();
 }
 
 // ---- A tap outside only closes (SPEC_fill_dismiss.md D1-D4): nothing under it reacts ----
@@ -1719,7 +1760,9 @@ function outsideDown(e) {
   }
 }
 
+// A drag, or a press the browser took for a scroll. It closes nothing, and any click it still makes does nothing.
 function outsideCancel() {
+  if (outsideTap) swallowUntil = Date.now() + TAP_CLICK_MS;
   outsideTap = null;
 }
 
@@ -1731,8 +1774,13 @@ function outsideMouse(e) {
 function outsideUp(e) {
   const tap = outsideTap;
   outsideTap = null;
-  if (!tap || Math.hypot(e.clientX - tap.x, e.clientY - tap.y) >= TAP_SLOP_PX) return;
+  if (!tap) return;
   swallowUntil = Date.now() + TAP_CLICK_MS;
+  if (Math.hypot(e.clientX - tap.x, e.clientY - tap.y) < TAP_SLOP_PX) closeOpen();
+}
+
+function closeOpen() {
+  if (!tb) return;
   if (tb.picker) {
     closePicker();
     tb.recs[tb.cur.r].tds[tb.cur.c].focus({ preventScroll: true });
@@ -1742,7 +1790,12 @@ function outsideUp(e) {
 }
 
 function outsideClick(e) {
-  if (Date.now() >= swallowUntil) return;
+  if (outsideTap) {  // the click came before its pointerup
+    outsideTap = null;
+    closeOpen();
+  } else if (Date.now() >= swallowUntil) {
+    return;
+  }
   swallowUntil = 0;
   e.preventDefault();
   e.stopPropagation();

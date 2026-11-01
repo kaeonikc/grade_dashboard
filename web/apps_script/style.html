@@ -462,6 +462,10 @@
   .tb .mark { visibility: visible; margin-left: 0.125rem; color: var(--mark); font-weight: 700; }
   .tb tr.has-unsaved .c-id { box-shadow: inset 3px 0 0 var(--mark); }
   .tb td:focus, .tb td:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; box-shadow: none; }
+  /* A touch leaves no ring behind on a phone; a keyboard still gets one (SPEC_picker_bar.md D3). iOS's flash on a tap
+     looked like choosing the cell under the finger. */
+  .tb.compact td:focus:not(:focus-visible) { outline: none; }
+  .tb.compact { -webkit-tap-highlight-color: transparent; }
   .tb td.tb-none { text-align: left; padding: 1rem; }
   .th-btn {
     width: 100%; min-height: 2.75rem; padding: 0.25rem; border: 0; border-radius: 0.25rem; background: none;
@@ -480,6 +484,12 @@
     position: absolute; z-index: 4; display: flex; gap: 0.5rem; padding: 0.5rem; background: var(--bg);
     border: 1px solid var(--line); border-radius: 0.5rem; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
   }
+  /* A phone: in the page's column between the grid and the tabs (SPEC_picker_bar.md D2) */
+  .tb-picker.picker-bar {
+    position: static; z-index: auto; gap: 0.375rem; margin: 0 -1rem; border-width: 1px 0 0; border-radius: 0;
+    box-shadow: none; background: var(--bg2);
+  }
+  .picker-bar .btn { flex: 1 1 0; min-width: 0; min-height: 2.75rem; padding-left: 0; padding-right: 0; }
 
   /* 15. Short screens (phone landscape, SPEC_landscape.md): the header scrolls away; the grid page scrolls so the
      grid can take almost the whole screen instead of what's left between a pinned header and dock. */
@@ -492,6 +502,9 @@
     .view-table main { height: auto; }
     .view-table .table-wrap { flex: none; height: calc(100vh - 2.75rem); height: calc(100dvh - 2.75rem); }
     .view-table .dock { position: static; }
+    /* The page scrolls here: the bar stays on screen, and the grid leaves room for it */
+    .tb-picker.picker-bar { position: sticky; bottom: 0; z-index: 3; }
+    .view-table:has(.picker-bar) .table-wrap { height: calc(100vh - 3.875rem); height: calc(100dvh - 3.875rem); }
   }
 
   /* 16. Sections (SPEC_sections.md): the All | 51 | 52 chips, and in All each row in its section's colour (a line at
@@ -545,6 +558,12 @@
     background-image: linear-gradient(var(--stripe-grey), var(--stripe-grey));
   }
   .tb tr.stripe td.unsaved { background-image: none; }
+  /* The cell being answered, its student and its column (SPEC_picker_bar.md D1). Solid, because the name and the head
+     are sticky and rows pass under them; after .stripe, whose background-image would tint it. */
+  .tb td.picked, .tb td.pick-line, .tb thead th.pick-line, .tb tr.stripe td.picked, .tb tr.stripe td.pick-line {
+    background-color: color-mix(in srgb, var(--accent) 18%, var(--bg)); background-image: none;
+  }
+  .tb td.picked { outline: 3px solid var(--accent); outline-offset: -3px; }
 
   /* 17. Phones (SPEC_menu_strip.md): a tighter top area and smaller student lists. Inputs stay at 16 px, or iOS zooms. */
   @media (max-width: 959.98px) {
